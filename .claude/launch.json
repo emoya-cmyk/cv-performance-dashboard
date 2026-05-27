@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "--port", "5174", "--host"],
+      "cwd": "/Users/ernestomoya/Desktop/performance-dashboard",
+      "port": 5174
+    }
+  ]
+}

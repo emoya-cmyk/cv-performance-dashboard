@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: performance-dashboard
+    runtime: node
+    region: oregon
+    plan: free
+
+    # Install both frontend and API deps, then build the React app
+    buildCommand: npm install && npm run build && cd api && npm install
+
+    # Serve everything from the Express server (which also serves dist/)
+    startCommand: node api/server.js
+
+    # Auto-deploy on pushes to main
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+
+      # ── Auth ──────────────────────────────────────────────────────────────────
+      - key: JWT_SECRET
+        generateValue: true          # Render generates a random value on first deploy
+
+      # ── Optional: shared Google OAuth credentials ─────────────────────────────
+      # Set once here; all Google connectors (Ads, GBP, GA4, LSA) will use these
+      # so clients only need to provide their refresh_token, not client_id/secret.
+      - key: GOOGLE_CLIENT_ID
+        sync: false                  # Enter in Render dashboard — not stored in repo
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      # ── Optional: PostgreSQL (leave blank to use SQLite for demos) ────────────
+      # Uncomment and fill in when you're ready to add a Render Postgres database.
+      # - key: DATABASE_URL
+      #   fromDatabase:
+      #     name: performance-dashboard-db
+      #     property: connectionString
+
+      # ── Email (Resend) ────────────────────────────────────────────────────────
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: noreply@youragency.com
+
+      # ── App URL (used for unsubscribe links, OAuth redirects) ─────────────────
+      - key: APP_URL
+        sync: false                  # Paste your Render URL after first deploy

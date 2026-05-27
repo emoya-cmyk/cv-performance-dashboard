@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+api/node_modules/
+
+# Build output
+dist/
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.*.local
+api/.env
+
+# SQLite dev database — contains seed data, not for prod
+api/dev.db
+api/dev.db-shm
+api/dev.db-wal
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Vite
+*.local

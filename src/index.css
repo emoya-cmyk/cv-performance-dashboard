@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Dark theme base ─────────────────────────────────────────── */
+:root {
+  --accent:       #e53935;
+  --accent-light: #ef5350;
+  --bg:           #0f1117;
+  --surface:      #1a1d27;
+  --surface-2:    #22263a;
+  --border:       rgba(255,255,255,0.06);
+  --text:         #f1f5f9;
+  --text-muted:   #94a3b8;
+
+  /* ── Brand color defaults (#e53935) — overridden at runtime by AgencyProvider */
+  --brand-500: 229 57 53;
+  --brand-600: 202 50 47;
+  --brand-700: 165 41 38;
+  --brand-100: 249 206 205;
+  --brand-50:  253 239 239;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.22);
+}
+
+/* ── Card / surface helpers ─────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.card-sm {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+/* ── Accent color utilities ─────────────────────────────────── */
+.text-accent   { color: var(--accent) !important; }
+.bg-accent     { background: var(--accent) !important; }
+.border-accent { border-color: var(--accent) !important; }
+
+/* ── Recharts overrides ─────────────────────────────────────── */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-muted);
+  font-size: 11px;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+}
+
+/* ── Input / select dark style ──────────────────────────────── */
+input, select, textarea {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+}
+
+/* ── Transition helpers ─────────────────────────────────────── */
+.transition-all {
+  transition: all 0.2s ease;
+}
+
+/* ── Fade-in animation ──────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
