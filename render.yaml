@@ -47,4 +47,4 @@ services:
 
       # ── App URL (used for unsubscribe links, OAuth redirects) ─────────────────
       - key: APP_URL
-        sync: false                  # Paste your Render URL after first deploy
+        value: https://agency-performance-dashboard.onrender.com
