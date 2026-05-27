@@ -15,11 +15,15 @@ export default function Login() {
     e.preventDefault()
     setError('')
     setLoading(true)
+    // Read directly from DOM so autofill values are captured even if
+    // React onChange didn't fire (common with password managers)
+    const formEmail    = e.target.elements['email']?.value    || email
+    const formPassword = e.target.elements['password']?.value || password
     try {
       const r = await fetch(`${import.meta.env.VITE_API_URL || ''}/api/auth/login`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email, password }),
+        body:    JSON.stringify({ email: formEmail, password: formPassword }),
       })
       const data = await r.json()
       if (!r.ok) throw new Error(data.error || 'Login failed')
@@ -64,6 +68,7 @@ export default function Login() {
                 </label>
                 <input
                   type="email"
+                  name="email"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all placeholder-slate-300"
@@ -80,6 +85,7 @@ export default function Login() {
                 <div className="relative">
                   <input
                     type={showPw ? 'text' : 'password'}
+                    name="password"
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     className="w-full border border-slate-200 rounded-xl px-4 py-2.5 pr-10 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all placeholder-slate-300"
