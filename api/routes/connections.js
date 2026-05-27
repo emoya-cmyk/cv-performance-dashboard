@@ -47,8 +47,8 @@ router.put('/:clientId/:channel', async (req, res) => {
       `INSERT INTO client_connections (client_id, channel, credentials, is_active, updated_at)
        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
        ON CONFLICT (client_id, channel) DO UPDATE SET
-         credentials = $3,
-         is_active   = $4,
+         credentials = EXCLUDED.credentials,
+         is_active   = EXCLUDED.is_active,
          last_error  = NULL,
          updated_at  = CURRENT_TIMESTAMP`,
       [clientId, channel, JSON.stringify(credentials), is_active ? 1 : 0]
