@@ -6,7 +6,7 @@ services:
     plan: free
 
     # Install both frontend and API deps, then build the React app
-    buildCommand: npm install && npm run build && cd api && npm install
+    buildCommand: npm install --include=dev && npm run build && cd api && npm install
 
     # Serve everything from the Express server (which also serves dist/)
     startCommand: node api/server.js
