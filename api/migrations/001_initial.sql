@@ -34,9 +34,15 @@ CREATE TABLE IF NOT EXISTS clients (
 );
 
 -- FK from users → clients (added after clients table exists)
-ALTER TABLE users
-  ADD CONSTRAINT IF NOT EXISTS fk_users_client
-  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL;
+-- Postgres has no ADD CONSTRAINT IF NOT EXISTS; guard via catalog lookup so re-runs are idempotent.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_users_client') THEN
+    ALTER TABLE users
+      ADD CONSTRAINT fk_users_client
+      FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- ── agency_settings ────────────────────────────────────────────────────────
 -- Single-row table (id = 1 always)
@@ -90,7 +96,7 @@ CREATE TABLE IF NOT EXISTS weekly_reports (
   -- CRM / funnel (from GHL or manual upload)
   raw_leads             INT,
   mql                   INT,
-  sql                   INT,
+  sql_count             INT,
   closed_won            INT,
   projected_revenue     NUMERIC(14,2),
   avg_ticket            NUMERIC(10,2),

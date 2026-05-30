@@ -115,7 +115,7 @@ async function fetchStats(creds, weeksBack = 8) {
   const ensure = (week) => {
     if (!weeks[week]) weeks[week] = {
       week,
-      raw_leads: 0, mql: 0, sql: 0,
+      raw_leads: 0, mql: 0, sql_count: 0,
       closed_won: 0, projected_revenue: 0,
       lsa_calls: 0, ads_leads: 0, meta_leads: 0,
     }
@@ -130,7 +130,7 @@ async function fetchStats(creds, weeksBack = 8) {
 
     w.raw_leads++
     if (tags.includes('mql') || tags.some(t => t.includes('marketing qualified'))) w.mql++
-    if (tags.includes('sql') || tags.some(t => t.includes('sales qualified')))     w.sql++
+    if (tags.includes('sql') || tags.some(t => t.includes('sales qualified')))     w.sql_count++
 
     if (ch === 'lsa')        w.lsa_calls++
     if (ch === 'google_ads') w.ads_leads++
@@ -150,7 +150,7 @@ async function fetchStats(creds, weeksBack = 8) {
     week_start:         w.week,
     raw_leads:          w.raw_leads,
     mql:                w.mql,
-    sql:                w.sql,
+    sql_count:          w.sql_count,
     closed_won:         w.closed_won,
     projected_revenue:  parseFloat(w.projected_revenue.toFixed(2)),
     // partial channel data from CRM (overlays ad platform data)
@@ -158,6 +158,83 @@ async function fetchStats(creds, weeksBack = 8) {
     _ads_leads_crm:     w.ads_leads,
     _meta_leads_crm:    w.meta_leads,
   }))
+}
+
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Account-grain CRM facts on the ghl channel, daily-grained by the contact's
+// dateAdded / opportunity's createdAt. sync.js prefers this over fetchStats; the
+// column-scoped rollup re-derives raw_leads / mql / sql_count / closed_won /
+// projected_revenue in weekly_reports — exactly the columns fetchStats wrote.
+//
+// Entities: none. These are account-level CRM metrics (entity = null), so the
+// facts carry no dim_entity rows.
+//
+// SCOPE NOTE (Phase 0): we deliberately emit ONLY ghl-channel metrics. The CRM
+// also knows channel-attributed lead counts (lsa/google_ads/meta), but:
+//   • ads_leads / meta_leads are owned by the googleAds / meta connectors
+//     (sourced from platform conversions); a CRM 'leads' fact on those channels
+//     would double-count in the rollup's SUM.
+//   • the dedicated CRM columns (google_ads_leads, lsa_leads, …) are Postgres-
+//     only and intentionally absent from COLUMN_FACT_MAP, so the rollup can't
+//     write them on SQLite.
+// fetchStats already discarded those counts (the _-prefixed keys), so emitting
+// only ghl metrics keeps exact parity with the current product. Channel-
+// attributed CRM facts are a later increment (distinct metric_key + a both-
+// backend column).
+async function fetchFacts(creds, { since, until }) {
+  const startDate = new Date(`${since}T00:00:00.000Z`)
+  const endDate   = new Date(`${until}T23:59:59.999Z`)
+
+  const [contacts, opps] = await Promise.all([
+    fetchAllContacts(creds, startDate, endDate),
+    fetchAllOpportunities(creds, startDate, endDate),
+  ])
+
+  // Daily aggregation at account grain.
+  const byDay = {}
+  const dayOf = (v) => {
+    const d = new Date(v)
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().split('T')[0]
+  }
+  const ensure = (date) => (byDay[date] ||= {
+    raw_leads: 0, mql: 0, sql_count: 0, closed_won: 0, projected_revenue: 0,
+  })
+
+  for (const c of contacts) {
+    const date = dayOf(c.dateAdded || c.createdAt)
+    if (!date) continue
+    const b    = ensure(date)
+    const tags = (c.tags || []).map(t => t.toLowerCase())
+    b.raw_leads++
+    if (tags.includes('mql') || tags.some(t => t.includes('marketing qualified'))) b.mql++
+    if (tags.includes('sql') || tags.some(t => t.includes('sales qualified')))     b.sql_count++
+  }
+
+  for (const opp of opps) {
+    const date = dayOf(opp.createdAt)
+    if (!date) continue
+    if ((opp.status || '').toLowerCase() !== 'won') continue
+    const b = ensure(date)
+    b.closed_won++
+    b.projected_revenue += parseFloat(opp.monetaryValue) || 0
+  }
+
+  // One account-grain (entity:null) fact per (date, metric) — skip zeros so the
+  // table stays lean; the smart-upsert guard means a missing zero never clobbers.
+  const facts = []
+  for (const [date, b] of Object.entries(byDay)) {
+    const push = (metric_key, value) => {
+      if (!Number.isFinite(value) || value === 0) return
+      facts.push({ date, channel: 'ghl', entity: null, metric_key, value })
+    }
+    push('raw_leads',         b.raw_leads)
+    push('mql',               b.mql)
+    push('sql_count',         b.sql_count)
+    push('closed_won',        b.closed_won)
+    push('projected_revenue', parseFloat(b.projected_revenue.toFixed(2)))
+  }
+
+  return { entities: [], facts }
 }
 
 async function testConnection(creds) {
@@ -174,4 +251,4 @@ const FIELD_LABELS = {
   api_key:     { label: 'Private Integration Token',  hint: 'GHL → Settings → API → Private Integrations', secret: true },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }

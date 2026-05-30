@@ -2,6 +2,7 @@
 
 const express   = require('express')
 const { query } = require('../db')
+const { AGG, derive } = require('../lib/metricsCore')
 const router    = express.Router()
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -21,54 +22,9 @@ function prevRange(weeks) {
   }
 }
 
-const AGG = `
-  COALESCE(SUM(ads_spend),0)                     AS ads_spend,
-  COALESCE(SUM(ads_clicks),0)                    AS ads_clicks,
-  COALESCE(SUM(ads_impressions),0)               AS ads_impressions,
-  COALESCE(SUM(lsa_spend),0)                     AS lsa_spend,
-  COALESCE(SUM(lsa_impressions),0)               AS lsa_impressions,
-  COALESCE(SUM(meta_spend),0)                    AS meta_spend,
-  COALESCE(SUM(meta_clicks),0)                   AS meta_clicks,
-  COALESCE(SUM(meta_impressions),0)              AS meta_impressions,
-  COALESCE(SUM(raw_leads),0)                     AS raw_leads,
-  COALESCE(SUM(mql),0)                           AS mql,
-  COALESCE(SUM(sql_count),0)                     AS sql_count,
-  COALESCE(SUM(closed_won),0)                    AS closed_won,
-  COALESCE(SUM(projected_revenue),0)             AS projected_revenue,
-  COALESCE(AVG(NULLIF(ads_roas,0)),0)            AS ads_roas,
-  COALESCE(AVG(NULLIF(meta_roas,0)),0)           AS meta_roas,
-  COALESCE(SUM(ads_leads),0)                     AS ads_leads,
-  COALESCE(SUM(lsa_calls),0)                     AS lsa_calls,
-  COALESCE(SUM(lsa_booked_jobs),0)               AS lsa_booked_jobs,
-  COALESCE(SUM(meta_leads),0)                    AS meta_leads,
-  COALESCE(SUM(gbp_views),0)                     AS gbp_views,
-  COALESCE(SUM(gbp_calls),0)                     AS gbp_calls,
-  COALESCE(SUM(gbp_searches),0)                  AS gbp_searches,
-  COALESCE(SUM(gbp_directions),0)                AS gbp_directions,
-  COALESCE(SUM(gbp_website_clicks),0)            AS gbp_website_clicks,
-  COALESCE(SUM(ga4_sessions),0)                  AS ga4_sessions,
-  COALESCE(SUM(ga4_new_users),0)                 AS ga4_new_users,
-  COALESCE(SUM(ga4_organic_sessions),0)          AS ga4_organic_sessions,
-  COALESCE(SUM(ga4_paid_sessions),0)             AS ga4_paid_sessions,
-  COALESCE(SUM(ga4_direct_sessions),0)           AS ga4_direct_sessions,
-  COALESCE(SUM(ga4_conversions),0)               AS ga4_conversions,
-  COALESCE(AVG(NULLIF(ga4_engagement_rate,0)),0) AS ga4_engagement_rate,
-  COALESCE(AVG(avg_ticket),0)                    AS avg_ticket,
-  COUNT(*)                                       AS weeks_count
-`
-
-function derive(row) {
-  const r = {}
-  Object.entries(row || {}).forEach(([k, v]) => { r[k] = parseFloat(v) || 0 })
-  r.total_spend   = r.ads_spend + r.lsa_spend + r.meta_spend
-  r.total_leads   = r.raw_leads
-  r.total_closed  = r.closed_won
-  r.total_revenue = r.projected_revenue
-  r.roas = r.total_spend > 0 ? r.total_revenue / r.total_spend : 0
-  r.close_rate = r.total_leads > 0 ? (r.total_closed / r.total_leads) * 100 : 0
-  r.cpl = r.total_leads > 0 ? r.total_spend / r.total_leads : 0
-  return r
-}
+// AGG (wide weekly aggregate) + derive (KPI derivation) now live in
+// lib/metricsCore.js, so the live endpoints below and the AI evidence pack
+// (lib/evidence.js) compute identical numbers from one definition.
 
 // ── GET /api/metrics/:clientId ────────────────────────────────────────────────
 // Query: ?period=this_week|last_4w|last_8w|last_12w  (default: last_4w)

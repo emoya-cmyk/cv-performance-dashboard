@@ -141,6 +141,99 @@ async function fetchStats(creds, weeksBack = 8) {
     }))
 }
 
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Returns { entities, facts } at daily × per-campaign grain. sync.js prefers
+// this over fetchStats; ingestFacts lands the rows in fact_metric and the
+// column-scoped rollup re-derives the legacy ads_* weekly_reports columns, so
+// no JS weekly bucketing happens here — the week math is a SUM in SQL.
+//
+//   entities[] = the account + one row per campaign (campaign.parent = account)
+//   facts[]    = one row per (date, campaign, metric) for spend / clicks /
+//                impressions / leads(conversions) / revenue. spend + revenue
+//                are what the ads_roas ratio is rebuilt from.
+//
+// metric_key mapping mirrors fetchStats' column mapping exactly:
+//   cost_micros/1e6 → spend   clicks → clicks   impressions → impressions
+//   conversions     → leads   all_conversions_value → revenue
+async function fetchFacts(creds, { since, until }) {
+  const accessToken = await refreshAccessToken(creds)
+  const custId      = cleanId(creds.customer_id)
+
+  // Per-DAY, per-campaign — segments.date (not segments.week). The grain is the
+  // atomic fact; weekly aggregation is the rollup's job, not the connector's.
+  const gaqlQuery = `
+    SELECT
+      segments.date,
+      campaign.id,
+      campaign.name,
+      campaign.status,
+      metrics.cost_micros,
+      metrics.clicks,
+      metrics.impressions,
+      metrics.conversions,
+      metrics.all_conversions_value
+    FROM campaign
+    WHERE segments.date BETWEEN '${since}' AND '${until}'
+      AND campaign.status != 'REMOVED'
+    ORDER BY segments.date
+  `
+
+  const { data } = await axios.post(
+    `${ADS_BASE}/customers/${custId}/googleAds:search`,
+    { query: gaqlQuery },
+    { headers: buildHeaders(creds, accessToken) }
+  )
+
+  // The account is the parent of every campaign in the hierarchy.
+  const entities = [{ type: 'account', external_id: custId, name: null }]
+  const seenCampaigns = new Set()
+  const facts = []
+
+  // Skip zero/NaN: omitting a zero leaves the SUM unchanged and keeps fact_metric
+  // lean. The smart-upsert guard means a missing zero never clobbers a prior value.
+  const push = (date, campId, metric_key, value) => {
+    if (!Number.isFinite(value) || value === 0) return
+    facts.push({
+      date,
+      channel:    'google_ads',
+      entity:     { type: 'campaign', external_id: campId },
+      metric_key,
+      value,
+    })
+  }
+
+  for (const row of (data.results || [])) {
+    const date   = row.segments?.date
+    const campId = row.campaign?.id != null ? String(row.campaign.id) : null
+    if (!date || !campId) continue
+
+    if (!seenCampaigns.has(campId)) {
+      seenCampaigns.add(campId)
+      entities.push({
+        type:               'campaign',
+        external_id:        campId,
+        name:               row.campaign?.name ?? null,
+        status:             row.campaign?.status ?? null,
+        parent_external_id: custId,
+      })
+    }
+
+    const spend   = parseInt(row.metrics?.costMicros   || 0, 10) / 1_000_000
+    const clicks  = parseInt(row.metrics?.clicks       || 0, 10)
+    const imps    = parseInt(row.metrics?.impressions  || 0, 10)
+    const leads   = parseFloat(row.metrics?.conversions || 0)
+    const revenue = parseFloat(row.metrics?.allConversionsValue || 0)
+
+    push(date, campId, 'spend',       parseFloat(spend.toFixed(2)))
+    push(date, campId, 'clicks',      clicks)
+    push(date, campId, 'impressions', imps)
+    push(date, campId, 'leads',       leads)
+    push(date, campId, 'revenue',     parseFloat(revenue.toFixed(2)))
+  }
+
+  return { entities, facts }
+}
+
 // ── testConnection ────────────────────────────────────────────────────────────
 
 async function testConnection(creds) {
@@ -174,4 +267,4 @@ const FIELD_LABELS = {
   client_secret:   { label: 'OAuth Client Secret', hint: 'Optional — or set GOOGLE_CLIENT_SECRET env var on server',  secret: true  },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
