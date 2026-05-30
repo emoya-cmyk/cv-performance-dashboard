@@ -20,6 +20,15 @@ function fmt$(n) {
 function fmtX(n)   { return n ? `${(+n).toFixed(1)}×` : '—' }
 function fmtN(n)   { return n ? (+n).toLocaleString() : '0' }
 
+// Minimal HTML-escape for interpolated dynamic copy. The AI recap is
+// machine-generated narration, so escape it before it lands in the template.
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 function pctLabel(curr, prev) {
   if (!prev || prev === 0) return null
   const p = ((curr - prev) / prev) * 100
@@ -34,7 +43,7 @@ function dateRange(weeksBack = 1) {
 }
 
 // ── HTML Email Template ───────────────────────────────────────────────────────
-function buildHtml({ client, stats, prevStats, goal, update, unsubToken }) {
+function buildHtml({ client, stats, prevStats, goal, update, recap, unsubToken }) {
   const rev      = stats.total_revenue || 0
   const jobs     = stats.total_closed  || 0
   const roas     = stats.roas          || 0
@@ -64,13 +73,21 @@ function buildHtml({ client, stats, prevStats, goal, update, unsubToken }) {
       </table>`
   })() : ''
 
-  // Agency update excerpt
-  const updateHtml = update?.this_week ? `
+  // "From Your Team" — prefer the grounded AI weekly recap, fall back to the
+  // manually-written agency note. The recap is purpose-built as a 2–4 sentence
+  // paragraph, so it renders in full; the manual note keeps its 180-char excerpt.
+  const teamNote = recap && recap.trim()
+    ? esc(recap.trim())
+    : (update?.this_week
+        ? esc(update.this_week.slice(0, 180)) + (update.this_week.length > 180 ? '…' : '')
+        : '')
+
+  const updateHtml = teamNote ? `
     <table width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0 0;">
       <tr><td style="background:#f8fafc;border-left:3px solid #e53935;border-radius:0 8px 8px 0;padding:14px 16px;">
         <p style="margin:0 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;">From Your Team</p>
         <p style="margin:0;font-size:13px;color:#475569;line-height:1.5;">
-          ${update.this_week.slice(0, 180)}${update.this_week.length > 180 ? '…' : ''}
+          ${teamNote}
         </p>
       </td></tr>
     </table>` : ''
@@ -175,7 +192,7 @@ function buildHtml({ client, stats, prevStats, goal, update, unsubToken }) {
 }
 
 // ── Public send function ──────────────────────────────────────────────────────
-async function sendDigest({ client, stats, prevStats, goal, update }) {
+async function sendDigest({ client, stats, prevStats, goal, update, recap }) {
   if (!resend) {
     console.log('[email] RESEND_API_KEY not set — skipping send for', client.name)
     return { skipped: true }
@@ -186,7 +203,7 @@ async function sendDigest({ client, stats, prevStats, goal, update }) {
   }
 
   const html = buildHtml({
-    client, stats, prevStats, goal, update,
+    client, stats, prevStats, goal, update, recap,
     unsubToken: client.unsubscribe_token || 'none',
   })
 

@@ -11,6 +11,7 @@ const cron           = require('node-cron')
 const { query }      = require('./db')
 const { runSync }    = require('./routes/sync')
 const { sendDigest } = require('./lib/emailDigest')
+const { getOrGenerateRecap } = require('./lib/recap')
 
 const SCHEDULE        = process.env.SYNC_CRON    || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE = process.env.DIGEST_CRON  || '0 8 * * 1'    // Monday 8am UTC
@@ -100,12 +101,25 @@ function startScheduler() {
             query(`SELECT * FROM client_updates WHERE client_id = $1 ORDER BY week_start DESC LIMIT 1`, [client.id]),
           ])
 
+          // Grounded AI recap for the same completed week the digest summarizes.
+          // getOrGenerateRecap caches in ai_recaps, so the LLM is hit at most once
+          // per client-week. Never blocks the send: on any failure we fall back to
+          // the manual client_updates note inside buildHtml.
+          let recapText = null
+          try {
+            const recap = await getOrGenerateRecap(client.id)
+            recapText = recap?.recap_text || null
+          } catch (err) {
+            console.error(`[digest] recap failed for ${client.name}: ${err.message}`)
+          }
+
           await sendDigest({
             client,
             stats:     digestStats(currR.rows[0]),
             prevStats: digestStats(prevR.rows[0]),
             goal:      goalR.rows[0] || null,
             update:    updR.rows[0]  || null,
+            recap:     recapText,
           })
           console.log(`[digest] ✓ ${client.name} → ${client.digest_email}`)
           sent++
