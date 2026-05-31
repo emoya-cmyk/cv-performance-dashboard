@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import {
   Compass, Loader2, AlertTriangle, ShieldCheck, GitCompareArrows,
-  ArrowUpRight, ArrowDownRight, Sparkles, Download,
+  ArrowUpRight, ArrowDownRight, Sparkles, Download, Link2,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort, delta } from '@/lib/utils'
@@ -135,6 +135,36 @@ function downloadCsv(filename, text) {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+// ── shareable deep-links ───────────────────────────────────────────────────────
+// The whole Explore state lives in the query string so a view is bookmarkable and
+// shareable ("spend by channel, last 90d" → paste a link). We read the URL ONCE at
+// first render (lazy initialisers below) and write it back with history.replaceState
+// — which React Router ignores and which never triggers a re-render, so there is no
+// effect loop. Invalid ids from a hand-edited URL are clamped once the schema loads.
+function readSpecFromUrl() {
+  if (typeof window === 'undefined') return {}
+  const p   = new URLSearchParams(window.location.search)
+  const out = {}
+  if (p.has('m'))  out.metrics       = p.get('m').split(',').map(s => s.trim()).filter(Boolean)
+  if (p.has('g'))  out.groupBy       = p.get('g')
+  if (p.has('s'))  out.start         = p.get('s')
+  if (p.has('e'))  out.end           = p.get('e')
+  if (p.has('ch')) out.channelFilter = p.get('ch').split(',').map(s => s.trim()).filter(Boolean)
+  if (p.has('c'))  out.compare       = p.get('c') === '1'
+  return out
+}
+function writeSpecToUrl({ metrics, groupBy, start, end, channelFilter, compare }) {
+  if (typeof window === 'undefined') return
+  const p = new URLSearchParams()
+  if (metrics.length) p.set('m', metrics.join(','))
+  p.set('g', groupBy)
+  p.set('s', start)
+  p.set('e', end)
+  if (channelFilter.length) p.set('ch', channelFilter.join(','))
+  if (compare) p.set('c', '1')
+  window.history.replaceState(null, '', `${window.location.pathname}?${p.toString()}`)
 }
 
 // ── delta badge (compare mode) ───────────────────────────────────────────────
@@ -325,18 +355,23 @@ export default function Explore() {
   const [schema, setSchema]       = useState(null)
   const [schemaErr, setSchemaErr] = useState(null)
 
-  const [metrics, setMetrics]   = useState(['spend', 'leads', 'roas'])
-  const [groupBy, setGroupBy]   = useState('channel')
-  const [start, setStart]       = useState(daysAgo(27))
-  const [end, setEnd]           = useState(TODAY)
-  const [channelFilter, setChannelFilter] = useState([])
-  const [compare, setCompare]   = useState(false)
-  const [activePreset, setActivePreset]   = useState('28d')
+  // Hydrate initial control state from the URL once (deep-link support).
+  const url0 = useMemo(readSpecFromUrl, [])
+
+  const [metrics, setMetrics]   = useState(url0.metrics?.length ? url0.metrics : ['spend', 'leads', 'roas'])
+  const [groupBy, setGroupBy]   = useState(url0.groupBy || 'channel')
+  const [start, setStart]       = useState(url0.start || daysAgo(27))
+  const [end, setEnd]           = useState(url0.end || TODAY)
+  const [channelFilter, setChannelFilter] = useState(url0.channelFilter || [])
+  const [compare, setCompare]   = useState(url0.compare || false)
+  // If the URL pinned an explicit range, no preset chip is "active".
+  const [activePreset, setActivePreset]   = useState(url0.start || url0.end ? null : '28d')
 
   const [status, setStatus] = useState('idle') // idle | loading | done | error
   const [result, setResult] = useState(null)
   const [totals, setTotals] = useState(null)   // parallel groupBy:[] all-up totals → KPI cards
   const [error, setError]   = useState(null)
+  const [copied, setCopied] = useState(false)  // transient "Copied" state for the share button
   const runSeq = useRef(0)
 
   // Load the self-describing vocabulary once.
@@ -410,6 +445,33 @@ export default function Explore() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [specKey, totalsKey, schema])
 
+  // Mirror the live control state into the URL (replaceState → no re-render, no
+  // router navigation, no loop). Runs on mount too, canonicalising the link.
+  useEffect(() => {
+    writeSpecToUrl({ metrics, groupBy, start, end, channelFilter, compare })
+  }, [metrics, groupBy, start, end, channelFilter, compare])
+
+  // Clamp ids that came from a hand-edited / stale URL to the schema's vocabulary,
+  // exactly once — so a bad link degrades gracefully instead of 400-ing every query.
+  const didClamp = useRef(false)
+  useEffect(() => {
+    if (!schema || didClamp.current) return
+    didClamp.current = true
+    const validM = new Set(schema.metrics.map(x => x.id))
+    setMetrics(prev => {
+      const f = prev.filter(id => validM.has(id))
+      return f.length ? f : ['spend', 'leads', 'roas'].filter(id => validM.has(id))
+    })
+    const validG = new Set([
+      ...(schema.dimensions || []).map(d => d.id),
+      ...(schema.dateGrains || []).map(g => `date:${g}`),
+    ])
+    setGroupBy(prev => (validG.has(prev) ? prev : 'channel'))
+    const validCh = new Set((schema.channels || []).map(c => c.key))
+    setChannelFilter(prev => prev.filter(k => validCh.has(k)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schema])
+
   function toggleMetric(id) {
     setMetrics(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
@@ -437,6 +499,15 @@ export default function Explore() {
     const csv  = buildCsv({ rows: result.rows, groupBy, meta: result.meta, metricsMeta, channelLabel })
     const safe = groupBy.replace(':', '-')
     downloadCsv(`explore_${safe}_${start}_${end}.csv`, csv)
+  }
+
+  function copyLink() {
+    writeSpecToUrl({ metrics, groupBy, start, end, channelFilter, compare }) // canonicalise first
+    try {
+      navigator.clipboard?.writeText(window.location.href)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* clipboard blocked — the link is still in the address bar */ }
   }
 
   if (schemaErr) {
@@ -587,6 +658,16 @@ export default function Explore() {
               <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
                 <ShieldCheck className="w-3 h-3" /> Verified figures
               </span>
+            )}
+            {schema && (
+              <button
+                type="button"
+                onClick={copyLink}
+                title="Copy a shareable link to this exact view"
+                className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 hover:text-slate-700 border border-slate-200 rounded-full px-2 py-0.5 transition"
+              >
+                <Link2 className="w-3 h-3" /> {copied ? 'Copied' : 'Link'}
+              </button>
             )}
             {result && result.rows.length > 0 && (
               <button
