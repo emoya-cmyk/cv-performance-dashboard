@@ -208,7 +208,7 @@ function summarizeSeries(series, metrics, opts = {}) {
 }
 
 module.exports = {
-  mean, stddev, median, mad, robustStats, robustZ,
+  finite, mean, stddev, median, mad, robustStats, robustZ,
   linregSlope, ewma, classifyZ, direction, summarizeSeries,
   MAD_TO_SIGMA, DEFAULT_WARN, DEFAULT_CRIT,
 }
