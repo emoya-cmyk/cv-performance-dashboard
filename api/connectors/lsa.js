@@ -122,6 +122,75 @@ async function fetchStats(creds, weeksBack = 8) {
     }))
 }
 
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Account-grain daily facts on the lsa channel. fetchStats grouped by
+// segments.week; here we group by segments.date so each day is an atomic fact and
+// the rollup does the weekly SUM. LSA is account-level (entity = null).
+//
+// Emits ONLY spend + calls — exactly what fetchStats produces. COLUMN_FACT_MAP also
+// defines lsa_impressions / lsa_booked_jobs, but fetchStats never populates them, so
+// emitting them here would change product behavior. Parity = spend + calls only.
+//
+// Preserves fetchStats' empty-fallback: if local_services_lead is unavailable (the
+// account doesn't run LSA), return no facts rather than throwing — a missing LSA
+// resource must never break the whole sync.
+async function fetchFacts(creds, { since, until }) {
+  const accessToken = await refreshAccessToken(creds)
+  const custId      = cleanId(creds.customer_id)
+
+  const query = `
+    SELECT
+      segments.date,
+      metrics.cost_micros,
+      metrics.phone_calls,
+      local_services_lead.lead_type
+    FROM local_services_lead
+    WHERE segments.date BETWEEN '${since}' AND '${until}'
+    ORDER BY segments.date
+  `
+
+  let results = []
+  try {
+    const { data } = await axios.post(
+      `${ADS_BASE}/customers/${custId}/googleAds:search`,
+      { query },
+      {
+        headers: {
+          Authorization:     `Bearer ${accessToken}`,
+          'developer-token': creds.developer_token,
+          'Content-Type':    'application/json',
+        },
+      }
+    )
+    results = data.results || []
+  } catch (err) {
+    console.warn('[lsa] local_services_lead query failed, falling back to empty:', err.message)
+    return { entities: [], facts: [] }
+  }
+
+  // Sum cost + phone_calls per day across every lead row on that day.
+  const byDay = {}
+  for (const row of results) {
+    const date = row.segments?.date
+    if (!date) continue
+    const b = (byDay[date] ||= { spend: 0, calls: 0 })
+    b.spend += (parseInt(row.metrics?.costMicros || 0, 10)) / 1_000_000
+    b.calls += parseInt(row.metrics?.phoneCalls  || 0, 10)
+  }
+
+  const facts = []
+  for (const [date, b] of Object.entries(byDay)) {
+    const push = (metric_key, value) => {
+      if (!Number.isFinite(value) || value === 0) return
+      facts.push({ date, channel: 'lsa', entity: null, metric_key, value })
+    }
+    push('spend', parseFloat(b.spend.toFixed(2)))
+    push('calls', Math.round(b.calls))
+  }
+
+  return { entities: [], facts }
+}
+
 // ── testConnection ────────────────────────────────────────────────────────────
 
 async function testConnection(creds) {
@@ -160,4 +229,4 @@ const FIELD_LABELS = {
   client_secret:   { label: 'OAuth Client Secret',    hint: 'Optional — or set GOOGLE_CLIENT_SECRET env var', secret: true },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }

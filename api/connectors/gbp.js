@@ -148,6 +148,72 @@ async function fetchStats(creds, weeksBack = 8) {
   return Object.values(weeks).sort((a, b) => a.week_start.localeCompare(b.week_start))
 }
 
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Account-grain daily facts on the gbp channel. The Performance API already returns
+// per-day series, so each day is the atomic fact and the rollup does the weekly SUM.
+// A connection is a single GBP location (entity = null).
+//
+// metric_key mapping mirrors fetchStats exactly:
+//   CALL_CLICKS → calls   DIRECTION_REQUESTS → directions
+//   WEBSITE_CLICKS → website_clicks   BUSINESS_SEARCHES → searches
+//   desktop + mobile search impressions, summed per day → views
+async function fetchFacts(creds, { since, until }) {
+  const accessToken = await refreshAccessToken(creds)
+  const locationId  = String(creds.location_id)
+
+  const startDate = new Date(`${since}T00:00:00.000Z`)
+  const endDate   = new Date(`${until}T00:00:00.000Z`)
+
+  const METRICS = [
+    'CALL_CLICKS',
+    'DIRECTION_REQUESTS',
+    'WEBSITE_CLICKS',
+    'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+    'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+    'BUSINESS_SEARCHES',
+  ]
+
+  const results = await Promise.all(
+    METRICS.map(m => fetchDailyMetric(locationId, m, startDate, endDate, accessToken))
+  )
+  const [calls, directions, websiteClicks, desktopImps, mobileImps, searches] = results
+
+  // Accumulate per ISO day. views = desktop + mobile impressions summed per day,
+  // exactly as fetchStats does (two addSeries into the same field).
+  const byDay = {}
+  const ensure = (iso) => (byDay[iso] ||= {
+    calls: 0, directions: 0, website_clicks: 0, views: 0, searches: 0,
+  })
+  const addSeries = (series, field) => {
+    for (const { date, value } of (series || [])) {
+      const iso = parseGbpDate(date).toISOString().split('T')[0]
+      ensure(iso)[field] += parseInt(value || 0, 10)
+    }
+  }
+
+  addSeries(calls,         'calls')
+  addSeries(directions,    'directions')
+  addSeries(websiteClicks, 'website_clicks')
+  addSeries(desktopImps,   'views')
+  addSeries(mobileImps,    'views')
+  addSeries(searches,      'searches')
+
+  const facts = []
+  for (const [date, b] of Object.entries(byDay)) {
+    const push = (metric_key, value) => {
+      if (!Number.isFinite(value) || value === 0) return
+      facts.push({ date, channel: 'gbp', entity: null, metric_key, value })
+    }
+    push('calls',          Math.round(b.calls))
+    push('directions',     Math.round(b.directions))
+    push('website_clicks', Math.round(b.website_clicks))
+    push('views',          Math.round(b.views))
+    push('searches',       Math.round(b.searches))
+  }
+
+  return { entities: [], facts }
+}
+
 // ── testConnection ────────────────────────────────────────────────────────────
 
 async function testConnection(creds) {
@@ -191,4 +257,4 @@ const FIELD_LABELS = {
   client_secret: { label: 'OAuth Client Secret', hint: 'Optional — or set GOOGLE_CLIENT_SECRET env var', secret: true },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }

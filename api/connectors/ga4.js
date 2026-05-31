@@ -154,6 +154,118 @@ async function fetchStats(creds, weeksBack = 8) {
   }))
 }
 
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Account-grain facts on the ga4 channel. The 6 additive metrics (sessions,
+// new_users, conversions, organic/paid/direct_sessions) are emitted PER DAY — the
+// date dimension is the atomic grain and the rollup does the weekly SUM.
+//
+// engagement_rate is the exception. It is a sessions-WEIGHTED ratio: fetchStats
+// computes it per week as (Σ engaged / Σ sessions)·100. The rollup aggregates 'avg'
+// columns with an unweighted SQL AVG, so emitting one rate per day would skew the
+// week on low-traffic days (a 1-session day reads 0% or 100%). To preserve EXACT
+// parity we accumulate engaged + sessions per WEEK and emit a SINGLE engagement_rate
+// fact per week, dated on the week's Monday — AVG over a single value returns it
+// unchanged. (Weeks are always fully re-fetched each sync, so this stays consistent
+// across incremental runs.)
+async function fetchFacts(creds, { since, until }) {
+  const accessToken = await refreshAccessToken(creds)
+  const propId      = String(creds.property_id).replace(/^properties\//, '')
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  }
+
+  const body = {
+    dateRanges: [{ startDate: since, endDate: until }],
+    dimensions: [
+      { name: 'date' },
+      { name: 'sessionDefaultChannelGroup' },
+    ],
+    metrics: [
+      { name: 'sessions' },
+      { name: 'newUsers' },
+      { name: 'conversions' },
+      { name: 'engagedSessions' },
+    ],
+    returnPropertyQuota: false,
+    limit: 100000,
+  }
+
+  const { data } = await axios.post(
+    `${GA4_BASE}/${propId}:runReport`,
+    body,
+    { headers }
+  )
+
+  const dimIdx = {}
+  ;(data.dimensionHeaders || []).forEach((h, i) => { dimIdx[h.name] = i })
+  const metIdx = {}
+  ;(data.metricHeaders  || []).forEach((h, i) => { metIdx[h.name]  = i })
+
+  // 6 additive metrics → per-day buckets (account grain).
+  const byDay = {}
+  const ensureDay = (date) => (byDay[date] ||= {
+    sessions: 0, new_users: 0, conversions: 0,
+    organic_sessions: 0, paid_sessions: 0, direct_sessions: 0,
+  })
+
+  // engagement_rate → per-week weighted accumulation (engaged + sessions).
+  const byWeek = {}
+  const ensureWeek = (week) => (byWeek[week] ||= { engaged: 0, sessions: 0 })
+
+  for (const row of (data.rows || [])) {
+    const ymd      = row.dimensionValues[dimIdx['date']].value          // 'YYYYMMDD'
+    const channel  = row.dimensionValues[dimIdx['sessionDefaultChannelGroup']].value
+    const sessions = parseInt(row.metricValues[metIdx['sessions']].value        || 0, 10)
+    const newUsers = parseInt(row.metricValues[metIdx['newUsers']].value         || 0, 10)
+    const convs    = parseInt(row.metricValues[metIdx['conversions']].value      || 0, 10)
+    const engaged  = parseInt(row.metricValues[metIdx['engagedSessions']].value  || 0, 10)
+
+    // GA4 returns YYYYMMDD; the fact grain is ISO YYYY-MM-DD.
+    const date = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`
+    const d = ensureDay(date)
+    d.sessions    += sessions
+    d.new_users   += newUsers
+    d.conversions += convs
+
+    const ch = channel.toLowerCase()
+    if (ch.includes('organic search'))      d.organic_sessions += sessions
+    else if (ch.includes('paid search') ||
+             ch.includes('paid social'))    d.paid_sessions    += sessions
+    else if (ch.includes('direct'))         d.direct_sessions  += sessions
+
+    const wk = ensureWeek(toWeekStart(ymd))
+    wk.engaged  += engaged
+    wk.sessions += sessions
+  }
+
+  const facts = []
+
+  for (const [date, d] of Object.entries(byDay)) {
+    const push = (metric_key, value) => {
+      if (!Number.isFinite(value) || value === 0) return
+      facts.push({ date, channel: 'ga4', entity: null, metric_key, value })
+    }
+    push('sessions',         d.sessions)
+    push('new_users',        d.new_users)
+    push('conversions',      d.conversions)
+    push('organic_sessions', d.organic_sessions)
+    push('paid_sessions',    d.paid_sessions)
+    push('direct_sessions',  d.direct_sessions)
+  }
+
+  // One sessions-weighted engagement_rate fact per week, dated on the week's Monday.
+  for (const [week, w] of Object.entries(byWeek)) {
+    if (w.sessions <= 0) continue
+    const rate = parseFloat(((w.engaged / w.sessions) * 100).toFixed(1))
+    if (!Number.isFinite(rate) || rate === 0) continue
+    facts.push({ date: week, channel: 'ga4', entity: null, metric_key: 'engagement_rate', value: rate })
+  }
+
+  return { entities: [], facts }
+}
+
 // ── Connection test ────────────────────────────────────────────────────────────
 async function testConnection(creds) {
   if (!creds?.property_id)  throw new Error('property_id required')
@@ -182,4 +294,4 @@ const FIELD_LABELS = {
   refresh_token: { label: 'Refresh Token',          hint: 'OAuth scope: analytics.readonly — use OAuth Playground',   secret: true  },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }

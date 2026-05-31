@@ -119,6 +119,67 @@ async function fetchStats(creds, weeksBack = 8) {
     }))
 }
 
+// ── fetchFacts (atomic grain — the new path) ────────────────────────────────────
+// Account-grain daily facts on the meta channel. fetchStats queried at
+// time_increment=7 (one row per week, level=account); here time_increment=1 gives
+// one row per DAY (date_start === date_stop), so each row is the atomic fact and
+// weekly aggregation is the rollup's SUM — never done here.
+//
+// Entities: none. Meta insights are pulled at level=account (matching fetchStats),
+// so these are account-level facts (entity = null) with no dim_entity rows.
+//
+// metric_key mapping mirrors fetchStats' column mapping exactly:
+//   spend → spend   clicks → clicks   impressions → impressions
+//   lead actions → leads   purchase/omni_purchase values → revenue
+// spend + revenue are what the meta_roas ratio is rebuilt from in the rollup, so
+// roas itself is never emitted as a fact.
+async function fetchFacts(creds, { since, until }) {
+  const accountId = String(creds.account_id).replace(/^act_/, '')
+
+  // 8 weeks of daily rows ≈ 56 << limit, so a single page covers the sync window.
+  const { data } = await axios.get(
+    `${GRAPH_BASE}/act_${accountId}/insights`,
+    {
+      params: {
+        access_token:    creds.access_token,
+        fields:          'spend,clicks,impressions,actions,action_values,date_start,date_stop',
+        time_increment:  1,
+        time_range:      JSON.stringify({ since, until }),
+        limit:           500,
+        level:           'account',
+      },
+    }
+  )
+
+  if (data.error) throw new Error(`Meta API: ${data.error.message || JSON.stringify(data.error)}`)
+
+  // Skip zero/NaN: omitting a zero leaves the rollup's SUM unchanged and keeps
+  // fact_metric lean; the smart-upsert guard means a missing zero never clobbers.
+  const facts = []
+  const push = (date, metric_key, value) => {
+    if (!Number.isFinite(value) || value === 0) return
+    facts.push({ date, channel: 'meta', entity: null, metric_key, value })
+  }
+
+  for (const row of (data.data || [])) {
+    const date = row.date_start          // single day with time_increment=1
+    if (!date) continue
+    const spend   = parseFloat(row.spend       || 0)
+    const clicks  = parseInt(row.clicks        || 0, 10)
+    const imps    = parseInt(row.impressions   || 0, 10)
+    const leads   = extractLeads(row.actions   || [])
+    const revenue = extractRevenue(row.action_values || [])
+
+    push(date, 'spend',       parseFloat(spend.toFixed(2)))
+    push(date, 'clicks',      clicks)
+    push(date, 'impressions', imps)
+    push(date, 'leads',       Math.round(leads))
+    push(date, 'revenue',     parseFloat(revenue.toFixed(2)))
+  }
+
+  return { entities: [], facts }
+}
+
 // ── testConnection ────────────────────────────────────────────────────────────
 
 async function testConnection(creds) {
@@ -163,4 +224,4 @@ const FIELD_LABELS = {
   access_token: { label: 'System User Access Token', hint: 'Meta Business Manager → System Users → Generate Token (ads_read scope)', secret: true },
 }
 
-module.exports = { fetchStats, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
+module.exports = { fetchStats, fetchFacts, testConnection, REQUIRED_FIELDS, FIELD_LABELS }
