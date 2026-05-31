@@ -2,6 +2,7 @@ import { useOutletContext, useNavigate } from 'react-router-dom'
 import { ArrowRight, AlertTriangle, CheckCircle, ExternalLink } from 'lucide-react'
 import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 import TopBar from '@/components/TopBar'
+import AskBox from '@/components/AskBox'
 import ChannelBreakdown from '@/components/ChannelBreakdown'
 import ActivityFeed from '@/components/ActivityFeed'
 import SpendAreaChart from '@/components/charts/SpendAreaChart'
@@ -408,6 +409,9 @@ export default function Dashboard() {
         </>
       ) : (
         <div className="px-6 pb-8 space-y-4">
+
+          {/* ── Ask your data (Sprint 2 NL query) ── */}
+          <AskBox />
 
           {/* ── Row 1: 4 KPI cards ── */}
           <div className="grid grid-cols-4 gap-4">

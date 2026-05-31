@@ -60,6 +60,34 @@ export async function post(path, body) {
   return res.json()
 }
 
+/**
+ * Ask-your-data query. Unlike post(), this preserves the server's error `code`
+ * and HTTP `status` on the thrown Error so the UI can tell apart the honest
+ * failure modes of POST /api/ai/ask:
+ *   NO_AI (503) → key not configured · UNPARSEABLE (422) → couldn't map the
+ *   question · PARSE_TRANSPORT (502) → model unreachable · else → generic.
+ */
+export async function ask(question) {
+  const token = getToken()
+  const res = await fetch(`${BASE}/api/ai/ask`, {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ question }),
+  })
+  if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err  = new Error(data.error || `API /api/ai/ask → ${res.status}`)
+    err.status = res.status
+    err.code   = data.code || null
+    throw err
+  }
+  return data
+}
+
 export const api = {
   clients:       ()               => get('/api/clients'),
   createClient:  (body)           => post('/api/clients', body),
@@ -107,6 +135,8 @@ export const api = {
   // Manual weekly metric entry (reports)
   saveReport:    (clientId, body) => post(`/api/reports/${clientId}`, body),
   getLatestReport: (clientId)     => get(`/api/reports/${clientId}/latest`),
+  // Ask-your-data (Sprint 2): natural-language portfolio questions
+  ask,
 }
 
 export function subscribeRealtime(onRefresh) {
