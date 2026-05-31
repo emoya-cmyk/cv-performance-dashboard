@@ -4,9 +4,10 @@
 // Two halves:
 //   1. PURE detection brain — detectFindings() over hand-built weekly series,
 //      with no DB / no clock / no network. Pins each finding kind (anomaly,
-//      trend, pacing, data_health), the trend-vs-anomaly suppression rule, the
-//      "stay quiet when nothing is unusual" contract, fingerprint stability, and
-//      that every number in a title/detail traces back to the evidence pack.
+//      trend, forecast, pacing, data_health), BOTH suppression rules
+//      (anomaly ⊳ trend, forecast ⊳ pacing), the "stay quiet when nothing is
+//      unusual" contract, fingerprint stability, and that every number in a
+//      title/detail traces back to the evidence pack.
 //   2. PERSISTENCE — runInsightsForClient() end to end against an isolated temp
 //      SQLite DB: writes the insight feed + the baselines cache, is idempotent on
 //      the fingerprint, and EXPIRES findings whose condition has cleared. Plus the
@@ -135,6 +136,70 @@ test('pacing: month-to-date far below a goal is flagged behind pace', () => {
   assert.equal(p.evidence.mtd, 1000)
   assert.equal(p.evidence.target, 5000)
   assert.equal(p.evidence.pct, 20)                // 1000 / 5000
+})
+
+test('forecast: a trend landing far below goal fires a grounded critical forecast', () => {
+  // Flat $1k/wk for six weeks — enough history (≥5) to project. As of day 17 of
+  // 31, two weeks count this month (mtd $2000) and 14 days remain → the trend
+  // values those two remaining weeks at $1000/wk = $2000, landing at $4000:
+  // exactly half of an $8000 goal → critical.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+  const out    = detectFindings(series, { goal: { revenue_target: 8000 }, asOf: '2026-05-17' })
+
+  assert.equal(out.length, 1)
+  const f = out[0]
+  assert.equal(f.kind, 'forecast')
+  assert.equal(f.metric, 'revenue')
+  assert.equal(f.severity, 'critical')
+  assert.equal(f.direction, 'down')
+  assert.equal(f.score, 50)                        // |1 − 0.5| × 100
+  assert.equal(f.evidence.mtd, 2000)
+  assert.equal(f.evidence.target, 8000)
+  assert.equal(f.evidence.projected_total, 4000)   // 2000 mtd + 1000/wk × 2 wks
+  assert.equal(f.evidence.pct_of_target, 50)
+  assert.equal(f.evidence.weekly_rate, 1000)
+  assert.equal(f.evidence.days_elapsed, 17)
+  assert.equal(f.evidence.days_in_month, 31)
+  // Forecast OWNS the metric → the naive pacing alarm for revenue is suppressed.
+  assert.equal(out.some(x => x.kind === 'pacing'), false)
+
+  // Title + detail are grounded by construction — every figure is in evidence.
+  const text = `${titleFor(f)} ${templateDetailFor(f)}`
+  const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
+  assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)
+})
+
+test('forecast ⊳ pacing: an on-track projection silences the naive behind-pace alarm', () => {
+  // CONTROL — only the two in-month weeks, no history to forecast from. Naive
+  // pacing fires: mtd $2000 on day 24 of 31 → run-rate ~$2583 vs a $3000 goal,
+  // ~86% → behind-pace warning.
+  const inMonthOnly = [
+    { week_start: '2026-05-04', revenue: 1000 },
+    { week_start: '2026-05-11', revenue: 1000 },
+  ]
+  const control = detectFindings(inMonthOnly, { goal: { revenue_target: 3000 }, asOf: '2026-05-24' })
+  assert.equal(control.length, 1)
+  assert.equal(control[0].kind, 'pacing')
+  assert.equal(control[0].severity, 'warning')
+
+  // SAME in-month data, now with four prior weeks of flat $1k history. The
+  // forecast can project ($2000 mtd + $1000 for the one remaining week = $3000,
+  // exactly the goal → on track), so it OWNS revenue: the behind-pace warning
+  // above is suppressed and the on-track forecast itself stays quiet. The feed
+  // goes silent instead of crying a false alarm.
+  const withHistory = [
+    { week_start: '2026-04-06', revenue: 1000 },
+    { week_start: '2026-04-13', revenue: 1000 },
+    { week_start: '2026-04-20', revenue: 1000 },
+    { week_start: '2026-04-27', revenue: 1000 },
+    { week_start: '2026-05-04', revenue: 1000 },
+    { week_start: '2026-05-11', revenue: 1000 },
+  ]
+  const out = detectFindings(withHistory, { goal: { revenue_target: 3000 }, asOf: '2026-05-24' })
+  assert.equal(out.some(f => f.kind === 'pacing'), false, 'pacing suppressed by forecast')
+  assert.equal(out.some(f => f.kind === 'forecast'), false, 'on-track forecast stays quiet')
+  assert.deepEqual(out, [])
 })
 
 test('data_health: a stale feed surfaces as a reconnect signal', () => {

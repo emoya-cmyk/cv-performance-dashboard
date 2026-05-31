@@ -10,14 +10,24 @@
 // for clients, agencies, and internal users alike. No operator decides what is
 // "notable"; the statistics do.
 //
-// Four finding kinds, each earning its place against the product goals:
+// Five finding kinds, each earning its place against the product goals:
 //   • anomaly     — latest week is far outside the client's robust band.
 //   • trend       — a sustained multi-week drift (slope normalised to %/week).
-//   • pacing      — month-to-date vs the revenue/leads/jobs goal, run-rated.
+//   • forecast    — trend-aware projection of where THIS month LANDS vs the goal
+//                   (Holt's linear, lib/forecast.js). The forward-looking signal:
+//                   it warns "you're tracking to miss" while there is still time
+//                   to act, and it OWNS the goal metric — when it can project, the
+//                   naive `pacing` finding for that metric is suppressed.
+//   • pacing      — naive month-to-date run-rate vs the goal. The fallback for
+//                   metrics without enough history for a real forecast yet.
 //   • data_health — the feed has gone stale → "reconnect the source." THIS is the
 //                   signal that keeps the tool self-sustaining: the only operator
 //                   job is connecting accounts, so the engine watches for exactly
 //                   the failure of that one job and surfaces it on its own.
+//
+// Suppression hierarchy (richer signal wins, feed stays non-redundant):
+//   anomaly ⊳ trend (a spike already says what a drift would)
+//   forecast ⊳ pacing (trend-aware landing beats a naive run-rate)
 //
 // Accuracy guarantee carried over from the recap layer (lib/ai.js):
 //   1. NARRATE-DON'T-COMPUTE — every number in a finding is computed HERE by
@@ -39,8 +49,9 @@ const { query }                           = require('../db')
 const { AGG, derive }                     = require('./metricsCore')
 const { weekStartOf }                     = require('./rollup')
 const {
-  summarizeSeries, robustStats, linregSlope, ewma,
+  summarizeSeries, robustStats, linregSlope, ewma, finite,
 } = require('./baselines')
+const { monthEndProjection }              = require('./forecast')
 const { callMessages, DEFAULT_MODEL }     = require('./anthropic')
 const { collectAllowedNumbers, verifyGrounding } = require('./ai')
 
@@ -60,11 +71,17 @@ const METRIC_META = {
 const METRICS = Object.keys(METRIC_META)
 
 // Thresholds (tuned conservative so the autonomous feed earns trust, not noise).
-const TREND_MIN_WEEKS = 5     // need a real window before calling a trend
-const TREND_PCT       = 8     // |slope| must be ≥ 8%/wk of the level to surface
-const TREND_WARN_PCT  = 15    // ≥ 15%/wk → warning, else info
-const PACING_MIN_DAYS = 7     // run-rate is noise in the first week of a month
-const DAY_MS          = 86400000
+const TREND_MIN_WEEKS    = 5     // need a real window before calling a trend
+const TREND_PCT          = 8     // |slope| must be ≥ 8%/wk of the level to surface
+const TREND_WARN_PCT     = 15    // ≥ 15%/wk → warning, else info
+const PACING_MIN_DAYS    = 7     // run-rate is noise in the first week of a month
+const FORECAST_MIN_WEEKS = 5     // need a real trend window to project a landing
+const DAY_MS             = 86400000
+
+// Forecast severity gates: projected month-end as a fraction of the goal.
+const FC_CRIT_RATIO = 0.7    // < 70% of goal → critical
+const FC_WARN_RATIO = 0.9    // < 90% of goal → warning
+const FC_AHEAD_RATIO = 1.1   // ≥ 110% of goal → info (ahead of plan); else quiet
 
 // ── tiny formatting helpers ──────────────────────────────────────────────────
 const r0 = n => Math.round(Number(n) || 0)
@@ -221,20 +238,79 @@ function makeTrend(rec, week, rows) {
   }
 }
 
-function detectPacing(rows, goal, asOf) {
+// Goal targets shared by the forecast and pacing detectors.
+function goalTargets(goal) {
+  return [
+    { metric: 'revenue', target: Number(goal.revenue_target) || 0 },
+    { metric: 'leads',   target: Number(goal.leads_target)   || 0 },
+    { metric: 'jobs',    target: Number(goal.jobs_target)    || 0 },
+  ]
+}
+
+// Trend-aware month-end landing vs goal (lib/forecast.js). Returns the findings
+// AND the set of metrics it successfully evaluated — those metrics are then
+// suppressed in detectPacing, so the feed never shows both a smart projection
+// and a naive run-rate for the same goal. A metric is "owned" by the forecast
+// whenever it has enough history to project, even when the projection is on
+// track and emits nothing (the naive pacing alarm would just be a false alarm).
+function detectForecast(rows, goal, asOf) {
+  const out = []
+  const flagged = new Set()
+  const { day: daysElapsed, daysInMonth, monthFirst } = monthBounds(asOf)
+  const remainingDays = daysInMonth - daysElapsed
+  if (remainingDays < 1) return { findings: out, flagged }  // month over → nothing to project
+
+  const inMonth = rows.filter(r => r.week_start >= monthFirst && r.week_start <= asOf)
+
+  for (const { metric, target } of goalTargets(goal)) {
+    if (!(target > 0)) continue
+    const values = rows.map(r => r[metric])
+    if (finite(values).length < FORECAST_MIN_WEEKS) continue  // too little history → leave to pacing
+
+    const meta = METRIC_META[metric]
+    const mtd  = inMonth.reduce((a, r) => a + (Number(r[metric]) || 0), 0)
+    const proj = monthEndProjection({ values, mtd, daysElapsed, daysInMonth, target })
+    if (proj.method === 'none' || proj.pctOfTarget == null) continue
+    const ratio = proj.pctOfTarget
+
+    let severity = null, direction = null
+    if (ratio < FC_CRIT_RATIO)        { severity = 'critical'; direction = 'down' }
+    else if (ratio < FC_WARN_RATIO)   { severity = 'warning';  direction = 'down' }
+    else if (ratio >= FC_AHEAD_RATIO) { severity = 'info';     direction = 'up'   }
+
+    // Forecast could project this metric → it owns the goal signal; pacing is
+    // suppressed whether or not we surface a finding here.
+    flagged.add(metric)
+    if (!severity) continue  // on track (0.9–1.1) → stay quiet, but keep pacing suppressed
+
+    out.push({
+      kind: 'forecast', metric, scope: 'client', severity, direction,
+      score: r0(Math.abs(1 - ratio) * 100), period_start: monthFirst,
+      evidence: {
+        target:          roundFor(meta, target),
+        mtd:             roundFor(meta, mtd),
+        projected_total: roundFor(meta, proj.projectedTotal),
+        pct_of_target:   r0(ratio * 100),
+        weekly_rate:     roundFor(meta, proj.trendWeekly),
+        days_elapsed:    daysElapsed,
+        days_in_month:   daysInMonth,
+      },
+    })
+  }
+  return { findings: out, flagged }
+}
+
+function detectPacing(rows, goal, asOf, skip = new Set()) {
   const out = []
   const { day: daysElapsed, daysInMonth, monthFirst } = monthBounds(asOf)
   if (daysElapsed < PACING_MIN_DAYS) return out
   const frac = daysElapsed / daysInMonth
 
   const inMonth = rows.filter(r => r.week_start >= monthFirst && r.week_start <= asOf)
-  const targets = [
-    { metric: 'revenue', target: Number(goal.revenue_target) || 0 },
-    { metric: 'leads',   target: Number(goal.leads_target)   || 0 },
-    { metric: 'jobs',    target: Number(goal.jobs_target)    || 0 },
-  ]
+  const targets = goalTargets(goal)
 
   for (const { metric, target } of targets) {
+    if (skip.has(metric)) continue   // forecast already owns this goal metric
     if (!(target > 0)) continue
     const meta      = METRIC_META[metric]
     const mtd       = inMonth.reduce((a, r) => a + (Number(r[metric]) || 0), 0)
@@ -305,7 +381,13 @@ function detectFindings(series, { goal = null, asOf, summary = null, calibration
     const t = makeTrend(rec, latestWeek, rows)
     if (t) out.push(t)
   }
-  if (goal) out.push(...detectPacing(rows, goal, day))
+  // Forecast first (trend-aware landing), then naive pacing only for the goal
+  // metrics the forecast couldn't project — forecast ⊳ pacing.
+  if (goal) {
+    const fc = detectForecast(rows, goal, day)
+    out.push(...fc.findings)
+    out.push(...detectPacing(rows, goal, day, fc.flagged))
+  }
   const dh = detectDataHealth(rows, day)
   if (dh) out.push(dh)
 
@@ -341,6 +423,10 @@ function titleFor(f) {
     const where = f.direction === 'up' ? 'ahead of pace' : 'behind pace'
     return `${lbl} ${where}: ${e.pct}% to the ${fmtVal(meta, e.target)} goal`
   }
+  if (f.kind === 'forecast') {
+    const where = f.direction === 'up' ? 'ahead of plan' : 'short of goal'
+    return `${lbl} projected to finish at ${fmtVal(meta, e.projected_total)} — ${e.pct_of_target}% of the ${fmtVal(meta, e.target)} goal (${where})`
+  }
   if (f.kind === 'data_health') {
     const wk = e.weeks_behind === 1 ? 'week' : 'weeks'
     return `Data is ${e.weeks_behind} ${wk} behind — reconnect the source`
@@ -374,6 +460,12 @@ function templateDetailFor(f) {
       return `Month-to-date ${low} is ${fmtVal(meta, e.mtd)}, ${e.pct}% of the ${fmtVal(meta, e.target)} goal and tracking toward ${fmtVal(meta, e.projected)} — ahead of plan.`
     }
     return `Month-to-date ${low} is ${fmtVal(meta, e.mtd)}, only ${e.pct}% of the ${fmtVal(meta, e.target)} goal; at the current pace you're tracking toward ${fmtVal(meta, e.projected)}.`
+  }
+  if (f.kind === 'forecast') {
+    if (f.direction === 'up') {
+      return `At the current ${fmtVal(meta, e.weekly_rate)}/week pace, ${low} is projected to finish the month at ${fmtVal(meta, e.projected_total)} — ${e.pct_of_target}% of the ${fmtVal(meta, e.target)} goal, ahead of plan.`
+    }
+    return `At the current ${fmtVal(meta, e.weekly_rate)}/week pace, ${low} is projected to finish the month at ${fmtVal(meta, e.projected_total)}, only ${e.pct_of_target}% of the ${fmtVal(meta, e.target)} goal.`
   }
   if (f.kind === 'data_health') {
     const wk = e.weeks_behind === 1 ? 'week' : 'weeks'
