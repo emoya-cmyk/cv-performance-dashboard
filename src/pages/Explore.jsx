@@ -5,7 +5,7 @@ import {
 } from 'recharts'
 import {
   Compass, Loader2, AlertTriangle, ShieldCheck, GitCompareArrows,
-  ArrowUpRight, ArrowDownRight, Sparkles,
+  ArrowUpRight, ArrowDownRight, Sparkles, Download,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort, delta } from '@/lib/utils'
@@ -93,6 +93,49 @@ function fmtDateLabel(dateStr, grain) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 const titleCase = s => String(s).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+
+// ── CSV export ─────────────────────────────────────────────────────────────────
+// Exports exactly the rows the verified query returned, as RAW numerics (not the
+// $/%/× presentation) so they drop straight into a spreadsheet — the figures stay
+// the server's, never re-derived here. When comparing, a "(prev)" column is
+// appended per metric. No dependency: a Blob + object URL.
+function csvCell(v) {
+  if (v === null || v === undefined) return ''
+  const s = String(v)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+function buildCsv({ rows, groupBy, meta, metricsMeta, channelLabel }) {
+  const isDate    = groupBy.startsWith('date:')
+  const comparing = Boolean(meta.compareTo)
+  const dimHeader = isDate
+    ? (meta.grain === 'month' ? 'Month' : meta.grain === 'week' ? 'Week' : 'Day')
+    : groupBy === 'channel' ? 'Channel' : 'Client'
+  const dimCell = (r) => isDate
+    ? r.date
+    : groupBy === 'channel' ? channelLabel(r.channel) : (r.client_name || r.client)
+  const header = [dimHeader, ...metricsMeta.flatMap(m => comparing ? [m.label, `${m.label} (prev)`] : [m.label])]
+  const lines  = [header.map(csvCell).join(',')]
+  for (const r of rows) {
+    const cells = [dimCell(r)]
+    for (const m of metricsMeta) {
+      cells.push(r[m.id])
+      if (comparing) cells.push(r._compare ? r._compare[m.id] : '')
+    }
+    lines.push(cells.map(csvCell).join(','))
+  }
+  return lines.join('\n')
+}
+function downloadCsv(filename, text) {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
 
 // ── delta badge (compare mode) ───────────────────────────────────────────────
 function DeltaBadge({ current, previous, metricId }) {
@@ -389,6 +432,13 @@ export default function Explore() {
   const groupLabel = groupOptions(schema).find(o => o.value === groupBy)?.label || groupBy
   const busy = status === 'loading'
 
+  function exportCsv() {
+    if (!result?.rows?.length) return
+    const csv  = buildCsv({ rows: result.rows, groupBy, meta: result.meta, metricsMeta, channelLabel })
+    const safe = groupBy.replace(':', '-')
+    downloadCsv(`explore_${safe}_${start}_${end}.csv`, csv)
+  }
+
   if (schemaErr) {
     return (
       <div className="rounded-2xl border border-amber-100 bg-amber-50/60 p-6 flex items-start gap-3">
@@ -537,6 +587,16 @@ export default function Explore() {
               <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
                 <ShieldCheck className="w-3 h-3" /> Verified figures
               </span>
+            )}
+            {result && result.rows.length > 0 && (
+              <button
+                type="button"
+                onClick={exportCsv}
+                title="Download these rows as CSV (raw values)"
+                className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 bg-slate-50 hover:bg-slate-100 hover:text-slate-700 border border-slate-200 rounded-full px-2 py-0.5 transition"
+              >
+                <Download className="w-3 h-3" /> CSV
+              </button>
             )}
             {busy && <Loader2 className="w-4 h-4 animate-spin text-brand-500" />}
           </div>
