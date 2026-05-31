@@ -245,6 +245,38 @@ function ResultTable({ result, groupBy, metricsMeta, channelLabel }) {
   )
 }
 
+// ── headline KPI cards ────────────────────────────────────────────────────────
+// Driven by a parallel groupBy:[] query so every figure — including ratios like
+// ROAS / CPL that must NOT be summed — is aggregated server-side. The first
+// metric (the one charted below) is highlighted to tie the cards to the chart.
+function SummaryCards({ totals, metricsMeta, firstMetricId }) {
+  if (!totals?.rows?.length) return null
+  const row       = totals.rows[0]
+  const comparing = Boolean(totals.meta?.compareTo) && row._compare
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      {metricsMeta.map(m => {
+        const charted = m.id === firstMetricId
+        return (
+          <div key={m.id} className={cn('rounded-xl border p-3.5 transition', charted ? 'border-brand-200 bg-brand-50/40 ring-1 ring-brand-100' : 'border-slate-100 bg-white')}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 truncate">{m.label}</span>
+              {charted && <span className="text-[9px] font-bold text-brand-500 uppercase shrink-0">charted</span>}
+            </div>
+            <div className="mt-1 text-2xl font-black text-slate-900 tabular-nums leading-none">{fmtValue(row[m.id], m.format)}</div>
+            {comparing && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <DeltaBadge current={Number(row[m.id]) || 0} previous={Number(row._compare[m.id]) || 0} metricId={m.id} />
+                <span className="text-[10px] text-slate-400">vs prev</span>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── page ──────────────────────────────────────────────────────────────────────
 export default function Explore() {
   const [schema, setSchema]       = useState(null)
@@ -260,6 +292,7 @@ export default function Explore() {
 
   const [status, setStatus] = useState('idle') // idle | loading | done | error
   const [result, setResult] = useState(null)
+  const [totals, setTotals] = useState(null)   // parallel groupBy:[] all-up totals → KPI cards
   const [error, setError]   = useState(null)
   const runSeq = useRef(0)
 
@@ -296,17 +329,43 @@ export default function Explore() {
 
   const specKey = useMemo(() => JSON.stringify(spec), [spec])
 
+  // Headline totals: the SAME metrics/range/filters but groupBy:[] so the server
+  // collapses every fact into one all-up row. Ratios (ROAS/CPL/CPA) come back as
+  // SUM(num)/SUM(den) — correct in a way client-side summation never could be —
+  // and because there's no date grouping, compareTo IS honoured, so the cards can
+  // carry a period-over-period delta even when the breakdown below is a time series.
+  const totalsSpec = useMemo(() => {
+    const s = { metrics, dateRange: { start, end }, groupBy: [] }
+    if (channelFilter.length) s.filters = [{ dim: 'channel', op: 'in', values: channelFilter }]
+    if (compare) s.compareTo = 'previous_period'
+    return s
+  }, [metrics, start, end, channelFilter, compare])
+  const totalsKey = useMemo(() => JSON.stringify(totalsSpec), [totalsSpec])
+
   // Auto-run whenever the spec changes (and the schema is ready). A monotonic
-  // runId drops stale responses so fast control changes can't race.
+  // runId drops stale responses so fast control changes can't race. We fire the
+  // breakdown and the all-up totals in parallel; the totals are best-effort (the
+  // cards just hide if that leg fails) so they never block the primary result.
   useEffect(() => {
     if (!schema || !metrics.length) return
     const myId = ++runSeq.current
     setStatus('loading'); setError(null)
-    api.query(spec)
-      .then(res => { if (myId === runSeq.current) { setResult(res); setStatus('done') } })
-      .catch(err => { if (myId === runSeq.current) { setError(err.message || 'Query failed'); setResult(null); setStatus('error') } })
+    Promise.all([
+      api.query(spec),
+      api.query(totalsSpec).catch(() => null),
+    ])
+      .then(([res, tot]) => {
+        if (myId !== runSeq.current) return
+        setResult(res)
+        setTotals(tot && tot.rows && tot.rows.length ? tot : null)
+        setStatus('done')
+      })
+      .catch(err => {
+        if (myId !== runSeq.current) return
+        setError(err.message || 'Query failed'); setResult(null); setTotals(null); setStatus('error')
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [specKey, schema])
+  }, [specKey, totalsKey, schema])
 
   function toggleMetric(id) {
     setMetrics(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -447,19 +506,16 @@ export default function Explore() {
             <button
               type="button"
               onClick={() => setCompare(v => !v)}
-              disabled={isDateGrain}
-              title={isDateGrain ? 'Compare applies to channel/client breakdowns, not time series' : 'Compare to the previous period'}
+              title="Compare to the previous period — always reflected in the headline cards; per-row deltas also show on channel/client breakdowns"
               className={cn(
                 'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-bold border transition',
-                isDateGrain
-                  ? 'opacity-40 cursor-not-allowed border-slate-200 text-slate-400'
-                  : compare
-                    ? 'bg-indigo-500 text-white border-indigo-500 shadow-sm'
-                    : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600',
+                compare
+                  ? 'bg-indigo-500 text-white border-indigo-500 shadow-sm'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600',
               )}
             >
               <GitCompareArrows className="w-4 h-4" />
-              {compare && !isDateGrain ? 'vs previous period' : 'Previous period'}
+              {compare ? 'vs previous period' : 'Previous period'}
             </button>
           </div>
         </div>
@@ -505,6 +561,7 @@ export default function Explore() {
         {/* Result */}
         {status !== 'error' && metrics.length > 0 && result && firstMetric && (
           <div className={cn('space-y-5 transition-opacity', busy && 'opacity-50')}>
+            <SummaryCards totals={totals} metricsMeta={metricsMeta} firstMetricId={firstMetric.id} />
             {result.rows.length === 0 ? (
               <p className="text-sm text-slate-400 py-10 text-center">
                 No data for this metric and range. Try a wider date range or a different breakdown.
@@ -537,7 +594,9 @@ export default function Explore() {
                   <> · <span className="text-indigo-500 font-semibold">vs {result.meta.compareTo.start} → {result.meta.compareTo.end}</span></>
                 )}
               </span>
-              {result.meta.note && <span className="italic">{result.meta.note}</span>}
+              {compare && isDateGrain
+                ? <span className="italic">Deltas shown on the headline cards (time-series rows can’t carry period-over-period).</span>
+                : result.meta.note && <span className="italic">{result.meta.note}</span>}
             </div>
           </div>
         )}
