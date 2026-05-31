@@ -12,9 +12,11 @@
 //        Force a fresh recap and overwrite the stored row — the "Regenerate"
 //        button. Always re-narrates + re-verifies.
 //
-//   POST /api/ai/ask
-//        Sprint-2 placeholder (constrained natural-language portfolio queries).
-//        Returns 501 until that ships, so the route is reserved but honest.
+//   POST /api/ai/ask   { question }
+//        Natural-language portfolio queries. The question is parsed into a typed,
+//        whitelisted query-spec, compiled to parameterised SQL (never text→SQL),
+//        executed for deterministic numbers, then optionally narrated under the
+//        same grounding verifier as the recap. See lib/ask.js for the full model.
 //
 // Mounted behind requireAuth in server.js, so every handler runs authenticated.
 // The recap layer never throws on the AI path (it degrades to a deterministic
@@ -25,6 +27,7 @@ const express = require('express')
 const { query } = require('../db')
 const { weekStartOf } = require('../lib/rollup')
 const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
+const { runAsk } = require('../lib/ask')
 
 const router = express.Router()
 
@@ -86,13 +89,31 @@ router.post('/recap/:clientId', async (req, res) => {
 })
 
 // ── POST /api/ai/ask ──────────────────────────────────────────────────────────
-// Reserved for Sprint 2 (text → constrained query-spec → whitelisted SQL →
-// narrate). Not wired yet — answer honestly rather than fake a result.
-router.post('/ask', (req, res) => {
-  res.status(501).json({
-    error: 'Natural-language ask is not available yet.',
-    detail: 'Conversational portfolio queries ship in Sprint 2.',
-  })
+// Body: { question: string }. Returns the deterministic rows plus a grounded
+// one-line answer. runAsk tags failures with a .code we map to honest statuses:
+//   NO_AI          → 503  (no ANTHROPIC_API_KEY configured)
+//   EMPTY          → 400  (blank question)
+//   UNPARSEABLE    → 422  (couldn't map the question onto the query schema)
+//   PARSE_TRANSPORT→ 502  (the language model was unreachable)
+const ASK_STATUS = { NO_AI: 503, EMPTY: 400, UNPARSEABLE: 422, PARSE_TRANSPORT: 502 }
+
+router.post('/ask', async (req, res) => {
+  const question = req.body?.question
+  if (typeof question !== 'string' || !question.trim()) {
+    return res.status(400).json({ error: 'question is required' })
+  }
+
+  try {
+    const result = await runAsk(question)
+    res.json(result)
+  } catch (err) {
+    const status = ASK_STATUS[err.code]
+    if (status) {
+      return res.status(status).json({ error: err.message, code: err.code })
+    }
+    console.error('[ai] POST ask error', err.message)
+    res.status(500).json({ error: 'Failed to answer question' })
+  }
 })
 
 module.exports = router
