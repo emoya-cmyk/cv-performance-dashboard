@@ -137,6 +137,10 @@ export const api = {
   getLatestReport: (clientId)     => get(`/api/reports/${clientId}/latest`),
   // Ask-your-data (Sprint 2): natural-language portfolio questions
   ask,
+  // Explore (Sprint 2): semantic query over the atomic fact grain.
+  // querySchema() drives the control vocabulary; query(spec) runs it.
+  querySchema:   ()     => get('/api/query/schema'),
+  query:         (spec) => post('/api/query', spec),
 }
 
 export function subscribeRealtime(onRefresh) {

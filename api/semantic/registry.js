@@ -108,6 +108,41 @@ function dimOutputKey(dim) {
   return dim.type === 'date' ? 'date' : dim.type
 }
 
+// ── Self-describing catalog ───────────────────────────────────────────────────
+// Friendly channel labels for the small set of channels we actually model facts
+// for (the keys present in COLUMNS_BY_CHANNEL). Anything missing falls back to
+// the raw key, so adding a channel never crashes the catalog.
+const CHANNEL_LABELS = {
+  google_ads: 'Google Ads',
+  meta:       'Meta Ads',
+  lsa:        'Local Services',
+  gbp:        'Google Business',
+  ga4:        'GA4 / Web',
+  ghl:        'CRM / Funnel',
+  organic:    'Organic',
+}
+
+// catalog() is the exact public vocabulary POST /api/query will accept, shaped
+// for a UI to render controls from. Because it is derived from the SAME METRICS,
+// DIMENSIONS, DATE_GRAINS and channel maps the compiler enforces, a client built
+// against it can never drift out of the allow-list: if it isn't here, the query
+// endpoint rejects it. No secrets, formulas or SQL are exposed — only ids,
+// human labels and display formats.
+function catalog() {
+  const metrics = Object.entries(METRICS).map(([id, m]) => ({
+    id,
+    label:  m.label,
+    format: m.format,
+    kind:   m.kind,
+  }))
+  const dimensions = Object.entries(DIMENSIONS).map(([id, d]) => ({ id, label: d.label }))
+  const dateGrains = [...DATE_GRAINS]
+  const channels = Object.keys(facts.COLUMNS_BY_CHANNEL)
+    .map(key => ({ key, id: facts.channelId(key), label: CHANNEL_LABELS[key] || key }))
+    .sort((a, b) => a.id - b.id)
+  return { metrics, dimensions, dateGrains, channels }
+}
+
 module.exports = {
   METRICS,
   DIMENSIONS,
@@ -115,6 +150,8 @@ module.exports = {
   metricKeyDeps,
   parseGroupByToken,
   dimOutputKey,
+  catalog,
+  CHANNEL_LABELS,
   // re-export channel helpers so the compiler has one import surface
   channelId:  facts.channelId,
   channelKey: facts.channelKey,

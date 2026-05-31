@@ -19,8 +19,17 @@
 const express = require('express')
 const { query } = require('../db')
 const { runQuerySpec, QuerySpecError } = require('../semantic/compile')
+const { catalog } = require('../semantic/registry')
 
 const router = express.Router()
+
+// GET /api/query/schema — the self-describing vocabulary a UI builds controls
+// from: every metric, dimension, date grain and channel the POST endpoint will
+// accept. Derived from the same allow-list the compiler enforces, so it can
+// never advertise something the query layer would reject.
+router.get('/schema', (_req, res) => {
+  res.json(catalog())
+})
 
 router.post('/', async (req, res) => {
   try {
