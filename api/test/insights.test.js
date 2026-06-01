@@ -44,7 +44,7 @@ const {
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
   deriveAndPersistCalibration, loadCalibration,
   // feed (read) + lifecycle (write) + portfolio roll-up + autonomous portfolio sweep.
-  getInsightFeed, getPortfolioInsights, setInsightStatus,
+  getInsightFeed, getPortfolioInsights, getPortfolioHealth, setInsightStatus,
   ackInsight, resolveInsight, runInsightsForAll,
 } = require('../lib/insights')
 
@@ -807,6 +807,57 @@ test('portfolio: getPortfolioInsights spans clients, tags client_name, ranks by 
   await resolveInsight(await idForFingerprint(`fp-aw-${a}`))
   const port2 = await getPortfolioInsights()
   assert.ok(!port2.some(r => r.title === 'a-warn'), 'a resolved finding leaves the portfolio feed')
+})
+
+test('portfolio health: getPortfolioHealth rolls every client into one score, ranks worst-first, keeps the findingless', async () => {
+  await ready()
+  // Three fresh clients: one bleeding a critical, one a lone warning, one spotless.
+  const crit  = await freshClient('Healthscore Critical Co')
+  const warn  = await freshClient('Healthscore Warning Co')
+  const clean = await freshClient('Healthscore Clean Co')
+  await upsertInsight(crit, mkFinding('anomaly', 'revenue', 'critical', 9), { ...mkNarr('hc-crit'), fingerprint: `fp-hcc-${crit}` })
+  await upsertInsight(warn, mkFinding('pacing',  'jobs',    'warning',  6), { ...mkNarr('hc-warn'), fingerprint: `fp-hcw-${warn}` })
+  // `clean` gets NOTHING on purpose — the whole point of the roster: a client with no
+  // active findings must still appear, scored a flawless 100. getPortfolioInsights()
+  // (per-finding grain) would omit it entirely; the triage roster is the COMPLETE
+  // picture, so the healthy clients are visible (and sink to the bottom), not absent.
+
+  const roster = await getPortfolioHealth()
+  const rc = roster.find(r => r.client_id === crit)
+  const rw = roster.find(r => r.client_id === warn)
+  const rk = roster.find(r => r.client_id === clean)
+  assert.ok(rc && rw && rk, 'the roster spans every client, the findingless one included')
+
+  // The JOINed client_name rides along on each client-grain verdict.
+  assert.equal(rc.client_name, 'Healthscore Critical Co')
+  assert.equal(rw.client_name, 'Healthscore Warning Co')
+  assert.equal(rk.client_name, 'Healthscore Clean Co')
+
+  // Exact per-client synthesis — with no learned precision history the factor is a
+  // neutral 1, so the pure severity scores hold: critical 45 / warning 80 / clean 100.
+  assert.equal(rc.score, 45);  assert.equal(rc.band, 'at_risk')
+  assert.equal(rw.score, 80);  assert.equal(rw.band, 'watch')
+  assert.equal(rk.score, 100); assert.equal(rk.band, 'healthy')
+  assert.equal(rc.driver.severity, 'critical')   // the headline bite is named
+  assert.equal(rc.counts.total, 1)
+  assert.equal(rk.driver, null)                   // a clean client has no driver…
+  assert.equal(rk.counts.total, 0)                // …and no findings to its name
+
+  // Worst-first, robust to whatever clients earlier tests left in the DB: the
+  // critical sinks to the top of MY three, the clean client to the bottom.
+  assert.ok(roster.indexOf(rc) < roster.indexOf(rw), 'critical ranks ahead of warning')
+  assert.ok(roster.indexOf(rw) < roster.indexOf(rk), 'warning ranks ahead of the clean client')
+
+  // Lifecycle flows straight through the synthesis: resolve the critical and the
+  // client's health recovers to a clean 100 on the next read — and it STILL appears
+  // on the roster (now findingless), proving the seed-every-client contract again.
+  await resolveInsight(await idForFingerprint(`fp-hcc-${crit}`))
+  const after = await getPortfolioHealth()
+  const rc2 = after.find(r => r.client_id === crit)
+  assert.ok(rc2, 'the client stays on the roster after its only finding resolves')
+  assert.equal(rc2.score, 100)
+  assert.equal(rc2.band, 'healthy')
+  assert.equal(rc2.counts.total, 0)
 })
 
 test('feed: an acknowledged finding still auto-expires once its condition clears', async () => {

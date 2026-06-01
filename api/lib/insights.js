@@ -63,6 +63,10 @@ const {
 // happy path — so wiring it in is a strict no-op for every non-composite metric and
 // every degenerate endpoint. See lib/attribution.js for the log-decomposition proof.
 const { attributeChange } = require('./attribution')
+// The synthesis organ: rolls one client's active feed into a single 0–100 health
+// score + band + headline driver, and ranks the whole portfolio worst-first into a
+// triage roster. Pure arithmetic, no-op under no learned history. See lib/health.js.
+const { rankPortfolio } = require('./health')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -1271,6 +1275,42 @@ async function getPortfolioInsights({ limit = 100 } = {}) {
     .slice(0, limit)
 }
 
+// Portfolio TRIAGE ROSTER: every client rolled into one health score, ranked
+// worst-first. Where the feed above is a flat stream of individual findings (the
+// grain for "what is wrong"), this is the grain for the question asked first every
+// morning — "of my N clients, WHERE do I look first?" Two reads, no N+1: every
+// ACTIVE finding (whole-fleet, UN-sliced — health must see a client's complete
+// burden, not a display-truncated view) and the full client list, so a client with
+// NOTHING open still appears, scored a clean 100 and sunk to the bottom — the roster
+// is the complete picture, not just the troubled subset. Each row is enriched with
+// its learned precision (empty map → neutral 1.0), then lib/health rolls + ranks it.
+async function getPortfolioHealth() {
+  const [findings, clients] = await Promise.all([
+    query(
+      `SELECT i.*, c.name AS client_name
+         FROM insights i
+         JOIN clients c ON c.id = i.client_id
+        WHERE i.scope = 'client' AND i.status IN ('open', 'acknowledged')`
+    ),
+    query(`SELECT id, name FROM clients`),
+  ])
+  const byClient = await loadPrecisionAll()
+  // Seed every client first so the healthy ones (no active findings) are present.
+  const groups = new Map()
+  for (const c of clients.rows) {
+    groups.set(c.id, { client_id: c.id, client_name: c.name, insights: [] })
+  }
+  for (const r of findings.rows) {
+    let g = groups.get(r.client_id)
+    if (!g) { // defensive: a finding whose client row somehow isn't listed
+      g = { client_id: r.client_id, client_name: r.client_name, insights: [] }
+      groups.set(r.client_id, g)
+    }
+    g.insights.push(normalizeInsightRow(r, byClient[r.client_id] || {}))
+  }
+  return rankPortfolio([...groups.values()])
+}
+
 // Move one finding to a new lifecycle status and return the fresh row (null if the
 // id doesn't exist → the route answers 404). Two portable statements rather than
 // UPDATE … RETURNING, which the SQLite shim doesn't surface. The engine's
@@ -1322,6 +1362,6 @@ module.exports = {
   // precision loop (learn which finding kinds a client engages with)
   deriveAndPersistPrecision, loadPrecision, loadPrecisionAll, attachPrecision, feedSort,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
-  getOpenInsights, getInsightFeed, getPortfolioInsights, normalizeInsightRow,
+  getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
 }

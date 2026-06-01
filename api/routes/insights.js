@@ -8,8 +8,14 @@
 //        in one severity-ranked stream, each tagged with its client_name. This is
 //        what the agency-wide Intelligence page hits.
 //
+//   GET  /api/insights/health
+//        Portfolio TRIAGE ROSTER: every client rolled into one 0–100 health score
+//        and band, ranked worst-first — the "where do I look first?" capstone. The
+//        synthesis grain on top of the per-finding stream above.
+//
 //   GET  /api/insights/:clientId[?limit=]
-//        One client's active feed — the per-client Insights card.
+//        One client's active feed — the per-client Insights card — plus that
+//        client's own health verdict (same pure synthesis as the roster).
 //
 //   POST /api/insights/:id/ack
 //   POST /api/insights/:id/resolve
@@ -32,10 +38,12 @@
 const express = require('express')
 const { query } = require('../db')
 const {
-  getInsightFeed, getPortfolioInsights,
+  getInsightFeed, getPortfolioInsights, getPortfolioHealth,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
+// Pure synthesis: one client's feed → { score, band, counts, driver, contributors }.
+const { scoreClient } = require('../lib/health')
 
 const router = express.Router()
 
@@ -61,6 +69,14 @@ function tallyBySeverity(insights) {
   return t
 }
 
+// Roll a health roster into a {healthy,watch,at_risk,critical} count — the triage
+// header's "3 at risk, 1 critical" summary at a glance.
+function tallyByBand(roster) {
+  const t = { healthy: 0, watch: 0, at_risk: 0, critical: 0 }
+  for (const r of roster) if (t[r.band] != null) t[r.band]++
+  return t
+}
+
 // ── GET /api/insights ─────────────────────────────────────────────────────────
 // Portfolio-wide active feed, severity-ranked, with per-client names.
 router.get('/', async (req, res) => {
@@ -70,6 +86,24 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[insights] GET portfolio error', err.message)
     res.status(500).json({ error: 'Failed to load insights' })
+  }
+})
+
+// ── GET /api/insights/health ────────────────────────────────────────────────
+// Portfolio TRIAGE ROSTER: every client rolled into one 0–100 health score, ranked
+// worst-first — "where do I look first?" in a single list. Declared before the
+// :clientId route so the literal "health" can never be captured as a client id.
+router.get('/health', async (_req, res) => {
+  try {
+    const roster = await getPortfolioHealth()
+    res.json({
+      roster,
+      count: roster.length,
+      by_band: tallyByBand(roster),
+    })
+  } catch (err) {
+    console.error('[insights] GET health error', err.message)
+    res.status(500).json({ error: 'Failed to load portfolio health' })
   }
 })
 
@@ -153,6 +187,9 @@ router.get('/:clientId', async (req, res) => {
       insights,
       count: insights.length,
       by_severity: tallyBySeverity(insights),
+      // the one-number verdict for this client's badge, from the same pure synthesis
+      // the portfolio roster uses — score, band, counts, and the headline driver
+      health: scoreClient(insights),
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)

@@ -145,7 +145,11 @@ export const api = {
   // getInsights() → portfolio roll-up; getClientInsights() → one client's feed;
   // ack/resolve record a human decision the engine won't overwrite; runInsights()
   // forces a fresh pass (one client, or the whole portfolio when clientId is null).
+  // getPortfolioHealth() → triage roster: every client as one 0–100 health score,
+  // ranked worst-first ("where do I look first?"). The synthesis grain on top of
+  // the per-finding feed; getClientInsights() now also returns that client's health.
   getInsights:        ()         => get('/api/insights'),
+  getPortfolioHealth: ()         => get('/api/insights/health'),
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),
