@@ -615,6 +615,72 @@ test('runInsightsForClient flags a silently-dead channel off the atomic grain, a
   assert.equal(gaps2[0].status, 'open')
 })
 
+test('runInsightsForClient links a fallen metric to the dark channel that fed it, and is idempotent', async () => {
+  await ready()
+  const c = await freshClient('Root Cause Roofing Co')
+  const ASOF = '2026-06-01'
+
+  // ── the SYMPTOM, off the weekly roll-up ──────────────────────────────────────
+  // Six calm weeks of leads (~135) then a crash to 18 → a DOWN leads anomaly on the
+  // aggregate series (raw_leads ≡ engine `leads`). No goal, no spend, no closed_won →
+  // the leads anomaly is the SOLE weekly finding, isolating exactly what we're testing.
+  const weeks = ['2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11', '2026-05-18', '2026-05-25']
+  const leads = [140, 130, 135, 132, 138, 18]
+  for (let i = 0; i < weeks.length; i++) await seedWeek(c, weeks[i], { raw_leads: leads[i] })
+
+  // ── the CAUSE, off the atomic grain ──────────────────────────────────────────
+  const isoMinus = (n) =>
+    new Date(Date.parse(ASOF + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10)
+  async function seedDaily(channelId, metricKey, fromDaysAgo, toDaysAgo, value = 100) {
+    for (let n = fromDaysAgo; n >= toDaysAgo; n--) {
+      await db.query(
+        `INSERT INTO fact_metric (client_id, date, channel_id, entity_id, metric_key, metric_value)
+         VALUES ($1,$2,$3,NULL,$4,$5)`,
+        [c, isoMinus(n), channelId, metricKey, value]
+      )
+    }
+  }
+  // google_ads (id 1): HEALTHY — daily `leads` right up to yesterday (1d dark ≈ cadence).
+  await seedDaily(1, 'leads', 40, 1)     // 40 days × 100 = 4000 in the 90-day window
+  // meta (id 2): DARK — daily `leads`, then silent 30 days ago. Still a MATERIAL share
+  // of the trailing-window lead volume, so it's a credible cause of the drop.
+  await seedDaily(2, 'leads', 60, 30)    // 31 days × 100 = 3100 in the 90-day window
+
+  await runInsightsForClient(c, { asOf: ASOF })
+  const rows = await allInsights(c)
+
+  // The leads anomaly now points at its likely cause — the dark meta channel.
+  // share: 3100 / (4000 + 3100) ≈ 43.7% → 44 (google_ads carries the rest but is HEALTHY).
+  const sym = rows.find(r => r.kind === 'anomaly' && r.metric === 'leads')
+  assert.ok(sym, 'the leads crash surfaced as an anomaly')
+  assert.equal(sym.direction, 'down')
+  assert.ok(sym.evidence.caused_by, 'the symptom carries a root-cause pointer')
+  assert.equal(sym.evidence.caused_by.channel, 'meta')
+  assert.equal(sym.evidence.caused_by.channel_label, 'Meta Ads')
+  assert.equal(sym.evidence.caused_by.days_dark, 30)
+  assert.equal(sym.evidence.caused_by.share_pct, 44)
+
+  // …and the dark channel's coverage_gap carries its blast radius.
+  const gap = rows.find(r => r.kind === 'coverage_gap' && r.evidence.channel === 'meta')
+  assert.ok(gap, 'meta is flagged dark')
+  assert.deepEqual(gap.evidence.impacts, [{ metric: 'leads', share_pct: 44 }])
+  // The HEALTHY channel never becomes a cause and never earns a gap.
+  assert.equal(rows.some(r => r.kind === 'coverage_gap' && r.evidence.channel === 'google_ads'), false)
+  // Nothing is spuriously linked — caused_by exists ONLY on the one fallen metric.
+  assert.equal(rows.filter(r => r.evidence && r.evidence.caused_by).length, 1)
+
+  // ── idempotent: a second identical sweep refreshes in place, same annotations ──
+  await runInsightsForClient(c, { asOf: ASOF })
+  const rows2 = await allInsights(c)
+  assert.equal(rows2.filter(r => r.kind === 'anomaly' && r.metric === 'leads').length, 1)
+  assert.equal(rows2.filter(r => r.kind === 'coverage_gap' && r.evidence.channel === 'meta').length, 1)
+  const sym2 = rows2.find(r => r.kind === 'anomaly' && r.metric === 'leads')
+  assert.equal(sym2.evidence.caused_by.channel, 'meta')
+  assert.equal(sym2.evidence.caused_by.share_pct, 44)
+  const gap2 = rows2.find(r => r.kind === 'coverage_gap' && r.evidence.channel === 'meta')
+  assert.deepEqual(gap2.evidence.impacts, [{ metric: 'leads', share_pct: 44 }])
+})
+
 test('getOpenInsights returns open rows sorted critical → warning → info', async () => {
   await ready()
   const c = await freshClient('Sort Roofing Co')

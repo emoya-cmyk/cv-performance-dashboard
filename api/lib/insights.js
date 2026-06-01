@@ -83,6 +83,13 @@ const { benchmarkPortfolio, clientStanding } = require('./benchmark')
 // (no operator except to connect accounts) made literal. Pure; [] on no history.
 const { detectCoverageGaps } = require('./coverage')
 
+// Root-cause linking (PURE): given the sweep's findings plus each channel's share of
+// every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
+// channel that materially fed it. Stamps a `caused_by` pointer on the symptom and an
+// `impacts` blast radius on the coverage_gap — both nested under evidence, so ranking,
+// the scalar evidence chips, and the grounding verifier are untouched. See correlate.js.
+const { linkCoverageToImpact } = require('./correlate')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -1169,6 +1176,96 @@ async function loadChannelCoverage(clientId, { asOf, windowDays = 90 } = {}) {
   }))
 }
 
+// ── engine-metric → atomic-key map (ADDITIVE metrics only) ────────────────────
+// The sweep detects symptoms on ENGINE metrics (revenue/leads/jobs/spend, plus the
+// ratios roas/cpl/close_rate). Root-cause linking needs each channel's SHARE of the
+// metric that moved — and a share is only well-defined for an ADDITIVE metric: you can
+// sum a channel's leads, you cannot sum its close_rate. So we map each additive engine
+// metric to the SINGLE, unambiguous atomic key that carries its per-channel breakdown,
+// and deliberately OMIT the ratio metrics (absent from channelShares ⇒ they never link).
+// One key per metric, never a union, so a channel's volume is never double-counted
+// (e.g. ad-platform `leads` vs the CRM's `raw_leads`, which are largely the same leads).
+const ENGINE_METRIC_FACTS = {
+  revenue: 'revenue',     // per-channel revenue (paid channels; reconstructed upstream)
+  leads:   'leads',       // ad-platform leads (google_ads, meta)
+  spend:   'spend',       // ad spend (google_ads, meta, lsa)
+  jobs:    'closed_won',  // won jobs (the CRM channel)
+}
+const FACT_TO_ENGINE = Object.fromEntries(
+  Object.entries(ENGINE_METRIC_FACTS).map(([engine, factKey]) => [factKey, engine])
+)
+
+// loadMetricChannelShares(clientId, { asOf, windowDays }) — each channel's fractional
+// contribution to every ADDITIVE engine metric over the trailing window, read straight
+// off the atomic grain (fact_metric ⋈ dim_channel). Returns
+//   { [engineMetric]: { [channelKey]: share0to1 } }
+// normalized so each metric's channel shares sum to 1 (channels with non-positive volume
+// drop out). This is the exact shape correlate.linkCoverageToImpact consumes. Returns {}
+// when the client has no atomic facts yet → linking is then a hard no-op, exactly like
+// coverage. Mirrors loadChannelCoverage's window math so the two reads agree day-for-day.
+async function loadMetricChannelShares(clientId, { asOf, windowDays = 90 } = {}) {
+  const end   = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const span  = Number.isFinite(Number(windowDays)) ? Number(windowDays) : 90
+  const start = new Date(Date.parse(end + 'T00:00:00Z') - span * 86400000)
+                  .toISOString().slice(0, 10)
+  const factKeys = Object.keys(FACT_TO_ENGINE)
+  const ph = factKeys.map((_, i) => `$${i + 4}`).join(', ')   // $4, $5, …
+  const { rows } = await query(
+    `SELECT c.key AS channel, f.metric_key AS metric_key, SUM(f.metric_value) AS total
+       FROM fact_metric f
+       JOIN dim_channel c ON c.id = f.channel_id
+      WHERE f.client_id = $1 AND f.date BETWEEN $2 AND $3
+        AND f.metric_key IN (${ph})
+      GROUP BY c.key, f.metric_key`,
+    [clientId, start, end, ...factKeys]
+  )
+  // Fold each channel's atomic volume up to its engine metric, then normalize per metric.
+  const totals = {}   // engineMetric -> { channelKey -> volume }
+  for (const r of rows) {
+    const engine = FACT_TO_ENGINE[r.metric_key]
+    const v = Number(r.total)
+    if (!engine || !Number.isFinite(v) || v <= 0) continue
+    const byCh = totals[engine] || (totals[engine] = {})
+    byCh[r.channel] = (byCh[r.channel] || 0) + v
+  }
+  const shares = {}
+  for (const [engine, byCh] of Object.entries(totals)) {
+    const sum = Object.values(byCh).reduce((a, b) => a + b, 0)
+    if (sum <= 0) continue
+    const perCh = {}
+    for (const [ch, v] of Object.entries(byCh)) perCh[ch] = v / sum
+    shares[engine] = perCh
+  }
+  return shares
+}
+
+// applyCoverageLinks(findings, links, impacts) — stamp correlate's pure descriptors onto
+// evidence IN PLACE (mirroring attachAttribution): the symptom finding named by each link
+// gets a `caused_by` pointer (its dominant dark cause), and each dark channel's
+// coverage_gap gets its `impacts` blast radius. Both are nested objects/arrays under
+// evidence, so they are skipped by every surface's scalar evidence-chip filter AND by the
+// grounding verifier's scalar checks (exactly like evidence.attribution) — severity,
+// score, direction, and the fingerprint are all untouched, so the upsert stays idempotent.
+function applyCoverageLinks(findings, links, impacts) {
+  for (const l of links) {
+    const f = findings[l.index]
+    if (!f) continue
+    const ev = f.evidence || (f.evidence = {})
+    ev.caused_by = {
+      channel:       l.channel,
+      channel_label: l.channel_label,
+      category:      l.category,
+      share_pct:     l.share_pct,
+      days_dark:     l.days_dark,
+    }
+  }
+  for (const f of findings) {
+    if (f && f.kind === 'coverage_gap' && f.evidence && impacts[f.evidence.channel]) {
+      f.evidence.impacts = impacts[f.evidence.channel]
+    }
+  }
+}
+
 // ============================================================
 // ORCHESTRATOR — one client, end to end
 // ============================================================
@@ -1204,6 +1301,19 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
     const channels = await loadChannelCoverage(clientId, { asOf: day, windowDays: 90 })
     findings.push(...detectCoverageGaps(channels, day, { windowDays: 90 }))
   } catch { /* atomic grain unavailable → skip coverage, keep the rest of the sweep */ }
+
+  // Root-cause linking, off the same atomic grain: connect a fallen metric (an anomaly
+  // or trend that dropped) to the dark channel that materially fed it, so the symptom
+  // carries its likely cause (evidence.caused_by) and each coverage_gap carries its blast
+  // radius (evidence.impacts). The pure linker does all the gating — must already be
+  // flagged dark, ≥ materiality floor, sign-consistent — we only load the shares and
+  // stamp the result. Same isolation as coverage: no atomic grain, empty facts, or no
+  // dark channel ⇒ a hard no-op that leaves findings exactly as they were detected.
+  try {
+    const shares = await loadMetricChannelShares(clientId, { asOf: day, windowDays: 90 })
+    const { links, impacts } = linkCoverageToImpact(findings, shares)
+    applyCoverageLinks(findings, links, impacts)
+  } catch { /* atomic grain unavailable → skip linking, findings unchanged */ }
 
   const persisted = []
   for (const f of findings) {
