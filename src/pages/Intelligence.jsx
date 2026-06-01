@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
+  Crosshair,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -9,6 +10,7 @@ import {
   severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta,
   precisionMeta, hasLearnedPrecision, precisionTooltip,
   forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue, attributionView,
+  healthBandMeta,
 } from '@/lib/insightMeta'
 
 /**
@@ -27,6 +29,7 @@ import {
 export default function Intelligence() {
   const [status, setStatus]   = useState('loading')   // loading | done | error
   const [insights, setInsights] = useState([])
+  const [health, setHealth]   = useState(null)         // { roster, count, by_band } — triage synthesis
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -40,8 +43,14 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      const data = await api.getInsights()
-      setInsights(Array.isArray(data?.insights) ? data.insights : [])
+      // Two independent reads: the per-finding feed and the synthesized triage roster.
+      // allSettled — not Promise.all — so a roster hiccup never blanks the feed. If the
+      // health endpoint stumbles the roster simply hides and the page degrades to exactly
+      // what it showed before the synthesis layer existed; only a feed failure is fatal.
+      const [feed, roster] = await Promise.allSettled([api.getInsights(), api.getPortfolioHealth()])
+      if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
+      setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
+      setHealth(roster.status === 'fulfilled' && Array.isArray(roster.value?.roster) ? roster.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -126,6 +135,18 @@ export default function Intelligence() {
   return (
     <div className="space-y-4">
       <Hero running={running} onRun={runSweep} />
+
+      {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
+          row pivots the feed's client filter so "where to look first" and the matching
+          findings are one motion apart. Hidden until the synthesis read returns rows. */}
+      {health?.roster?.length > 0 && (
+        <TriageRoster
+          roster={health.roster}
+          byBand={health.by_band}
+          activeClient={clientFilter}
+          onPick={(id) => { if (id) setClientFilter(c => (c === id ? 'all' : id)) }}
+        />
+      )}
 
       {/* severity stat band — doubles as the severity filter */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -272,6 +293,164 @@ function StatCard({ label, value, tone, active, onClick }) {
       </div>
       <p className={cn('mt-1.5 text-3xl font-black tabular-nums leading-none', value > 0 ? t.v : 'text-slate-300')}>{value}</p>
     </button>
+  )
+}
+
+/* ── triage roster — the worst-first "where do I look first?" leaderboard ──────
+   One read of GET /api/insights/health: every client rolled into a single 0–100
+   health score (lib/health.js — multiplicative compounding of its open findings),
+   banded and ranked worst-first. Where the feed below is per-FINDING, this is the
+   per-CLIENT synthesis — the capstone that turns "47 findings" into "look at these
+   three clients, in this order." Clicking a row pivots the feed's client filter to
+   that client, so the synthesis and the detail it summarizes stay one motion apart.
+   The roster is a snapshot from the last sweep/load; ack/resolve update the feed live
+   and the next sweep re-scores — no per-action refetch, no flicker. */
+function TriageRoster({ roster, byBand, activeClient, onPick }) {
+  const [showAll, setShowAll] = useState(false)
+
+  const needAttention = roster.filter(r => r.band !== 'healthy')
+  const healthyCount  = roster.length - needAttention.length
+  const allHealthy    = needAttention.length === 0
+  // Triage by default: show only the clients that need eyes. An all-green portfolio
+  // still shows its top rows as a victory lap. The expander reveals the healthy tail.
+  const visible = showAll ? roster : (allHealthy ? roster.slice(0, 3) : needAttention)
+  const hidden  = roster.length - visible.length
+
+  // band summary chips, worst-first, only the non-zero bands
+  const bandOrder = ['critical', 'at_risk', 'watch', 'healthy']
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      {/* header: title + at-a-glance band tally */}
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Crosshair className="w-4 h-4 text-brand-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Where to look first</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {roster.length} client{roster.length === 1 ? '' : 's'}
+        </span>
+        <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+          {bandOrder.map(b => {
+            const n = byBand?.[b] || 0
+            if (!n) return null
+            const m = healthBandMeta(b)
+            return (
+              <span key={b} className={cn('inline-flex items-center gap-1 text-[10px] font-bold rounded-full px-2 py-0.5 border', m.chip)}>
+                <span className={cn('w-1.5 h-1.5 rounded-full', m.dot)} /> {n} {m.label}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* rows, worst-first (server order) */}
+      <div className="divide-y divide-slate-50">
+        {visible.map(r => (
+          <RosterRow
+            key={r.client_id || r.client_name}
+            entry={r}
+            active={!!r.client_id && activeClient === r.client_id}
+            onPick={onPick}
+          />
+        ))}
+      </div>
+
+      {/* footer: all-clear note / attention summary + healthy-tail expander */}
+      {(hidden > 0 || showAll || allHealthy) && (
+        <div className="px-4 py-2.5 bg-slate-50/40 flex items-center gap-2 flex-wrap">
+          {allHealthy ? (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-600">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Every client healthy — nothing needs you right now.
+            </span>
+          ) : healthyCount > 0 ? (
+            <span className="text-[11px] font-semibold text-slate-400">
+              <span className="text-slate-600 font-bold">{needAttention.length}</span> need{needAttention.length === 1 ? 's' : ''} attention
+              <span className="text-slate-300"> · </span>{healthyCount} healthy
+            </span>
+          ) : null}
+          {(hidden > 0 || showAll) && (
+            <button
+              onClick={() => setShowAll(s => !s)}
+              className="ml-auto inline-flex items-center gap-1 text-[11px] font-bold text-slate-400 hover:text-brand-500 transition"
+            >
+              {showAll
+                ? <><ChevronUp className="w-3 h-3" /> Show less</>
+                : <><ChevronDown className="w-3 h-3" /> Show all {roster.length}</>}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* one client in the roster: a band-coloured score gauge, name + band + headline
+   driver ("biggest drag: Revenue"), and the severity counts. The whole row is the
+   pivot control — click to filter the feed to this client. */
+function RosterRow({ entry, active, onPick }) {
+  const m     = healthBandMeta(entry.band)
+  const score = Math.max(0, Math.min(100, Math.round(Number(entry.score) || 0)))
+  const d     = entry.driver
+  const dsev  = d ? severityMeta(d.severity) : null
+  const c     = entry.counts || {}
+
+  return (
+    <button
+      onClick={() => onPick?.(entry.client_id)}
+      disabled={!entry.client_id}
+      title={entry.client_id ? 'Filter the feed to this client' : undefined}
+      className={cn(
+        'w-full text-left px-4 py-3 flex items-center gap-3.5 transition hover:bg-slate-50/70 disabled:cursor-default',
+        active && cn('ring-1 ring-inset', m.ring),
+      )}
+    >
+      {/* score gauge */}
+      <div className="shrink-0 w-12">
+        <div className={cn('text-2xl font-black tabular-nums leading-none', m.text)}>{score}</div>
+        <div className="mt-1 h-1 w-full rounded-full bg-slate-100 overflow-hidden">
+          <div className={cn('h-full rounded-full', m.bar)} style={{ width: `${score}%` }} />
+        </div>
+      </div>
+
+      {/* name + band + driver */}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-black text-slate-900 truncate max-w-[14rem]">{entry.client_name || 'Unknown client'}</span>
+          <span className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', m.chip)}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', m.dot)} /> {m.label}
+          </span>
+        </div>
+        {d ? (
+          <p className="text-[11px] font-medium text-slate-500 mt-0.5 truncate">
+            <span className={cn('font-bold', dsev.text)}>{dsev.label}</span>
+            <span className="text-slate-400"> · biggest drag: </span>
+            <span className="font-semibold text-slate-600">{metricLabel(d.metric)}</span>
+          </p>
+        ) : (
+          <p className="text-[11px] font-medium text-emerald-600 mt-0.5">No active findings</p>
+        )}
+      </div>
+
+      {/* severity counts (each shown only when non-zero) */}
+      <div className="shrink-0 flex items-center gap-1.5">
+        <CountDot n={c.critical} tone="critical" />
+        <CountDot n={c.warning}  tone="warning" />
+        <CountDot n={c.info}     tone="info" />
+      </div>
+    </button>
+  )
+}
+
+// a single severity count pill, reusing the shared severity palette; renders nothing
+// at zero so a clean client shows an empty lane rather than three grey "0"s.
+function CountDot({ n, tone }) {
+  if (!n) return null
+  const m = severityMeta(tone)
+  return (
+    <span className={cn('inline-flex items-center gap-1 text-[10px] font-bold rounded-full px-1.5 py-0.5', m.chipBg, m.chipText)} title={`${n} ${tone}`}>
+      <span className={cn('w-1.5 h-1.5 rounded-full', m.dot)} /> {n}
+    </span>
   )
 }
 

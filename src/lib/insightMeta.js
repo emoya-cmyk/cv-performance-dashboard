@@ -26,6 +26,28 @@ export const SEVERITY = {
 }
 export const severityMeta = (s) => SEVERITY[s] || SEVERITY.info
 
+// ── health band → score palette ───────────────────────────────────────────────
+// lib/health.js rolls a client's open findings into ONE 0–100 score and bands it
+// (healthy ≥85 · watch ≥65 · at_risk ≥40 · critical ≥0). Where SEVERITY paints a
+// single finding, this paints the whole-client verdict the synthesis produces — the
+// triage roster's worst-first leaderboard (agency) and the one-number badge on the
+// client dashboard. Defined beside SEVERITY because the band IS the roll-up of
+// severities and shares its worst-case color (rose), running a legible traffic-light
+// gradient up the scale: emerald → amber → orange → rose. Both surfaces read these
+// class strings so a "watch" looks identical wherever the verdict appears.
+// `bar` is the meter-fill class for the score gauge; `ring` highlights a roster row.
+export const HEALTH_BAND = {
+  healthy:  { rank: 0, label: 'Healthy',  accent: '#10b981', dot: 'bg-emerald-500', text: 'text-emerald-700', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', ring: 'ring-emerald-200 border-emerald-200 bg-emerald-50/50', bar: 'bg-emerald-500' },
+  watch:    { rank: 1, label: 'Watch',    accent: '#f59e0b', dot: 'bg-amber-500',   text: 'text-amber-700',   chip: 'bg-amber-50 text-amber-700 border-amber-200',       ring: 'ring-amber-200 border-amber-200 bg-amber-50/50',       bar: 'bg-amber-500' },
+  at_risk:  { rank: 2, label: 'At risk',  accent: '#f97316', dot: 'bg-orange-500',  text: 'text-orange-700',  chip: 'bg-orange-50 text-orange-700 border-orange-200',    ring: 'ring-orange-200 border-orange-200 bg-orange-50/50',    bar: 'bg-orange-500' },
+  critical: { rank: 3, label: 'Critical', accent: '#e11d48', dot: 'bg-rose-500',    text: 'text-rose-700',    chip: 'bg-rose-50 text-rose-700 border-rose-200',          ring: 'ring-rose-200 border-rose-200 bg-rose-50/50',          bar: 'bg-rose-500' },
+}
+// Unknown/garbage band → healthy, mirroring the pure module's own clamping contract
+// (healthBand(999) → 'healthy', scoreClient(garbage) → a driverless 100). The FE
+// vocabulary and the BE synthesis agree on the totality case rather than inventing a
+// grey "unknown" colour that maps to no real band.
+export const healthBandMeta = (band) => HEALTH_BAND[band] || HEALTH_BAND.healthy
+
 // ── kind → icon + label ───────────────────────────────────────────────────────
 // Mirrors the kinds the engine emits (see migrations/013_intelligence.sql).
 export const KIND = {
