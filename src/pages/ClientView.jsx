@@ -321,6 +321,19 @@ function ClientInsights({ insights }) {
                       </p>
                     </div>
                   )}
+                  {/* Goal-in-band reassurance — the calibrated alarm (lib/insights.js#detectForecast)
+                      eased the severity because the goal still falls inside the likely range above.
+                      Client-framed as encouragement, not the operator-facing "alarm softened": an
+                      honest "still in reach" read straight off the same band, so it can never
+                      contradict the projection the client is looking at. */}
+                  {range && range.goalInBand && (
+                    <div className="mt-1.5 flex items-start gap-1.5">
+                      <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <p className="text-xs text-emerald-700 leading-relaxed font-semibold">
+                        Your goal is still within reach this month.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 

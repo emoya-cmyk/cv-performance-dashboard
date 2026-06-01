@@ -327,6 +327,24 @@ function detectForecast(rows, goal, asOf, cal = {}) {
     else if (ratio < warnRatio)       { severity = 'warning';  direction = 'down' }
     else if (ratio >= FC_AHEAD_RATIO) { severity = 'info';     direction = 'up'   }
 
+    // Calibrated alarm — the forecast self-tuning loop closing on the ALERT side.
+    // A "below goal" projection is only as alarming as our CONFIDENCE that it's a
+    // real miss. Once this client has a learned band and the goal still sits inside
+    // it [lo, hi], hitting the target remains plausible within their OWN realized
+    // forecast error — so soften the down-alarm one level (critical→warning,
+    // warning→info) instead of crying wolf. This is the difference between a tool
+    // that screams at every number under plan and one that knows the difference
+    // between "behind" and "behind beyond your normal swing." Properties that make
+    // it a safe autonomous change: MONOTONIC (only ever lowers severity, never
+    // raises it), scoped to down-alarms (an "ahead of plan" signal is untouched),
+    // and a pure NO-OP without an earned band (interval null → byte-identical to
+    // before). The decision is stamped into evidence as the single source of truth
+    // so every surface explains the softer call from the same number — never a
+    // recomputation that could drift from what the engine actually decided.
+    const goalInBand = !!interval && direction === 'down' &&
+                       p.target >= interval.lo && p.target <= interval.hi
+    if (goalInBand) severity = (severity === 'critical') ? 'warning' : 'info'
+
     // Forecast could project this metric → it owns the goal signal; pacing is
     // suppressed whether or not we surface a finding here.
     flagged.add(p.metric)
@@ -345,6 +363,11 @@ function detectForecast(rows, goal, asOf, cal = {}) {
           projected_high: roundFor(meta, interval.hi),
           interval_pct:   r0(interval.level * 100),   // 80
         } : {}),
+        // Why this alarm reads softer than its raw pct-of-goal would suggest: the
+        // goal still falls inside the learned band, so the miss isn't yet confident.
+        // Present only when it changed the call — a boolean the grounding verifier
+        // ignores and the evidence chips skip, read by the surfaces for the note.
+        ...(goalInBand ? { goal_in_band: true } : {}),
         pct_of_target:   r0(ratio * 100),
         weekly_rate:     roundFor(meta, p.trendWeekly),
         days_elapsed:    p.daysElapsed,

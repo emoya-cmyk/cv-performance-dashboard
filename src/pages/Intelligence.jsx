@@ -364,6 +364,16 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
             <p className="text-[10px] font-medium text-slate-400 leading-relaxed mt-0.5 pl-5">
               {range.pct != null ? `${range.pct}% confidence · ` : ''}self-tuned from this client&rsquo;s forecast track record
             </p>
+            {/* Calibrated alarm (lib/insights.js#detectForecast): when the goal still
+                falls inside this band the engine EASED the severity one level — it won't
+                cry a confident miss while hitting plan is within the client's own error.
+                Surfacing the reason makes the softer call legible instead of a silent
+                downgrade an operator would have to reverse-engineer. */}
+            {range.goalInBand && (
+              <p className="text-[10px] font-semibold text-brand-600 leading-relaxed mt-1 pl-5">
+                Goal still sits within this band — alarm eased from a confident miss.
+              </p>
+            )}
           </div>
         )}
 

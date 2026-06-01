@@ -199,6 +199,9 @@ test('forecast: a trend landing far below goal fires a grounded critical forecas
   assert.equal('projected_low'  in f.evidence, false)
   assert.equal('projected_high' in f.evidence, false)
   assert.equal('interval_pct'   in f.evidence, false)
+  // …and with no band there's nothing to calibrate the alarm against, so the
+  // critical stands at full strength and no softening flag is stamped.
+  assert.equal('goal_in_band'   in f.evidence, false)
 
   // Title + detail are grounded by construction — every figure is in evidence.
   const text = `${titleFor(f)} ${templateDetailFor(f)}`
@@ -230,9 +233,76 @@ test('forecast interval: a learned track record sizes a visible prediction band'
   assert.equal(f.evidence.projected_high, 5285)
   assert.ok(f.evidence.projected_low  < f.evidence.projected_total)
   assert.ok(f.evidence.projected_high > f.evidence.projected_total)
-
+  // Calibrated-alarm boundary: the $8000 goal sits ABOVE the $5,285 band ceiling —
+  // even the optimistic edge falls short, so this is a confident miss. The critical
+  // stands and no softening flag is stamped.
+  assert.equal('goal_in_band' in f.evidence, false)
   // The band's edges are themselves grounded — they live in evidence, so a narrated
   // "likely $2,715–$5,285" can never drift from the numbers behind it.
+  const text = `${titleFor(f)} ${templateDetailFor(f)}`
+  const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
+  assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)
+})
+
+test('calibrated alarm: a goal inside the learned band softens warning → info', () => {
+  // SAME flat-$1k history (projects to $4000), but a $4500 goal: the point lands at
+  // 89% of goal → a behind-pace WARNING on the raw ratio. This client carries a
+  // realized 20% mape, though, so the 80% band is $2,715–$5,285 — and $4500 sits
+  // squarely inside it. Hitting the goal is still plausible within their own forecast
+  // error, so the engine right-sizes the alarm down to info (monitor) and records why.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+  const out    = detectFindings(series, {
+    goal: { revenue_target: 4500 }, asOf: '2026-05-17',
+    calibration: { forecast: { revenue: { samples: 4, mape: 0.2 } } },
+  })
+
+  assert.equal(out.length, 1)
+  const f = out[0]
+  assert.equal(f.kind, 'forecast')
+  assert.equal(f.direction, 'down')                // still tracking below the point
+  assert.equal(f.severity, 'info')                 // …but softened from warning: goal is in-band
+  assert.equal(f.evidence.goal_in_band, true)
+  assert.equal(f.evidence.projected_total, 4000)
+  assert.equal(f.evidence.projected_low, 2715)
+  assert.equal(f.evidence.projected_high, 5285)
+  assert.equal(f.evidence.pct_of_target, 89)       // 4000 / 4500
+  // The goal lies between the band edges — that's the whole reason it softened.
+  assert.ok(f.evidence.target > f.evidence.projected_low)
+  assert.ok(f.evidence.target < f.evidence.projected_high)
+  // Monotonic safety: softening only ever LOWERS urgency, never silences — the card
+  // is still here, just at monitor strength with an honest "still within reach" frame.
+  assert.equal(f.score, 11)                        // |1 − 4000/4500| × 100, unchanged by softening
+
+  const text = `${titleFor(f)} ${templateDetailFor(f)}`
+  const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
+  assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)
+})
+
+test('calibrated alarm: a goal inside the learned band softens critical → warning', () => {
+  // A noisier client (50% mape) earns a much WIDER band. Same $4000 projection, now
+  // against a $7000 goal: the point is 57% of goal → a CRITICAL on the raw ratio. But
+  // the 80% band is ~$787–$7,213, and $7000 still falls inside it — so with this much
+  // realized scatter the miss isn't yet confident, and critical is softened to warning
+  // (plan), not silenced. Demonstrates the one-level step on the upper rung.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+  const out    = detectFindings(series, {
+    goal: { revenue_target: 7000 }, asOf: '2026-05-17',
+    calibration: { forecast: { revenue: { samples: 6, mape: 0.5 } } },
+  })
+
+  assert.equal(out.length, 1)
+  const f = out[0]
+  assert.equal(f.kind, 'forecast')
+  assert.equal(f.direction, 'down')
+  assert.equal(f.severity, 'warning')              // softened from critical: goal is in the wide band
+  assert.equal(f.evidence.goal_in_band, true)
+  assert.equal(f.evidence.projected_total, 4000)
+  assert.equal(f.evidence.interval_pct, 80)
+  assert.ok(f.evidence.target > f.evidence.projected_low)
+  assert.ok(f.evidence.target < f.evidence.projected_high)
+
   const text = `${titleFor(f)} ${templateDetailFor(f)}`
   const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
   assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)

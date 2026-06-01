@@ -142,6 +142,11 @@ export function forecastRange(insight) {
     lo, hi,
     point: Number.isFinite(point) ? point : null,
     pct:   Number.isFinite(pct)   ? pct   : null,
+    // The engine stamps goal_in_band when the goal still falls inside this band and
+    // it therefore SOFTENED the alarm (lib/insights.js#detectForecast — the calibrated
+    // alarm). Read it straight off evidence rather than re-deriving target-vs-band on
+    // the surface, so the note can never disagree with the severity the engine chose.
+    goalInBand: e.goal_in_band === true,
   }
 }
 
