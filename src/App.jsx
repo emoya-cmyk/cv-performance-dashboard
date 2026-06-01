@@ -16,6 +16,7 @@ import GA4Insights    from '@/pages/GA4Insights'
 import SharedReport   from '@/pages/SharedReport'
 import Settings       from '@/pages/Settings'
 import Explore        from '@/pages/Explore'
+import Intelligence   from '@/pages/Intelligence'
 import { useStore }      from '@/data/useStore'
 import { getUser }       from '@/lib/auth'
 import { USE_API }       from '@/lib/api'
@@ -44,6 +45,7 @@ function AuthenticatedApp() {
         <Route path="/ga4"            element={<GA4Insights />} />
         <Route path="/funnel"         element={<LeadFunnel />} />
         <Route path="/explore"        element={<Explore />} />
+        <Route path="/intelligence"   element={<Intelligence />} />
         <Route path="/clients"        element={<Clients />} />
         <Route path="/connections"    element={<Connections />} />
         <Route path="/settings"       element={<Settings />} />

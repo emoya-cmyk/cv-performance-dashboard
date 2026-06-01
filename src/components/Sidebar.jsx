@@ -1,7 +1,7 @@
 import { NavLink, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Megaphone, MapPin, Filter,
-  Users, Plug, ChevronLeft, ChevronRight, TrendingUp, Facebook, Search, Smartphone, Presentation, Settings, Globe, Compass,
+  Users, Plug, ChevronLeft, ChevronRight, TrendingUp, Facebook, Search, Smartphone, Presentation, Settings, Globe, Compass, Brain,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAgency } from '@/lib/agencySettings'
@@ -15,6 +15,7 @@ const NAV = [
   { to: '/ga4',         icon: Globe,           label: 'GA4 / Web' },
   { to: '/funnel',      icon: Filter,          label: 'Lead Pipeline' },
   { to: '/explore',     icon: Compass,         label: 'Explore' },
+  { to: '/intelligence', icon: Brain,          label: 'Intelligence' },
   { to: '/clients',     icon: Users,           label: 'Clients' },
   { to: '/connections', icon: Plug,            label: 'Connections' },
   { to: '/settings',    icon: Settings,        label: 'Settings' },

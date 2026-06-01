@@ -3,6 +3,7 @@ import { ArrowRight, AlertTriangle, CheckCircle, ExternalLink } from 'lucide-rea
 import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 import TopBar from '@/components/TopBar'
 import AskBox from '@/components/AskBox'
+import AnomalyStrip from '@/components/AnomalyStrip'
 import ChannelBreakdown from '@/components/ChannelBreakdown'
 import ActivityFeed from '@/components/ActivityFeed'
 import SpendAreaChart from '@/components/charts/SpendAreaChart'
@@ -409,6 +410,9 @@ export default function Dashboard() {
         </>
       ) : (
         <div className="px-6 pb-8 space-y-4">
+
+          {/* ── Autonomous alert ribbon — engine-driven, silent when clean ── */}
+          <AnomalyStrip />
 
           {/* ── Ask your data (Sprint 2 NL query) ── */}
           <AskBox />

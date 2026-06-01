@@ -1,84 +1,109 @@
 import { useState, useEffect } from 'react'
-import { AlertTriangle, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertTriangle, ChevronDown, ChevronUp, X, ArrowRight } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { severityMeta } from '@/lib/insightMeta'
 
-function fmt(metric, value) {
-  if (metric === 'revenue' || metric === 'spend') {
-    if (value >= 1_000_000) return '$' + (value / 1_000_000).toFixed(1) + 'M'
-    if (value >= 1_000)     return '$' + Math.round(value / 1_000) + 'K'
-    return '$' + value
-  }
-  return value.toLocaleString()
-}
-
-export default function AnomalyStrip({ period = 'last_4w' }) {
-  const [anomalies, setAnomalies] = useState([])
+/**
+ * AnomalyStrip — the Dashboard's at-a-glance alert ribbon.
+ *
+ * Reads the SAME autonomous engine feed the Intelligence page does
+ * (GET /api/insights), but surfaces only what actually needs a human right now:
+ * critical + warning findings. Each chip and the "View all" link deep-link into
+ * the full Intelligence feed where they can be acknowledged or resolved. Stays
+ * completely silent when the portfolio is clean — no row, no empty box.
+ *
+ * Light-themed to sit at the top of the light Dashboard. Self-dismissable for the
+ * session; reappears on next load if findings remain.
+ */
+export default function AnomalyStrip() {
+  const [items, setItems]         = useState([])
   const [open, setOpen]           = useState(true)
   const [dismissed, setDismissed] = useState(false)
-  const [loading, setLoading]     = useState(false)
+  const [loaded, setLoaded]       = useState(false)
 
   useEffect(() => {
     if (!USE_API) return
-    setLoading(true)
-    setDismissed(false)
-    api.getAnomalies(period)
-      .then(data => { setAnomalies(Array.isArray(data) ? data : []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [period])
+    let alive = true
+    api.getInsights()
+      .then(data => {
+        if (!alive) return
+        const alerting = (Array.isArray(data?.insights) ? data.insights : [])
+          .filter(i => i.severity === 'critical' || i.severity === 'warning')
+        setItems(alerting)
+        setLoaded(true)
+      })
+      .catch(() => { if (alive) setLoaded(true) })
+    return () => { alive = false }
+  }, [])
 
-  if (!USE_API || loading || dismissed || anomalies.length === 0) return null
+  if (!USE_API || !loaded || dismissed || items.length === 0) return null
 
-  const critical = anomalies.filter(a => a.severity === 'critical')
-  const warnings = anomalies.filter(a => a.severity === 'warning')
+  const critical = items.filter(i => i.severity === 'critical')
+  const shown    = items.slice(0, 8)
 
   return (
-    <div className="mx-4 mb-4 rounded-2xl border overflow-hidden border-rose-500/30 bg-rose-950/20">
-      {/* Header */}
-      <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none"
-        onClick={() => setOpen(o => !o)}
-      >
-        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-        <p className="text-xs font-black text-rose-300 flex-1">
+    <div className="rounded-2xl border border-rose-200 bg-gradient-to-r from-rose-50 to-amber-50/40 overflow-hidden shadow-sm">
+      {/* header */}
+      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none" onClick={() => setOpen(o => !o)}>
+        <div className="w-7 h-7 rounded-lg bg-rose-100 flex items-center justify-center shrink-0">
+          <AlertTriangle className="w-4 h-4 text-rose-500" />
+        </div>
+        <p className="text-xs font-black text-rose-700 flex-1">
           Performance Alerts
-          <span className="ml-2 text-[9px] font-black bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded-full">
-            {anomalies.length}
+          <span className="ml-2 text-[9px] font-black bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded-full">
+            {items.length}
           </span>
           {critical.length > 0 && (
-            <span className="ml-1 text-[9px] font-black bg-rose-500/30 text-rose-300 px-1.5 py-0.5 rounded-full">
+            <span className="ml-1 text-[9px] font-black bg-rose-500 text-white px-1.5 py-0.5 rounded-full">
               {critical.length} critical
             </span>
           )}
         </p>
+        <Link
+          to="/intelligence"
+          onClick={e => e.stopPropagation()}
+          className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 transition-colors"
+        >
+          View all <ArrowRight className="w-3 h-3" />
+        </Link>
         <button
           onClick={e => { e.stopPropagation(); setDismissed(true) }}
-          className="text-rose-500/50 hover:text-rose-400 transition-colors"
+          className="text-rose-400 hover:text-rose-600 transition-colors"
+          title="Dismiss for now"
         >
           <X className="w-3.5 h-3.5" />
         </button>
-        {open ? <ChevronUp className="w-3.5 h-3.5 text-rose-500/50" /> : <ChevronDown className="w-3.5 h-3.5 text-rose-500/50" />}
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-rose-400" /> : <ChevronDown className="w-3.5 h-3.5 text-rose-400" />}
       </div>
 
-      {/* Body */}
+      {/* body */}
       {open && (
-        <div className="border-t border-rose-500/15 px-4 py-3 flex flex-wrap gap-2">
-          {anomalies.map((a, i) => (
-            <div
-              key={i}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold
-                ${a.severity === 'critical'
-                  ? 'bg-rose-500/15 border border-rose-500/25 text-rose-300'
-                  : 'bg-amber-500/10 border border-amber-500/20 text-amber-300'}`}
+        <div className="border-t border-rose-100 px-4 py-3 flex flex-wrap gap-2">
+          {shown.map(i => {
+            const sev = severityMeta(i.severity)
+            return (
+              <Link
+                to="/intelligence"
+                key={i.id}
+                className={cn('flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition hover:shadow-sm', sev.chipBg, sev.border, sev.text)}
+                title={i.detail || i.title}
+              >
+                <span className="font-black truncate max-w-[10rem]">{i.client_name || '—'}</span>
+                <span className="opacity-40">·</span>
+                <span className="truncate max-w-[22rem]">{i.title}</span>
+              </Link>
+            )
+          })}
+          {items.length > shown.length && (
+            <Link
+              to="/intelligence"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-500 bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
             >
-              <span className="font-black">{a.clientName}</span>
-              <span className="opacity-50">·</span>
-              <span>{a.label}</span>
-              <span className={`font-black ${a.severity === 'critical' ? 'text-rose-400' : 'text-amber-400'}`}>
-                ↓{Math.abs(a.pctChange)}%
-              </span>
-              <span className="opacity-40 text-[10px]">{fmt(a.metric, a.current)} vs {fmt(a.metric, a.prior)}</span>
-            </div>
-          ))}
+              +{items.length - shown.length} more <ArrowRight className="w-3 h-3" />
+            </Link>
+          )}
         </div>
       )}
     </div>
