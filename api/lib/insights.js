@@ -55,6 +55,9 @@ const { monthEndProjection }              = require('./forecast')
 const { callMessages, DEFAULT_MODEL }     = require('./anthropic')
 const { collectAllowedNumbers, verifyGrounding } = require('./ai')
 const { gradeOne, scoreboardOf, calibrationFor }  = require('./selftune')
+const {
+  confidenceTable, signatureKey, bandOf, weightFor, PRIOR_MEAN,
+} = require('./precision')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -904,6 +907,101 @@ async function loadCalibration(clientId) {
 }
 
 // ============================================================
+// PRECISION — learn which finding KINDS a client actually engages with
+// ============================================================
+//
+// The second self-improving organ. Where deriveAndPersistCalibration learns how
+// ACCURATE the forecasts are, this learns how USEFUL each kind of finding has
+// proven to THIS client — read entirely from the insight lifecycle, which costs
+// nobody a survey: acknowledged/resolved = engaged, auto-expired = ignored. The
+// pure brain (lib/precision.js) turns those tallies into a per-signature confidence
+// and feed weight; this function is the I/O shell around it, mirroring the
+// calibration derive/persist/load pattern exactly.
+//
+// Reads the SAME population the feed ranks (scope='client', the decided statuses)
+// so the audience it learns from is the audience it re-ranks. A client with no
+// decided history yields an empty table → nothing persisted → the feed reads a
+// neutral 1.0 weight → ranking is byte-identical to before the loop existed.
+async function deriveAndPersistPrecision(clientId, stampIso) {
+  const { rows } = await query(
+    `SELECT kind, metric, status
+       FROM insights
+      WHERE client_id = $1 AND scope = 'client'
+        AND status IN ('resolved', 'acknowledged', 'expired')`,
+    [clientId]
+  )
+
+  // Shrink each signature toward this client's OWN base engaged-rate (confidenceTable
+  // computes it from these rows when no explicit prior is passed) rather than a hard
+  // 0.5 — a client who acts on everything and one who ignores everything get
+  // different neutral points.
+  const table = confidenceTable(rows)
+
+  const stamp = stampIso || new Date().toISOString()
+  const out = {}
+  for (const [signature, t] of table) {
+    out[signature] = t
+    await query(
+      `INSERT INTO insight_precision
+         (client_id, signature, kind, metric, engaged, ignored, n, confidence, band, weight, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (client_id, signature) DO UPDATE SET
+         kind = EXCLUDED.kind, metric = EXCLUDED.metric,
+         engaged = EXCLUDED.engaged, ignored = EXCLUDED.ignored, n = EXCLUDED.n,
+         confidence = EXCLUDED.confidence, band = EXCLUDED.band, weight = EXCLUDED.weight,
+         updated_at = EXCLUDED.updated_at`,
+      [clientId, signature, t.kind, t.metric == null ? null : t.metric,
+       Number(t.engaged) || 0, Number(t.ignored) || 0, Number(t.n) || 0,
+       numOrNull(t.confidence), t.band || null,
+       numOrNull(t.weight) == null ? 1 : Number(t.weight), stamp]
+    )
+  }
+  return out
+}
+
+// DB row → in-memory precision entry (defensive coercion; weight defaults neutral 1).
+function precisionEntry(r) {
+  return {
+    kind:       r.kind,
+    metric:     r.metric == null ? null : r.metric,
+    engaged:    Number(r.engaged) || 0,
+    ignored:    Number(r.ignored) || 0,
+    n:          Number(r.n) || 0,
+    confidence: numOrNull(r.confidence),
+    band:       r.band || 'medium',
+    weight:     numOrNull(r.weight) == null ? 1 : Number(r.weight),
+  }
+}
+
+// Read back one client's learned precision as a { signature → entry } map for the
+// feed to enrich + rank by. Empty object when the client has no decided history yet.
+async function loadPrecision(clientId) {
+  const { rows } = await query(
+    `SELECT signature, kind, metric, engaged, ignored, n, confidence, band, weight
+       FROM insight_precision WHERE client_id = $1`,
+    [clientId]
+  )
+  const map = {}
+  for (const r of rows) map[r.signature] = precisionEntry(r)
+  return map
+}
+
+// Whole-fleet precision in one query → { client_id → { signature → entry } }, so the
+// portfolio feed enriches every row without an N+1 of per-client reads.
+async function loadPrecisionAll() {
+  const { rows } = await query(
+    `SELECT client_id, signature, kind, metric, engaged, ignored, n, confidence, band, weight
+       FROM insight_precision`
+  )
+  const byClient = {}
+  for (const r of rows) {
+    if (!byClient[r.client_id]) byClient[r.client_id] = {}
+    byClient[r.client_id][r.signature] = precisionEntry(r)
+  }
+  return byClient
+}
+
+// ============================================================
 // ORCHESTRATOR — one client, end to end
 // ============================================================
 //
@@ -948,6 +1046,13 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
   }
 
   await expireStale(clientId, stampIso)
+
+  // Self-improvement, after the sweep settles: roll the full decided lifecycle —
+  // including the findings expireStale just closed — into this client's per-signature
+  // engagement confidence. The NEXT feed read ranks by what we learned here. No
+  // operator, no survey; the lifecycle IS the training signal.
+  await deriveAndPersistPrecision(clientId, stampIso)
+
   return { client_id: clientId, as_of: day, count: persisted.length, findings: persisted }
 }
 
@@ -959,7 +1064,7 @@ const SEV_RANK = { critical: 3, warning: 2, info: 1 }
 
 function safeParse(s) { try { return JSON.parse(s) } catch { return {} } }
 
-function normalizeInsightRow(row) {
+function normalizeInsightRow(row, precisionMap) {
   const norm = {
     ...row,
     grounded: !!row.grounded,
@@ -972,6 +1077,34 @@ function normalizeInsightRow(row) {
   // verifier is unaffected. Every feed + lifecycle return passes through here, so
   // each surface inherits the same advice for free.
   norm.recommended_action = recommendedAction(norm)
+  return attachPrecision(norm, precisionMap)
+}
+
+// The neutral precision a signature with NO decided history reads as: the prior mean
+// itself → 'medium' band → weight EXACTLY 1.0 (a ranking no-op). Computed from the
+// pure brain's own helpers so the "no evidence reproduces today's behavior" guarantee
+// can never drift from the math.
+function neutralPrecision() {
+  return {
+    confidence: PRIOR_MEAN, band: bandOf(PRIOR_MEAN), weight: weightFor(PRIOR_MEAN),
+    n: 0, engaged: 0, ignored: 0,
+  }
+}
+
+// Attach the learned precision for a row's signature, on READ (same rationale as
+// recommended_action: never stored, always in lock-step with lib/precision.js).
+//   • precisionMap UNDEFINED → lifecycle-write path (setInsightStatus): attach
+//     nothing, leaving those returns byte-identical to before this loop existed.
+//   • precisionMap an object → feed path: attach the signature's learned entry, or
+//     the neutral prior when the signature has no history yet. Either way the row
+//     gains a `precision` block the ranker and the UI read; a never-learned feed
+//     reads all-neutral → weight 1.0 → ordering unchanged.
+function attachPrecision(norm, precisionMap) {
+  if (!precisionMap) return norm
+  const p = precisionMap[signatureKey(norm)]
+  norm.precision = p
+    ? { confidence: p.confidence, band: p.band, weight: p.weight, n: p.n, engaged: p.engaged, ignored: p.ignored }
+    : neutralPrecision()
   return norm
 }
 
@@ -981,8 +1114,12 @@ async function getOpenInsights(clientId, { limit = 50 } = {}) {
     `SELECT * FROM insights WHERE client_id = $1 AND status = 'open'`,
     [clientId]
   )
+  // Single-arg map (NOT `.map(normalizeInsightRow)`): Array.map would leak the
+  // index in as `precisionMap`, attaching a stray neutral precision to all-but-the-
+  // first row. This open-only read ranks by severity+score and never applies the
+  // learned weight, so it stays byte-identical to the pre-precision path.
   return rows
-    .map(normalizeInsightRow)
+    .map(r => normalizeInsightRow(r))
     .sort((a, b) =>
       (SEV_RANK[b.severity] || 0) - (SEV_RANK[a.severity] || 0) ||
       (Number(b.score) || 0) - (Number(a.score) || 0))
@@ -998,10 +1135,31 @@ async function getOpenInsights(clientId, { limit = 50 } = {}) {
 const ACTIVE_STATUSES = ['open', 'acknowledged']
 const STATUS_RANK = { open: 1, acknowledged: 0 }
 
+// The learned feed weight to use for RANKING — with the keystone exemption that
+// lives in the consumer, never in the pure brain (lib/precision.js only scores):
+//   • data_health is the only finding that keeps the tool self-sustaining (it tells
+//     the operator a feed went dark); it must never be demoted by a client ignoring
+//     it, so it always ranks at its intrinsic weight.
+//   • a `critical` finding is, by definition, the thing that most needs eyes; a
+//     learned low confidence must never bury it.
+// Everything else is nudged by its learned weight. Absent/odd precision → neutral 1.
+function rankWeight(row) {
+  if (!row) return 1
+  if (row.kind === 'data_health' || row.severity === 'critical') return 1
+  const w = row.precision && Number(row.precision.weight)
+  return Number.isFinite(w) && w > 0 ? w : 1
+}
+
+// Severity is the PRIMARY key, so the precision weight can only reorder findings
+// WITHIN one severity tier — a critical can never sink below a warning no matter how
+// often it's ignored. Status (open before acknowledged) stays secondary. Only the
+// final score comparison is scaled by the learned weight: a kind this client acts on
+// rises, one they ignore sinks, but never across a tier boundary. With no learned
+// history every rankWeight is 1.0 → identical to the pre-precision ordering.
 function feedSort(a, b) {
   return (SEV_RANK[b.severity] || 0) - (SEV_RANK[a.severity] || 0)
       || (STATUS_RANK[b.status] || 0) - (STATUS_RANK[a.status] || 0)
-      || (Number(b.score) || 0) - (Number(a.score) || 0)
+      || ((Number(b.score) || 0) * rankWeight(b)) - ((Number(a.score) || 0) * rankWeight(a))
 }
 
 // One client's active feed (open + acknowledged), most significant first.
@@ -1012,7 +1170,8 @@ async function getInsightFeed(clientId, { limit = 50 } = {}) {
         AND status IN ('open', 'acknowledged')`,
     [clientId]
   )
-  return rows.map(normalizeInsightRow).sort(feedSort).slice(0, limit)
+  const precision = await loadPrecision(clientId)
+  return rows.map(r => normalizeInsightRow(r, precision)).sort(feedSort).slice(0, limit)
 }
 
 // Portfolio roll-up: every client's active findings in one ranked stream, each
@@ -1026,7 +1185,13 @@ async function getPortfolioInsights({ limit = 100 } = {}) {
        JOIN clients c ON c.id = i.client_id
       WHERE i.scope = 'client' AND i.status IN ('open', 'acknowledged')`
   )
-  return rows.map(normalizeInsightRow).sort(feedSort).slice(0, limit)
+  // One whole-fleet read, then enrich each row with ITS client's learned precision
+  // (an empty map for a client with no history → neutral 1.0 weight, ordering intact).
+  const byClient = await loadPrecisionAll()
+  return rows
+    .map(r => normalizeInsightRow(r, byClient[r.client_id] || {}))
+    .sort(feedSort)
+    .slice(0, limit)
 }
 
 // Move one finding to a new lifecycle status and return the fresh row (null if the
@@ -1077,6 +1242,8 @@ module.exports = {
   // self-tuning loop (grade past projections → learn calibration)
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
   deriveAndPersistCalibration, loadCalibration,
+  // precision loop (learn which finding kinds a client engages with)
+  deriveAndPersistPrecision, loadPrecision, loadPrecisionAll, attachPrecision, feedSort,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
