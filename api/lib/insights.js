@@ -54,6 +54,7 @@ const {
 const { monthEndProjection }              = require('./forecast')
 const { callMessages, DEFAULT_MODEL }     = require('./anthropic')
 const { collectAllowedNumbers, verifyGrounding } = require('./ai')
+const { gradeOne, scoreboardOf, calibrationFor }  = require('./selftune')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -88,6 +89,8 @@ const r0 = n => Math.round(Number(n) || 0)
 const r1 = n => Math.round((Number(n) || 0) * 10) / 10
 const r2 = n => Math.round((Number(n) || 0) * 100) / 100
 const round2 = r2
+// Finite number or null — for nullable numeric DB columns (forecast grades etc.).
+const numOrNull = v => { const n = Number(v); return Number.isFinite(n) ? n : null }
 
 function roundDp(v, dp) { return dp === 2 ? r2(v) : dp === 1 ? r1(v) : r0(v) }
 function roundFor(meta, v) { return roundDp(v, meta ? meta.dp : 0) }
@@ -247,53 +250,90 @@ function goalTargets(goal) {
   ]
 }
 
-// Trend-aware month-end landing vs goal (lib/forecast.js). Returns the findings
-// AND the set of metrics it successfully evaluated — those metrics are then
-// suppressed in detectPacing, so the feed never shows both a smart projection
-// and a naive run-rate for the same goal. A metric is "owned" by the forecast
-// whenever it has enough history to project, even when the projection is on
-// track and emits nothing (the naive pacing alarm would just be a false alarm).
-function detectForecast(rows, goal, asOf) {
+// Pure month-end projections for the goal metrics with enough history. One record
+// per projectable metric — the shared primitive behind BOTH the forward forecast
+// finding and the self-tuning snapshot ledger, so a graded projection is exactly
+// the projection we surfaced. The naive MTD run-rate is carried alongside as the
+// baseline the model must beat. No calibration, no DB — just the math.
+function monthProjections(rows, goal, asOf) {
   const out = []
-  const flagged = new Set()
+  if (!goal) return out
   const { day: daysElapsed, daysInMonth, monthFirst } = monthBounds(asOf)
   const remainingDays = daysInMonth - daysElapsed
-  if (remainingDays < 1) return { findings: out, flagged }  // month over → nothing to project
+  if (remainingDays < 1) return out                 // month over → nothing to project
 
-  const inMonth = rows.filter(r => r.week_start >= monthFirst && r.week_start <= asOf)
+  const list    = Array.isArray(rows) ? rows : []
+  const inMonth = list.filter(r => r.week_start >= monthFirst && r.week_start <= asOf)
+  const frac    = daysElapsed / daysInMonth
 
   for (const { metric, target } of goalTargets(goal)) {
     if (!(target > 0)) continue
-    const values = rows.map(r => r[metric])
+    const values = list.map(r => r[metric])
     if (finite(values).length < FORECAST_MIN_WEEKS) continue  // too little history → leave to pacing
 
-    const meta = METRIC_META[metric]
     const mtd  = inMonth.reduce((a, r) => a + (Number(r[metric]) || 0), 0)
     const proj = monthEndProjection({ values, mtd, daysElapsed, daysInMonth, target })
     if (proj.method === 'none' || proj.pctOfTarget == null) continue
-    const ratio = proj.pctOfTarget
+
+    out.push({
+      metric, monthFirst, target, mtd,
+      projectedTotal: proj.projectedTotal,             // raw Holt landing (pre bias-correction)
+      naiveProjected: frac > 0 ? mtd / frac : mtd,      // naive MTD run-rate — the baseline to beat
+      trendWeekly:    proj.trendWeekly,
+      daysElapsed, daysInMonth,
+    })
+  }
+  return out
+}
+
+// Trend-aware month-end landing vs goal. Returns the findings AND the set of
+// metrics it evaluated — those are suppressed in detectPacing, so the feed never
+// shows both a smart projection and a naive run-rate for the same goal. A metric
+// is "owned" by the forecast whenever it can project, even when on track and
+// silent (the naive pacing alarm would just be a false alarm).
+//
+// `cal` is this client's learned, per-metric forecast calibration (lib/selftune.js,
+// derived from its OWN graded track record): `bias_factor` pulls the projection
+// toward where this client's projections have actually landed, and `warn_ratio` /
+// `crit_ratio` tighten the gates when we've earned trust or widen them when we
+// haven't. Absent calibration (cal = {}) reproduces the engine's fixed defaults
+// exactly — bias_factor 1, the literal FC_*_RATIO gates — so the no-calibration
+// path is byte-for-byte the original behaviour.
+function detectForecast(rows, goal, asOf, cal = {}) {
+  const out = []
+  const flagged = new Set()
+
+  for (const p of monthProjections(rows, goal, asOf)) {
+    const meta = METRIC_META[p.metric]
+    const c    = cal[p.metric] || {}
+    const bf        = numOrNull(c.bias_factor) != null ? Number(c.bias_factor) : 1
+    const warnRatio = numOrNull(c.warn_ratio)  != null ? Number(c.warn_ratio)  : FC_WARN_RATIO
+    const critRatio = numOrNull(c.crit_ratio)  != null ? Number(c.crit_ratio)  : FC_CRIT_RATIO
+
+    const projected = p.projectedTotal * bf      // bias-corrected published landing
+    const ratio     = projected / p.target
 
     let severity = null, direction = null
-    if (ratio < FC_CRIT_RATIO)        { severity = 'critical'; direction = 'down' }
-    else if (ratio < FC_WARN_RATIO)   { severity = 'warning';  direction = 'down' }
+    if (ratio < critRatio)            { severity = 'critical'; direction = 'down' }
+    else if (ratio < warnRatio)       { severity = 'warning';  direction = 'down' }
     else if (ratio >= FC_AHEAD_RATIO) { severity = 'info';     direction = 'up'   }
 
     // Forecast could project this metric → it owns the goal signal; pacing is
     // suppressed whether or not we surface a finding here.
-    flagged.add(metric)
-    if (!severity) continue  // on track (0.9–1.1) → stay quiet, but keep pacing suppressed
+    flagged.add(p.metric)
+    if (!severity) continue  // on track → stay quiet, but keep pacing suppressed
 
     out.push({
-      kind: 'forecast', metric, scope: 'client', severity, direction,
-      score: r0(Math.abs(1 - ratio) * 100), period_start: monthFirst,
+      kind: 'forecast', metric: p.metric, scope: 'client', severity, direction,
+      score: r0(Math.abs(1 - ratio) * 100), period_start: p.monthFirst,
       evidence: {
-        target:          roundFor(meta, target),
-        mtd:             roundFor(meta, mtd),
-        projected_total: roundFor(meta, proj.projectedTotal),
+        target:          roundFor(meta, p.target),
+        mtd:             roundFor(meta, p.mtd),
+        projected_total: roundFor(meta, projected),
         pct_of_target:   r0(ratio * 100),
-        weekly_rate:     roundFor(meta, proj.trendWeekly),
-        days_elapsed:    daysElapsed,
-        days_in_month:   daysInMonth,
+        weekly_rate:     roundFor(meta, p.trendWeekly),
+        days_elapsed:    p.daysElapsed,
+        days_in_month:   p.daysInMonth,
       },
     })
   }
@@ -364,8 +404,17 @@ function detectFindings(series, { goal = null, asOf, summary = null, calibration
   if (!rows.length) return []
   const latestWeek = rows[rows.length - 1].week_start
   const day        = String(asOf || latestWeek).slice(0, 10)
-  const sum        = summary || summarizeSeries(rows, METRICS, calibration)
-  const out        = []
+
+  // `calibration` may be the legacy flat anomaly-opts object OR a structured
+  // { anomaly?, forecast? } split (what the self-tuning loop feeds in). Detect
+  // which, defaulting BOTH halves to {} so an absent/empty calibration is a pure
+  // no-op — identical behaviour to passing nothing at all.
+  const structured  = !!calibration && (('forecast' in calibration) || ('anomaly' in calibration))
+  const anomalyCal  = structured ? (calibration.anomaly  || {}) : (calibration || {})
+  const forecastCal = structured ? (calibration.forecast || {}) : {}
+
+  const sum = summary || summarizeSeries(rows, METRICS, anomalyCal)
+  const out = []
 
   // anomalies first; remember which metrics fired so a redundant trend on the
   // same metric is suppressed (a spike already says what a drift would).
@@ -381,10 +430,10 @@ function detectFindings(series, { goal = null, asOf, summary = null, calibration
     const t = makeTrend(rec, latestWeek, rows)
     if (t) out.push(t)
   }
-  // Forecast first (trend-aware landing), then naive pacing only for the goal
-  // metrics the forecast couldn't project — forecast ⊳ pacing.
+  // Forecast first (trend-aware landing, calibrated per client), then naive pacing
+  // only for the goal metrics the forecast couldn't project — forecast ⊳ pacing.
   if (goal) {
-    const fc = detectForecast(rows, goal, day)
+    const fc = detectForecast(rows, goal, day, forecastCal)
     out.push(...fc.findings)
     out.push(...detectPacing(rows, goal, day, fc.flagged))
   }
@@ -575,6 +624,177 @@ async function expireStale(clientId, stampIso) {
 }
 
 // ============================================================
+// SELF-TUNING — grade past projections, learn this client's calibration
+// ============================================================
+//
+// The loop that makes the engine self-IMPROVING. Each sweep:
+//   1. snapshotForecast locks in THIS month's projection with real forward lead
+//      time (insert-once per client/metric/month — never back-filled).
+//   2. gradeDueForecasts, once a month has closed, scores every locked-in
+//      projection against the realized actual — model vs naive vs truth.
+//   3. deriveAndPersistCalibration rolls a client's graded history into the
+//      per-metric forecast gates + bias correction the NEXT sweep reads back.
+// Nobody tunes a threshold by hand; the data does it (lib/selftune.js).
+
+// Realized month totals for the goal metrics, bucketed by week_start EXACTLY like
+// the month-to-date sum in monthProjections — so a graded actual is comparable to
+// the projection it grades (revenue/leads/jobs are additive over the month's weeks).
+async function loadMonthTotals(clientId, monthFirst) {
+  const mf = isoDate(monthFirst)
+  const { daysInMonth } = monthBounds(mf)                           // last day of that month
+  const monthLast = `${mf.slice(0, 7)}-${String(daysInMonth).padStart(2, '0')}`
+  const { rows } = await query(
+    `SELECT week_start, ${AGG}
+       FROM weekly_reports
+      WHERE client_id = $1 AND week_start >= $2 AND week_start <= $3
+      GROUP BY week_start`,
+    [clientId, mf, monthLast]
+  )
+  const totals = {}
+  for (const m of METRICS) totals[m] = 0
+  for (const row of rows) {
+    const d = derive(row)
+    for (const m of METRICS) totals[m] += Number(d[METRIC_META[m].col]) || 0
+  }
+  return totals
+}
+
+// Lock in one projection for later grading. Insert-once (DO NOTHING on conflict):
+// the FIRST sweep of the month preserves honest forward lead time; later sweeps
+// never overwrite it with a wiser, nearer-the-end guess.
+async function snapshotForecast(clientId, p, asOf) {
+  await query(
+    `INSERT INTO forecast_grades
+       (client_id, metric, month, as_of, projected_total, naive_projected, target)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (client_id, metric, month) DO NOTHING`,
+    [clientId, p.metric, isoDate(p.monthFirst), isoDate(asOf),
+     numOrNull(p.projectedTotal), numOrNull(p.naiveProjected), numOrNull(p.target)]
+  )
+}
+
+// Grade every locked-in projection whose month has closed and isn't graded yet.
+// One loadMonthTotals per due month (not per row). Returns how many were graded;
+// already-graded rows are skipped (actual_total IS NULL guard) → idempotent.
+async function gradeDueForecasts(clientId, { asOf } = {}) {
+  const day           = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const curMonthFirst = monthBounds(day).monthFirst
+
+  // `month < $cur` works on both backends: DATE vs date-string in PG, and
+  // 'YYYY-MM-01' is lexicographically ordered in SQLite.
+  const { rows: due } = await query(
+    `SELECT id, metric, month, projected_total, naive_projected, target
+       FROM forecast_grades
+      WHERE client_id = $1 AND actual_total IS NULL AND month < $2`,
+    [clientId, curMonthFirst]
+  )
+  if (!due.length) return { graded: 0 }
+
+  const byMonth = new Map()
+  for (const r of due) {
+    const key = isoDate(r.month)
+    if (!byMonth.has(key)) byMonth.set(key, [])
+    byMonth.get(key).push(r)
+  }
+
+  const stampIso = new Date().toISOString()
+  let graded = 0
+  for (const [monthFirst, group] of byMonth) {
+    const totals = await loadMonthTotals(clientId, monthFirst)
+    for (const r of group) {
+      const actual = Number(totals[r.metric])
+      const g = gradeOne({
+        projected: Number(r.projected_total),
+        naive:     Number(r.naive_projected),
+        actual,
+        target:    Number(r.target),
+      })
+      await query(
+        `UPDATE forecast_grades SET
+           actual_total = $1, abs_pct_error = $2, naive_abs_pct_error = $3,
+           bias = $4, model_won = $5, graded_at = $6
+         WHERE id = $7`,
+        [numOrNull(actual), numOrNull(g.abs_pct_error), numOrNull(g.naive_abs_pct_error),
+         numOrNull(g.bias), g.model_won == null ? null : (g.model_won ? 1 : 0),
+         stampIso, r.id]
+      )
+      graded++
+    }
+  }
+  return { graded }
+}
+
+// Roll a client's graded history into its per-metric forecast calibration and
+// upsert it. Returns the live { metric → calibration } map so the SAME sweep that
+// graded the closed months immediately forecasts with the updated knobs.
+async function deriveAndPersistCalibration(clientId, stampIso) {
+  // A closed month with actual_total = 0 is graded but UNGRADEABLE (abs_pct_error
+  // null — the percentage is undefined at zero); exclude it so it never enters the
+  // scoreboard. selftune.js guards this too, but filtering here keeps the readback
+  // tight and the intent explicit.
+  const { rows } = await query(
+    `SELECT metric, abs_pct_error, naive_abs_pct_error, bias, model_won
+       FROM forecast_grades
+      WHERE client_id = $1 AND abs_pct_error IS NOT NULL`,
+    [clientId]
+  )
+
+  const byMetric = new Map()
+  for (const r of rows) {
+    if (!byMetric.has(r.metric)) byMetric.set(r.metric, [])
+    byMetric.get(r.metric).push({
+      abs_pct_error:       r.abs_pct_error       == null ? null : Number(r.abs_pct_error),
+      naive_abs_pct_error: r.naive_abs_pct_error == null ? null : Number(r.naive_abs_pct_error),
+      bias:                r.bias                == null ? null : Number(r.bias),
+      model_won:           r.model_won           == null ? null : !!Number(r.model_won),
+    })
+  }
+
+  const stamp = stampIso || new Date().toISOString()
+  const cal = {}
+  for (const [metric, grades] of byMetric) {
+    const c = calibrationFor(scoreboardOf(grades))
+    cal[metric] = c
+    await query(
+      `INSERT INTO metric_calibration
+         (client_id, metric, grain, warn_ratio, crit_ratio, bias_factor, trust, mape, samples, updated_at)
+       VALUES ($1, $2, 'month', $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (client_id, metric, grain) DO UPDATE SET
+         warn_ratio = EXCLUDED.warn_ratio, crit_ratio = EXCLUDED.crit_ratio,
+         bias_factor = EXCLUDED.bias_factor, trust = EXCLUDED.trust,
+         mape = EXCLUDED.mape, samples = EXCLUDED.samples, updated_at = EXCLUDED.updated_at`,
+      [clientId, metric, numOrNull(c.warn_ratio), numOrNull(c.crit_ratio), numOrNull(c.bias_factor),
+       numOrNull(c.trust), numOrNull(c.mape), Number(c.samples) || 0, stamp]
+    )
+  }
+  return cal
+}
+
+// Read back the persisted calibration as a { metric → knobs } map (for the
+// scheduler / API to forecast without re-deriving). bias_factor defaults to a
+// neutral 1; absent gate ratios fall through to the engine defaults downstream.
+async function loadCalibration(clientId) {
+  const { rows } = await query(
+    `SELECT metric, warn_ratio, crit_ratio, bias_factor, trust, mape, samples
+       FROM metric_calibration
+      WHERE client_id = $1 AND grain = 'month'`,
+    [clientId]
+  )
+  const cal = {}
+  for (const r of rows) {
+    cal[r.metric] = {
+      warn_ratio:  numOrNull(r.warn_ratio),
+      crit_ratio:  numOrNull(r.crit_ratio),
+      bias_factor: numOrNull(r.bias_factor) == null ? 1 : Number(r.bias_factor),
+      trust:       numOrNull(r.trust),
+      mape:        numOrNull(r.mape),
+      samples:     Number(r.samples) || 0,
+    }
+  }
+  return cal
+}
+
+// ============================================================
 // ORCHESTRATOR — one client, end to end
 // ============================================================
 //
@@ -589,9 +809,15 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
   const series = await loadWeeklySeries(clientId, { weeks })
   await persistBaselines(clientId, series, stampIso)
 
+  // Self-improvement, before we detect: grade every now-closed projection against
+  // reality, then re-derive this client's per-metric forecast calibration from the
+  // refreshed track record. The forecast below then runs with the learned knobs.
+  await gradeDueForecasts(clientId, { asOf: day })
+  const calibration = await deriveAndPersistCalibration(clientId, stampIso)
+
   const summary  = summarizeSeries(series, METRICS)
   const goal     = await loadGoal(clientId, monthBounds(day).monthFirst)
-  const findings = detectFindings(series, { goal, asOf: day, summary })
+  const findings = detectFindings(series, { goal, asOf: day, summary, calibration: { forecast: calibration } })
 
   const persisted = []
   for (const f of findings) {
@@ -599,6 +825,17 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
     const fingerprint = fingerprintOf(clientId, f)
     await upsertInsight(clientId, f, { ...narration, fingerprint, stampIso })
     persisted.push({ ...f, title: narration.title, fingerprint })
+  }
+
+  // Lock in THIS month's projections (bias-corrected, exactly as published) so a
+  // future sweep can grade them once the month closes. Insert-once preserves the
+  // honest forward lead time — a later sweep this month is a silent no-op.
+  if (goal) {
+    for (const p of monthProjections(series, goal, day)) {
+      const bf        = numOrNull(calibration[p.metric] && calibration[p.metric].bias_factor)
+      const published = bf == null ? p.projectedTotal : p.projectedTotal * bf
+      await snapshotForecast(clientId, { ...p, projectedTotal: published }, day)
+    }
   }
 
   await expireStale(clientId, stampIso)
@@ -639,10 +876,13 @@ async function getOpenInsights(clientId, { limit = 50 } = {}) {
 module.exports = {
   // catalogue / pure detection (unit-tested without a DB)
   METRICS, METRIC_META, detectFindings, fingerprintOf,
-  titleFor, templateDetailFor,
+  titleFor, templateDetailFor, monthProjections,
   // narration + persistence + orchestration
   narrateFinding, loadWeeklySeries, persistBaselines,
   upsertInsight, expireStale, runInsightsForClient,
+  // self-tuning loop (grade past projections → learn calibration)
+  loadMonthTotals, snapshotForecast, gradeDueForecasts,
+  deriveAndPersistCalibration, loadCalibration,
   // feed
   getOpenInsights, normalizeInsightRow,
 }

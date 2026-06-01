@@ -38,7 +38,14 @@ const { verifyGrounding } = require('../lib/ai')
 const {
   detectFindings, fingerprintOf, titleFor, templateDetailFor,
   runInsightsForClient, upsertInsight, getOpenInsights, normalizeInsightRow,
+  // self-tuning loop: lock in a projection → grade it once the month closes →
+  // roll the graded history into this client's learned forecast calibration.
+  loadMonthTotals, snapshotForecast, gradeDueForecasts,
+  deriveAndPersistCalibration, loadCalibration,
 } = require('../lib/insights')
+
+const approx = (a, b, eps = 1e-9) =>
+  assert.ok(Math.abs(Number(a) - Number(b)) <= eps, `expected ${a} ≈ ${b}`)
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -71,6 +78,26 @@ async function allInsights(clientId) {
 }
 async function baselineRows(clientId) {
   const { rows } = await db.query(`SELECT * FROM metric_baselines WHERE client_id = $1`, [clientId])
+  return rows
+}
+
+// A month's goal row (loadGoal reads client_goals keyed by month = 'YYYY-MM-01').
+async function seedGoal(clientId, month, g = {}) {
+  await db.query(
+    `INSERT INTO client_goals (client_id, month, revenue_target, leads_target, jobs_target)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [clientId, month, g.revenue_target ?? null, g.leads_target ?? null, g.jobs_target ?? null]
+  )
+}
+// The self-tuning ledger + learned calibration, read straight from the tables.
+async function gradeRows(clientId) {
+  const { rows } = await db.query(
+    `SELECT * FROM forecast_grades WHERE client_id = $1 ORDER BY month, metric`, [clientId])
+  return rows
+}
+async function calibrationRows(clientId) {
+  const { rows } = await db.query(
+    `SELECT * FROM metric_calibration WHERE client_id = $1 ORDER BY metric`, [clientId])
   return rows
 }
 
@@ -356,4 +383,170 @@ test('runInsightsForClient on a data-less client is a safe no-op', async () => {
   assert.equal(res.count, 0)
   assert.deepEqual(await allInsights(c), [])
   assert.deepEqual(await baselineRows(c), [])
+})
+
+// ============================================================
+// 3. SELF-TUNING LOOP (DB-backed) — the market-is-teacher cycle
+//    snapshot → grade (model vs naive vs realized) → derive calibration → read back.
+//    This is the half that makes the engine self-IMPROVING with no operator: it
+//    grades its own published projections against reality and re-tunes the next
+//    sweep's forecast gates + bias-correction from the result.
+// ============================================================
+
+test('self-tuning: closed projections are graded model-vs-naive-vs-actual, then learned as calibration', async () => {
+  await ready()
+  const c = await freshClient('Learning Roofing Co')
+
+  // Two CLOSED months of real revenue (additive over the month's weeks):
+  //   Feb 2026 — four Mondays × $1000 = $4000 realized
+  //   Mar 2026 — five  Mondays × $1000 = $5000 realized
+  // Plus one APRIL week that must NOT leak into either month total — this guards
+  // the month-boundary math in loadMonthTotals (the [monthFirst, monthLast] window).
+  for (const wk of ['2026-02-02', '2026-02-09', '2026-02-16', '2026-02-23'])
+    await seedWeek(c, wk, { projected_revenue: 1000 })
+  for (const wk of ['2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23', '2026-03-30'])
+    await seedWeek(c, wk, { projected_revenue: 1000 })
+  await seedWeek(c, '2026-04-06', { projected_revenue: 9999 })   // out-of-window guard
+
+  // loadMonthTotals isolates each month — April's $9999 leaks into neither.
+  assert.equal((await loadMonthTotals(c, '2026-02-01')).revenue, 4000)
+  assert.equal((await loadMonthTotals(c, '2026-03-01')).revenue, 5000)
+
+  // Lock in each month's published projection with honest forward lead time. Both
+  // are deliberately +10% hot and both BEAT their naive run-rate by the same margin.
+  await snapshotForecast(c, { metric: 'revenue', monthFirst: '2026-02-01', projectedTotal: 4400, naiveProjected: 3600, target: 5000 }, '2026-02-05')
+  await snapshotForecast(c, { metric: 'revenue', monthFirst: '2026-03-01', projectedTotal: 5500, naiveProjected: 4500, target: 6000 }, '2026-03-05')
+
+  // Grade everything now closed (asOf in May → both Feb and Mar are due).
+  const { graded } = await gradeDueForecasts(c, { asOf: '2026-05-15' })
+  assert.equal(graded, 2)
+
+  const g   = await gradeRows(c)
+  const feb = g.find(r => String(r.month).startsWith('2026-02'))
+  const mar = g.find(r => String(r.month).startsWith('2026-03'))
+  // Feb: projected 4400 vs actual 4000 → 10% over; naive 3600 also 10% off → tie,
+  // and a tie counts as a model win (the smarter method isn't penalised).
+  approx(feb.actual_total, 4000)
+  approx(feb.abs_pct_error, 0.1)          // |4400-4000|/4000
+  approx(feb.naive_abs_pct_error, 0.1)    // |3600-4000|/4000
+  approx(feb.bias, 0.1)                    // signed: over-projected
+  assert.equal(Number(feb.model_won), 1)
+  // Mar: projected 5500 vs actual 5000 → same 10% over, same tie-win.
+  approx(mar.actual_total, 5000)
+  approx(mar.abs_pct_error, 0.1)
+  approx(mar.bias, 0.1)
+  assert.equal(Number(mar.model_won), 1)
+
+  // Derive + persist calibration from the two graded months. samples 2 ≥ the floor
+  // → a REAL (non-neutral) calibration: mape 0.1, win-rate 1, bias +0.1.
+  //   trust       = 0.6·skill(0.8) + 0.4·win(1)            = 0.88
+  //   warn_ratio  = lerp(0.85, 0.92, 0.88)                 = 0.912  (tighter than 0.9 default)
+  //   crit_ratio  = lerp(0.60, 0.75, 0.88)                 = 0.732  (tighter than 0.7 default)
+  //   bias_factor = 1 + (1/1.1 − 1)·conf(2/4)              = 0.955  (pull hot projections DOWN)
+  const cal = await deriveAndPersistCalibration(c, '2026-05-15T00:00:00.000Z')
+  assert.equal(cal.revenue.samples, 2)
+  approx(cal.revenue.trust, 0.88)
+  approx(cal.revenue.warn_ratio, 0.912)
+  approx(cal.revenue.crit_ratio, 0.732)
+  approx(cal.revenue.bias_factor, 0.955)
+  approx(cal.revenue.mape, 0.1)
+  assert.ok(cal.revenue.bias_factor < 1, 'a hot track record is corrected DOWNWARD')
+
+  // The readback the next sweep consumes matches what we just derived + persisted.
+  const loaded = await loadCalibration(c)
+  assert.equal(loaded.revenue.samples, 2)
+  approx(loaded.revenue.warn_ratio, 0.912)
+  approx(loaded.revenue.crit_ratio, 0.732)
+  approx(loaded.revenue.bias_factor, 0.955)
+  approx(loaded.revenue.trust, 0.88)
+  // exactly one persisted calibration row for this client.
+  assert.equal((await calibrationRows(c)).length, 1)
+})
+
+test('self-tuning: a learned bias-correction changes the published forecast verdict', async () => {
+  // Flat $1k/wk × 6 → raw landing $4000 against an $8000 goal. With NO calibration
+  // that is 50% of plan → a hard "critical". Feed the SAME series this client's
+  // learned calibration (it has been running 50% HOT, so bias_factor 1.5 pulls the
+  // projection UP toward where its numbers actually land) and the published landing
+  // becomes $6000 = 75% of plan → the verdict softens to "warning". Same data, a
+  // different — and earned — conclusion: the calibration READ path end to end.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+
+  const base = detectFindings(series, { goal: { revenue_target: 8000 }, asOf: '2026-05-17' })
+  const f0   = base.find(f => f.kind === 'forecast' && f.metric === 'revenue')
+  assert.equal(f0.severity, 'critical')
+  assert.equal(f0.evidence.projected_total, 4000)
+  assert.equal(f0.evidence.pct_of_target, 50)
+
+  const tuned = detectFindings(series, {
+    goal: { revenue_target: 8000 }, asOf: '2026-05-17',
+    calibration: { forecast: { revenue: { bias_factor: 1.5, warn_ratio: 0.9, crit_ratio: 0.7 } } },
+  })
+  const f1 = tuned.find(f => f.kind === 'forecast' && f.metric === 'revenue')
+  assert.equal(f1.severity, 'warning')              // 6000/8000 = 0.75 → between crit .7 and warn .9
+  assert.equal(f1.evidence.projected_total, 6000)   // 4000 × bias_factor 1.5
+  assert.equal(f1.evidence.pct_of_target, 75)
+})
+
+test('self-tuning: snapshots are insert-once and grading is idempotent', async () => {
+  await ready()
+  const c = await freshClient('Idempotent Roofing Co')
+  for (const wk of ['2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23', '2026-03-30'])
+    await seedWeek(c, wk, { projected_revenue: 1000 })          // Mar realized $5000
+
+  // First snapshot wins; a second (wiser, nearer-the-end) guess for the SAME
+  // client/metric/month is silently dropped — honest forward lead time is preserved.
+  await snapshotForecast(c, { metric: 'revenue', monthFirst: '2026-03-01', projectedTotal: 5500, naiveProjected: 4500, target: 6000 }, '2026-03-05')
+  await snapshotForecast(c, { metric: 'revenue', monthFirst: '2026-03-01', projectedTotal: 9999, naiveProjected: 1,    target: 1    }, '2026-03-28')
+  let g = await gradeRows(c)
+  assert.equal(g.length, 1)
+  approx(g[0].projected_total, 5500)                  // the FIRST snapshot, not the overwrite
+  approx(g[0].target, 6000)
+
+  // Grade once → the row gets its realized actual + error decomposition.
+  const r1 = await gradeDueForecasts(c, { asOf: '2026-05-15' })
+  assert.equal(r1.graded, 1)
+  g = await gradeRows(c)
+  approx(g[0].actual_total, 5000)
+  approx(g[0].abs_pct_error, 0.1)                     // |5500-5000|/5000
+
+  // Grade AGAIN → nothing re-grades (actual_total IS NOT NULL guard) and the row
+  // is untouched. The sweep is safe to run on any cadence.
+  const r2 = await gradeDueForecasts(c, { asOf: '2026-05-15' })
+  assert.equal(r2.graded, 0)
+  g = await gradeRows(c)
+  assert.equal(g.length, 1)
+  approx(g[0].actual_total, 5000)
+  approx(g[0].abs_pct_error, 0.1)
+})
+
+test('self-tuning: runInsightsForClient locks in THIS month for later grading without grading it early', async () => {
+  await ready()
+  const c = await freshClient('Wiring Roofing Co')
+  await seedGoal(c, '2026-05-01', { revenue_target: 8000 })
+  const weeks = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  for (const wk of weeks) await seedWeek(c, wk, { projected_revenue: 1000 })
+
+  // A real sweep mid-May: it surfaces the critical forecast AND locks in the
+  // current month's published projection ($4000, bias-neutral — no history yet).
+  const run1 = await runInsightsForClient(c, { asOf: '2026-05-17' })
+  assert.ok(run1.findings.some(f => f.kind === 'forecast' && f.metric === 'revenue'),
+    'the sweep surfaces the revenue forecast')
+
+  let g = await gradeRows(c)
+  assert.equal(g.length, 1)
+  assert.equal(g[0].metric, 'revenue')
+  assert.equal(String(g[0].month).slice(0, 10), '2026-05-01')
+  assert.equal(g[0].actual_total, null)               // May is still OPEN → not graded
+  approx(g[0].projected_total, 4000)                   // bias_factor neutral (no calibration)
+  assert.equal(String(g[0].as_of).slice(0, 10), '2026-05-17')
+
+  // A later sweep the SAME month must not overwrite the first lead-time snapshot,
+  // and must still not grade the (open) current month.
+  await runInsightsForClient(c, { asOf: '2026-05-24' })
+  g = await gradeRows(c)
+  assert.equal(g.length, 1)                            // insert-once held across sweeps
+  approx(g[0].projected_total, 4000)                   // the 05-17 snapshot, not a 05-24 re-guess
+  assert.equal(g[0].actual_total, null)               // still open → still ungraded
 })
