@@ -4,12 +4,12 @@ import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
-  CheckCircle, AlertCircle, Clock, Sparkles, Target,
+  CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -291,6 +291,10 @@ function ClientInsights({ insights }) {
           // a confident, honest range reassures, where the agency-only precision chip
           // ("your team ignores these") would not. Null → no line, a clean point.
           const range    = forecastRange(item)
+          // The model-free "why" (lib/attribution.js), reduced to the single lever that
+          // moved the number most. Null for non-composite metrics → no line, exactly as
+          // before. The operator-facing signed-share breakdown stays on /intelligence.
+          const attribution = attributionView(item)
           return (
             <div
               key={item.id}
@@ -306,6 +310,22 @@ function ClientInsights({ insights }) {
                   <p className="text-sm font-black text-slate-800 leading-snug">{item.title}</p>
                   {item.detail && (
                     <p className="text-xs text-slate-500 leading-relaxed mt-0.5">{item.detail}</p>
+                  )}
+                  {/* The "why" in plain language — the engine's model-free driver
+                      decomposition (lib/attribution.js), reduced to the single lever that
+                      moved the number most. Honest and reassuring: it names the cause in the
+                      client's own terms ("driven mostly by leads") without the operator-facing
+                      signed-share breakdown the agency sees. Null → no line. */}
+                  {attribution && (
+                    <div className="mt-1.5 flex items-start gap-1.5">
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                        Driven mostly by <span className="font-bold text-slate-800">{attribution.lead.label}</span>
+                        {attribution.lead.dirWord !== 'flat' && (
+                          <>, {attribution.lead.dirWord} <span className="tabular-nums">{attribution.lead.pctAbs}%</span></>
+                        )}.
+                      </p>
+                    </div>
                   )}
                   {/* Likely range — the self-tuned prediction band in plain English.
                       Its width is the engine's own realized forecast accuracy for THIS

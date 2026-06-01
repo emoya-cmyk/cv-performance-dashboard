@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
-  Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target,
+  Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
   severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta,
   precisionMeta, hasLearnedPrecision, precisionTooltip,
-  forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue,
+  forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue, attributionView,
 } from '@/lib/insightMeta'
 
 /**
@@ -300,6 +300,12 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
   // present only on forecast findings that earned one (null otherwise → no line).
   const range = forecastRange(insight)
 
+  // Driver attribution — the model-free "why" the engine stamped onto a trend/anomaly
+  // finding (null for non-composite metrics and forecast/pacing → no block). Mutually
+  // exclusive with `range` in practice: attribution lives on trend/anomaly, the band on
+  // forecast, so at most one of the two blocks renders on any card.
+  const attribution = attributionView(insight)
+
   // The band's three keys are surfaced as the prominent range line below, so they're
   // filtered OUT of the raw evidence chips here — shown once, not twice.
   const evidenceEntries = Object.entries(insight.evidence || {})
@@ -374,6 +380,47 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
                 Goal still sits within this band — alarm eased from a confident miss.
               </p>
             )}
+          </div>
+        )}
+
+        {/* driver attribution — the model-free "why" behind the move. The engine stamps the
+            EXACT decomposition of a composite KPI (revenue ≡ spend×roas, jobs ≡ leads×close_rate)
+            onto trend + anomaly findings; this shows which lever actually moved it, the dominant
+            lever flagged, and any driver that CUSHIONED the move (moved the other way) labelled
+            honestly instead of printed as a negative share. Pure arithmetic — every number traces
+            to a stored weekly value, so it's audit-grade, not a model guess. */}
+        {attribution && (
+          <div className="mt-2 rounded-xl border border-slate-100 bg-gradient-to-br from-slate-50 to-white px-2.5 py-2">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">What moved it</span>
+            </div>
+            <div className="space-y-1">
+              {attribution.drivers.map((d) => {
+                const DDir = directionIcon(d.dirWord)
+                return (
+                  <div key={d.metric} className="flex items-center gap-2 text-xs">
+                    <span className={cn('inline-flex items-center gap-1 font-bold', d.isLead ? 'text-slate-800' : 'text-slate-500')}>
+                      <DDir className={cn('w-3 h-3', d.dirWord === 'up' ? 'text-emerald-500' : d.dirWord === 'down' ? 'text-rose-500' : 'text-slate-300')} />
+                      {d.label}
+                    </span>
+                    <span className="tabular-nums text-slate-400">
+                      {d.dirWord === 'flat' ? 'flat' : `${d.dirWord === 'up' ? '+' : '−'}${d.pctAbs}%`}
+                    </span>
+                    <span className="ml-auto inline-flex items-center gap-1.5">
+                      <span className="text-[10px] font-semibold text-slate-400 tabular-nums">
+                        {d.cushioned ? 'softened the move' : `${d.sharePct}% of the move`}
+                      </span>
+                      {d.isLead && (
+                        <span className="inline-flex items-center text-[8px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 border border-brand-100 rounded-full px-1.5 py-0.5">
+                          Biggest lever
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 

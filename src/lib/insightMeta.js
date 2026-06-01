@@ -150,6 +150,61 @@ export function forecastRange(insight) {
   }
 }
 
+// ── driver attribution → the model-free "why" behind a composite move ──────────
+// lib/attribution.js (the engine's "why" organ) decomposes a move in a composite KPI
+// into the EXACT contributions of its stored drivers — revenue into spend × roas, jobs
+// into leads × close_rate — and the engine stamps that whole decomposition onto a trend
+// or anomaly finding under ONE nested evidence.attribution key (lib/insights.js#attach-
+// Attribution). The nesting is deliberate: an object value is already skipped by every
+// surface's number|string evidence-chip filter, so — unlike the forecast band — there is
+// NO keys-to-exclude set to maintain here. attributionView pulls that object back out as
+// one typed, presentation-ready shape both surfaces render from the same truth: the agency
+// as a full signed breakdown ("spend ↑12% — 100% of the move"), the client as one plain
+// sentence ("driven mostly by leads, down 15%"). Returns null whenever the finding carries
+// no decomposition — every non-composite metric, every degenerate endpoint — the keystone
+// no-op, so a finding without a "why" renders exactly as it did before this layer existed.
+//
+// `share` is SIGNED (see attribution.js): a driver that moved OPPOSITE the composite carries
+// a negative share — it CUSHIONED the move rather than caused it — while the dominant aligned
+// driver carries a share > 1 to compensate. We pass that signedness through as `cushioned` so
+// a surface can label it honestly instead of printing a baffling "−50% of the move". `dirWord`
+// and `pctAbs` are the driver's OWN movement, pre-split so the two surfaces phrase it
+// identically and never re-derive the sign.
+export function attributionView(insight) {
+  const a = insight && insight.evidence && insight.evidence.attribution
+  if (!a || !Array.isArray(a.drivers) || a.drivers.length === 0) return null
+
+  const drivers = a.drivers.map((d) => {
+    const share    = Number(d.share)
+    const pct      = Number(d.pct)
+    const sharePct = Number.isFinite(Number(d.share_pct))
+      ? Number(d.share_pct)
+      : Math.round((Number.isFinite(share) ? share : 0) * 100)
+    return {
+      metric:  d.metric,
+      label:   metricLabel(d.metric),
+      pct:     Number.isFinite(pct) ? pct : 0,            // signed % change of the driver
+      pctAbs:  Number.isFinite(pct) ? Math.abs(pct) : 0,
+      dirWord: !Number.isFinite(pct) || pct === 0 ? 'flat' : pct > 0 ? 'up' : 'down',
+      share:   Number.isFinite(share) ? share : 0,
+      sharePct,
+      isLead:  d.metric === a.lead,
+      // negative share ⇒ moved opposite the composite ⇒ softened, not caused, the move
+      cushioned: Number.isFinite(share) && share < 0,
+    }
+  })
+
+  return {
+    metric:    a.metric,
+    label:     metricLabel(a.metric),
+    direction: a.direction === 'down' ? 'down' : 'up',
+    pct:       Number.isFinite(Number(a.pct)) ? Number(a.pct) : 0,
+    // the dominant lever — the driver to pull; always aligned with `direction`
+    lead:      drivers.find((d) => d.isLead) || drivers[0],
+    drivers,                                              // presentation order, signed
+  }
+}
+
 // The three evidence keys forecastRange() consumes. The collapsed evidence list on
 // each surface filters these OUT — they read as one "likely range" line instead of
 // three lonely raw numbers — but they STAY in evidence as the grounded data layer the
