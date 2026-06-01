@@ -422,6 +422,32 @@ test('data_health: a stale feed surfaces as a reconnect signal', () => {
   assert.match(titleFor(d), /reconnect the source/i)
 })
 
+test('coverage_gap: title + detail name the channel, its own cadence, and the dark span', () => {
+  // A daily channel (cadence ≈ 1) silent for 30 days. The narration must contrast
+  // the channel's OWN rhythm with the gap and resolve to one instruction: reconnect.
+  const f = {
+    kind: 'coverage_gap', metric: null, severity: 'critical',
+    evidence: { channel_label: 'Meta Ads', days_dark: 30, cadence_days: 1 },
+  }
+  const title = titleFor(f)
+  assert.ok(title.includes('Meta Ads'))
+  assert.ok(title.includes('30 days'))
+  assert.match(title, /reconnect/i)
+
+  const detail = templateDetailFor(f)
+  assert.ok(detail.includes('every 1 day'))                  // cadence singular
+  assert.ok(detail.includes("hasn't sent data in 30 days"))
+  assert.ok(detail.includes('other sources are still flowing'))
+  assert.match(detail, /reconnect Meta Ads/i)
+
+  // A weekly channel pluralizes its own cadence ("every 7 days").
+  const weekly = templateDetailFor({
+    kind: 'coverage_gap', metric: null,
+    evidence: { channel_label: 'GHL CRM', days_dark: 21, cadence_days: 7 },
+  })
+  assert.ok(weekly.includes('every 7 days'))
+})
+
 test('quiet client: in-band, fresh, no goal → no findings at all', () => {
   const series = seriesOf(MONDAYS.slice(2), 'revenue', [800, 810, 790, 805, 800, 802])
   const out = detectFindings(series, { asOf: '2026-05-06' })
@@ -441,6 +467,23 @@ test('fingerprint: stable per identity, distinct across kind / metric / client /
   assert.notEqual(fingerprintOf('c1', f), fingerprintOf('c1', { ...f, kind: 'trend' }))
   assert.notEqual(fingerprintOf('c1', f), fingerprintOf('c1', { ...f, period_start: '2026-04-27' }))
   assert.notEqual(fingerprintOf('c1', f), fingerprintOf('c2', f))               // per-client
+})
+
+test('fingerprint: coverage_gap splits by channel key; other kinds stay byte-identical', () => {
+  const crypto = require('crypto')
+  // Two channels dark on the SAME last_date must NOT collide — the optional
+  // fingerprint_key discriminator gives each its own stable identity.
+  const base = { scope: 'client', kind: 'coverage_gap', metric: null, period_start: '2026-05-10' }
+  const meta = fingerprintOf('c1', { ...base, fingerprint_key: 'meta' })
+  const ga   = fingerprintOf('c1', { ...base, fingerprint_key: 'google_ads' })
+  assert.notEqual(meta, ga)                                                  // distinct per channel
+  assert.equal(meta, fingerprintOf('c1', { ...base, fingerprint_key: 'meta' }))   // …and stable
+  // Back-compat: a kind that sets NO fingerprint_key hashes EXACTLY as it did before
+  // the discriminator existed — recomputed here independently, byte for byte.
+  const legacy   = { scope: 'client', kind: 'anomaly', metric: 'revenue', period_start: '2026-05-04' }
+  const expected = crypto.createHash('sha1')
+    .update(['client', 'c1', 'anomaly', 'revenue', '2026-05-04'].join('|')).digest('hex')
+  assert.equal(fingerprintOf('c1', legacy), expected)
 })
 
 test('grounding: every number in a generated title + detail traces to the evidence', () => {
@@ -520,6 +563,56 @@ test('a finding whose condition clears is expired on the next sweep', async () =
   assert.equal(rows[0].kind, 'data_health')
   assert.equal(rows[0].status, 'expired')           // closed out automatically
   assert.deepEqual(await getOpenInsights(c), [])    // no longer in the open feed
+})
+
+test('runInsightsForClient flags a silently-dead channel off the atomic grain, and is idempotent', async () => {
+  await ready()
+  const c = await freshClient('Coverage Roofing Co')
+  const ASOF = '2026-06-01'
+
+  // Insert one daily fact for every day in [fromDaysAgo .. toDaysAgo] before ASOF.
+  const isoMinus = (n) =>
+    new Date(Date.parse(ASOF + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10)
+  async function seedDaily(channelId, metricKey, fromDaysAgo, toDaysAgo) {
+    for (let n = fromDaysAgo; n >= toDaysAgo; n--) {
+      await db.query(
+        `INSERT INTO fact_metric (client_id, date, channel_id, entity_id, metric_key, metric_value)
+         VALUES ($1,$2,$3,NULL,$4,$5)`,
+        [c, isoMinus(n), channelId, metricKey, 100]
+      )
+    }
+  }
+
+  // No weekly_reports for this client → detectFindings() returns [] → coverage is the
+  // SOLE source of findings, isolating exactly what we're testing.
+  // google_ads (id 1): HEALTHY — delivered daily right up to yesterday (1d dark ≈ its cadence).
+  await seedDaily(1, 'spend', 40, 1)
+  // meta (id 2): DEAD — delivered daily, then went dark 30 days ago. 30d − 1d cadence = 29 beyond.
+  await seedDaily(2, 'spend', 60, 30)
+
+  await runInsightsForClient(c, { asOf: ASOF })
+  const gaps1 = (await allInsights(c)).filter(r => r.kind === 'coverage_gap')
+  assert.equal(gaps1.length, 1, 'exactly one coverage_gap — the dead meta channel')
+  const gap = gaps1[0]
+  assert.equal(gap.metric, null)
+  assert.equal(gap.severity, 'critical')           // beyond 29 ≥ 14 → critical
+  assert.equal(gap.status, 'open')
+  assert.equal(gap.grounded, true)                 // deterministic template branch, grounded
+  assert.equal(gap.evidence.channel, 'meta')
+  assert.equal(gap.evidence.channel_label, 'Meta Ads')
+  assert.equal(gap.evidence.days_dark, 30)
+  assert.equal(gap.evidence.cadence_days, 1)       // daily history → cadence 1
+  assert.equal(gap.period_start, isoMinus(30))     // stable while dark → SAME row refreshes
+  // The healthy channel is within its own rhythm → NOT flagged.
+  assert.equal(gaps1.some(r => r.evidence.channel === 'google_ads'), false)
+  // The advice routes the operator to the single fix.
+  assert.match(gap.recommended_action.text, /reconnect meta ads/i)
+
+  // Idempotent: a second identical sweep refreshes the SAME row in place — no duplicate.
+  await runInsightsForClient(c, { asOf: ASOF })
+  const gaps2 = (await allInsights(c)).filter(r => r.kind === 'coverage_gap')
+  assert.equal(gaps2.length, 1)
+  assert.equal(gaps2[0].status, 'open')
 })
 
 test('getOpenInsights returns open rows sorted critical → warning → info', async () => {
@@ -981,6 +1074,7 @@ test('isAdverse reads each metric’s good direction (revenue↑ good, spend/cpl
   assert.equal(isAdverse(finding({ metric: 'cpl',     direction: 'down' })), false)  // cheaper lead = good
   assert.equal(isAdverse(finding({ metric: 'roas',    direction: 'down' })), true)
   assert.equal(isAdverse({ kind: 'data_health', metric: null }), true)               // stale data always bad
+  assert.equal(isAdverse({ kind: 'coverage_gap', metric: null }), true)              // a dark channel always needs eyes
   assert.equal(isAdverse(finding({ metric: 'revenue', direction: null })), true)     // unknown move → needs eyes
 })
 
@@ -1050,6 +1144,24 @@ test('action: data_health always says reconnect, pluralizing weeks and naming th
   const one = recommendedAction({ kind: 'data_health', metric: null, severity: 'warning', evidence: { weeks_behind: 1 } })
   assert.ok(one.text.includes('1 week behind'))                          // singular
   assert.ok(!one.text.includes('1 weeks'))
+})
+
+test('action: coverage_gap says reconnect THIS channel, pluralizing days and naming the lag', () => {
+  const crit = recommendedAction({ kind: 'coverage_gap', metric: null, severity: 'critical', evidence: { channel_label: 'Meta Ads', days_dark: 30 } })
+  assert.equal(crit.urgency, 'act_now')
+  assert.match(crit.text, /reconnect meta ads/i)
+  assert.ok(crit.text.includes('30 days ago'))
+  assert.ok(crit.text.includes('other sources keep flowing'))
+
+  const one = recommendedAction({ kind: 'coverage_gap', metric: null, severity: 'warning', evidence: { channel_label: 'GHL CRM', days_dark: 1 } })
+  assert.equal(one.urgency, 'plan')
+  assert.ok(one.text.includes('1 day ago'))                            // singular
+  assert.ok(!one.text.includes('1 days'))
+
+  // No day count in evidence → degrade to prose, never "undefined days".
+  const vague = recommendedAction({ kind: 'coverage_gap', metric: null, severity: 'critical', evidence: { channel_label: 'Local Services Ads' } })
+  assert.ok(vague.text.includes('several days ago'))
+  assert.ok(!vague.text.includes('undefined'))
 })
 
 test('recommendedAction is total: never throws, always returns {text, urgency} even on junk', () => {

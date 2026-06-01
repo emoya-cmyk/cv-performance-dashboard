@@ -74,6 +74,14 @@ const { rankPortfolio } = require('./health')
 // is the live portfolio itself, so it self-calibrates with zero config — connect
 // another account and it re-shapes next sweep. See lib/benchmark.js.
 const { benchmarkPortfolio, clientStanding } = require('./benchmark')
+// The connection-health organ: per-channel watchdog over the atomic fact grain. The
+// aggregate weekly series can look fresh while ONE channel has silently died (the
+// others still fill the roll-up row), quietly degrading every downstream number with
+// no symptom. detectCoverageGaps() catches that — cadence-AWARE, so a normally-weekly
+// feed isn't flagged at its natural ~7-day gap — and emits a `coverage_gap` finding
+// whose single instruction is "reconnect this account": the product's north star
+// (no operator except to connect accounts) made literal. Pure; [] on no history.
+const { detectCoverageGaps } = require('./coverage')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -556,6 +564,12 @@ function detectFindings(series, { goal = null, asOf, summary = null, calibration
 // sweep refreshes the SAME row in place instead of piling up duplicates.
 function fingerprintOf(clientId, f) {
   const parts = [f.scope || 'client', clientId || '', f.kind, f.metric || '', f.period_start || '']
+  // Optional discriminator for kinds where (scope,client,kind,metric,period) is not
+  // unique on its own — e.g. coverage_gap, where several channels can be dark on the
+  // same last_date (metric is null, period_start is that shared date). The channel key
+  // splits them into distinct identities. Back-compatible: kinds that never set it
+  // append nothing, so their fingerprints are byte-for-byte unchanged.
+  if (f.fingerprint_key) parts.push(String(f.fingerprint_key))
   return crypto.createHash('sha1').update(parts.join('|')).digest('hex')
 }
 
@@ -585,6 +599,11 @@ function titleFor(f) {
   if (f.kind === 'data_health') {
     const wk = e.weeks_behind === 1 ? 'week' : 'weeks'
     return `Data is ${e.weeks_behind} ${wk} behind — reconnect the source`
+  }
+  if (f.kind === 'coverage_gap') {
+    const d  = e.days_dark
+    const dd = d === 1 ? 'day' : 'days'
+    return `${e.channel_label} has gone quiet — no data in ${d} ${dd} (reconnect)`
   }
   return lbl
 }
@@ -626,6 +645,13 @@ function templateDetailFor(f) {
     const wk = e.weeks_behind === 1 ? 'week' : 'weeks'
     return `The most recent data is ${e.weeks_behind} ${wk} old; reconnect or re-sync this client's sources to restore reporting.`
   }
+  if (f.kind === 'coverage_gap') {
+    const d   = e.days_dark
+    const dd  = d === 1 ? 'day' : 'days'
+    const cad = e.cadence_days
+    const cc  = cad === 1 ? 'day' : 'days'
+    return `${e.channel_label} normally reports about every ${cad} ${cc} but hasn't sent data in ${d} ${dd}; your other sources are still flowing, so this looks like a dropped connection — reconnect ${e.channel_label} to restore complete reporting.`
+  }
   return titleFor(f)
 }
 
@@ -650,7 +676,7 @@ function templateDetailFor(f) {
 // good …). data_health is always adverse — stale data blinds every metric. With
 // no metric/direction we treat it as needing attention.
 function isAdverse(f) {
-  if (!f || f.kind === 'data_health') return true
+  if (!f || f.kind === 'data_health' || f.kind === 'coverage_gap') return true
   const meta = f.metric ? METRIC_META[f.metric] : null
   if (!meta || !f.direction) return true
   return f.direction === 'up' ? !meta.goodWhenUp : meta.goodWhenUp
@@ -699,6 +725,12 @@ function recommendedAction(f) {
       const n  = e.weeks_behind
       const wk = n === 1 ? 'week' : 'weeks'
       text = `Reconnect or re-sync this client's data sources — the feed is ${n || 'several'} ${wk} behind and every metric is running blind until it's restored.`
+      break
+    }
+    case 'coverage_gap': {
+      const n  = e.days_dark
+      const dd = n === 1 ? 'day' : 'days'
+      text = `Reconnect ${e.channel_label} — it stopped sending data ${n || 'several'} ${dd} ago while your other sources keep flowing, so reporting is incomplete until it's restored.`
       break
     }
     case 'anomaly':
@@ -1104,6 +1136,39 @@ async function loadPrecisionAll() {
   return byClient
 }
 
+// Per-channel delivery stats over a trailing window, read straight from the atomic
+// fact grain (fact_metric ⋈ dim_channel): one row per channel that delivered at least
+// once in the window, carrying its newest/oldest fact day and the count of distinct
+// days it reported. detectCoverageGaps() turns these into reconnect findings — the
+// cadence estimate, the never-connected screen-out and the severity tiers all live
+// there — so this stays a thin, pure read. Returns [] when the client has no atomic
+// facts yet (the table may be empty for a brand-new client), which the caller treats
+// as "nothing to watch," never as "everything is dark."
+async function loadChannelCoverage(clientId, { asOf, windowDays = 90 } = {}) {
+  const end   = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const span  = Number.isFinite(Number(windowDays)) ? Number(windowDays) : 90
+  const start = new Date(Date.parse(end + 'T00:00:00Z') - span * 86400000)
+                  .toISOString().slice(0, 10)
+  const { rows } = await query(
+    `SELECT c.key AS key, c.label AS label, c.category AS category,
+            MAX(f.date) AS last_date, MIN(f.date) AS first_date,
+            COUNT(DISTINCT f.date) AS active_days
+       FROM fact_metric f
+       JOIN dim_channel c ON c.id = f.channel_id
+      WHERE f.client_id = $1 AND f.date BETWEEN $2 AND $3
+      GROUP BY c.key, c.label, c.category`,
+    [clientId, start, end]
+  )
+  return rows.map(r => ({
+    key:         r.key,
+    label:       r.label,
+    category:    r.category,
+    last_date:   isoDate(r.last_date),
+    first_date:  isoDate(r.first_date),
+    active_days: Number(r.active_days) || 0,
+  }))
+}
+
 // ============================================================
 // ORCHESTRATOR — one client, end to end
 // ============================================================
@@ -1128,6 +1193,17 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
   const summary  = summarizeSeries(series, METRICS)
   const goal     = await loadGoal(clientId, monthBounds(day).monthFirst)
   const findings = detectFindings(series, { goal, asOf: day, summary, calibration: { forecast: calibration } })
+
+  // Connection-health watchdog, off the atomic fact grain: flag any single channel
+  // that has gone dark beyond its own cadence while the aggregate still looks fresh.
+  // Strictly additive and isolated — if fact_metric is empty or absent (a brand-new
+  // client, or a DB that predates migration 010) the read returns [] / throws and we
+  // simply skip it, never blocking the rest of the sweep. detectCoverageGaps is pure
+  // and returns [] on empty input, so no facts ⇒ no coverage findings.
+  try {
+    const channels = await loadChannelCoverage(clientId, { asOf: day, windowDays: 90 })
+    findings.push(...detectCoverageGaps(channels, day, { windowDays: 90 }))
+  } catch { /* atomic grain unavailable → skip coverage, keep the rest of the sweep */ }
 
   const persisted = []
   for (const f of findings) {
@@ -1468,6 +1544,8 @@ module.exports = {
   deriveAndPersistCalibration, loadCalibration,
   // precision loop (learn which finding kinds a client engages with)
   deriveAndPersistPrecision, loadPrecision, loadPrecisionAll, attachPrecision, feedSort,
+  // connection-health watchdog (per-channel coverage gaps off the atomic fact grain)
+  loadChannelCoverage,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
