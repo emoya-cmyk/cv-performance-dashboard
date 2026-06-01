@@ -233,6 +233,65 @@ export function attributionView(insight) {
   }
 }
 
+// ── root-cause linking → the dark channel behind a fallen metric ───────────────
+// lib/correlate.js (the engine's "what's dragging this" organ) connects a downstream
+// adverse metric finding (an anomaly/trend that FELL) to an upstream channel that went
+// dark (a coverage_gap) WHEN that channel materially fed the metric. The engine stamps
+// the connection onto evidence as TWO nested keys (lib/insights.js#applyCoverageLinks):
+//   • caused_by — on the SYMPTOM finding: { channel, channel_label, category, share_pct,
+//     days_dark } — the dominant lost contributor, the one we name as the likely cause.
+//   • impacts   — on the ROOT coverage_gap:  [{ metric, share_pct }], worst share first —
+//     the channel's blast radius, every metric it is measurably dragging.
+// Both are NESTED (object / array), so — exactly like evidence.attribution — they are
+// already skipped by every surface's scalar number|string evidence-chip filter AND by the
+// grounding verifier; there is NO keys-to-exclude set to maintain here. The two views
+// below pull each back out as a typed, presentation-ready shape both surfaces render from
+// the same truth. Each returns null when its key is absent — the keystone no-op, so a
+// finding the engine couldn't link renders exactly as it did before this layer existed.
+
+// correlateView — the SYMPTOM side. Reads evidence.caused_by off an anomaly/trend and
+// pairs it with that finding's OWN metric (the thing that fell), so a surface can phrase
+// "Likely cause: Meta Ads dark 30d (~44% of Leads)" — channel from caused_by, metric from
+// the finding. It exposes the PARTS and lets each surface choose how much to say: the
+// agency renders the full named line, while the client gets a deliberately vague note (the
+// dark channel is the agency's account to reconnect, never the client's — naming "your
+// Meta Ads stopped reporting" would read as a defect they can't act on). days_dark / share
+// may be null when the engine couldn't ground them; the caller already guards each.
+export function correlateView(insight) {
+  const c = insight && insight.evidence && insight.evidence.caused_by
+  if (!c || c.channel == null) return null
+  const sharePct = Number(c.share_pct)
+  const daysDark = Number(c.days_dark)
+  return {
+    channel:      String(c.channel),
+    channelLabel: c.channel_label || String(c.channel),
+    category:     c.category || null,
+    sharePct:     Number.isFinite(sharePct) ? sharePct : null,
+    daysDark:     Number.isFinite(daysDark) ? daysDark : null,
+    metric:       insight.metric || null,
+    metricLabel:  insight.metric ? metricLabel(insight.metric) : null,
+  }
+}
+
+// impactsView — the ROOT side. Reads evidence.impacts off a coverage_gap into a typed,
+// already-worst-first blast-radius list (the engine sorted it: share_pct desc, then metric
+// name). Returns null when the dark channel is dragging nothing measurable — no entry, no
+// over-claiming, no line. The agency-only counterpart to correlateView: it names the
+// metrics a reconnect would recover, so the operator sees the STAKES of the gap, not just
+// that a channel went quiet. (Client-hidden along with the coverage_gap kind that carries it.)
+export function impactsView(insight) {
+  const imp = insight && insight.evidence && insight.evidence.impacts
+  if (!Array.isArray(imp) || imp.length === 0) return null
+  const metrics = imp
+    .map((m) => {
+      if (!m || m.metric == null) return null
+      const sharePct = Number(m.share_pct)
+      return { metric: String(m.metric), label: metricLabel(m.metric), sharePct: Number.isFinite(sharePct) ? sharePct : null }
+    })
+    .filter(Boolean)
+  return metrics.length ? metrics : null
+}
+
 // The three evidence keys forecastRange() consumes. The collapsed evidence list on
 // each surface filters these OUT — they read as one "likely range" line instead of
 // three lonely raw numbers — but they STAY in evidence as the grounded data layer the

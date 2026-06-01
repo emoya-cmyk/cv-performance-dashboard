@@ -5,12 +5,12 @@ import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
-  Award, Minus, ArrowUpRight,
+  Award, Minus, ArrowUpRight, RefreshCw,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, healthBandMeta, metricLabel } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, healthBandMeta, metricLabel } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -296,6 +296,11 @@ function ClientInsights({ insights }) {
           // moved the number most. Null for non-composite metrics → no line, exactly as
           // before. The operator-facing signed-share breakdown stays on /intelligence.
           const attribution = attributionView(item)
+          // Upstream root-cause link, softened for the client (correlateView). The agency
+          // sees the named dark channel + reconnect on /intelligence; the client gets only a
+          // calm "we're restoring a reporting source" note — the channel is the agency's to
+          // reconnect, and naming it would read as a defect the client can't act on. Null → no note.
+          const cause = correlateView(item)
           return (
             <div
               key={item.id}
@@ -325,6 +330,19 @@ function ClientInsights({ insights }) {
                         {attribution.lead.dirWord !== 'flat' && (
                           <>, {attribution.lead.dirWord} <span className="tabular-nums">{attribution.lead.pctAbs}%</span></>
                         )}.
+                      </p>
+                    </div>
+                  )}
+                  {/* Root-cause link, softened (correlateView). The symptom anomaly is
+                      client-facing, but the dark channel behind it is the agency's to
+                      reconnect — so we acknowledge a reporting source is being restored
+                      WITHOUT naming the channel, its share, days dark, or "reconnect" (all
+                      agency-only on /intelligence). Calm reassurance, no defect to act on. */}
+                  {cause && (
+                    <div className="mt-1.5 flex items-start gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                        Part of this traces to a reporting source we&rsquo;re restoring — your team is already on it.
                       </p>
                     </div>
                   )}
