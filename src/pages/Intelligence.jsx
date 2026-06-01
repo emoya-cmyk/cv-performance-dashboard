@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
-  Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp,
+  Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import {
   severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta,
   precisionMeta, hasLearnedPrecision, precisionTooltip,
+  forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue,
 } from '@/lib/insightMeta'
 
 /**
@@ -295,8 +296,14 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
   const prec     = hasLearnedPrecision(insight) ? precisionMeta(insight.precision.band) : null
   const PrecIcon = prec ? prec.icon : null
 
+  // Self-tuned forecast band — the learned-error interval around the projection,
+  // present only on forecast findings that earned one (null otherwise → no line).
+  const range = forecastRange(insight)
+
+  // The band's three keys are surfaced as the prominent range line below, so they're
+  // filtered OUT of the raw evidence chips here — shown once, not twice.
   const evidenceEntries = Object.entries(insight.evidence || {})
-    .filter(([, v]) => typeof v === 'number' || typeof v === 'string')
+    .filter(([k, v]) => (typeof v === 'number' || typeof v === 'string') && !FORECAST_RANGE_KEYS.has(k))
     .slice(0, 8)
 
   return (
@@ -340,6 +347,25 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
         {/* title + detail */}
         <p className="text-sm font-black text-slate-900 leading-snug">{insight.title}</p>
         {insight.detail && <p className="text-xs text-slate-500 leading-relaxed mt-1">{insight.detail}</p>}
+
+        {/* self-tuned prediction band — the learned-error interval around the projection.
+            Shown only once this client earned a track record (lib/selftune.js#intervalFor);
+            the width is the engine's own realized accuracy, no number set by hand. */}
+        {range && (
+          <div className="mt-2 rounded-xl border border-brand-100 bg-gradient-to-br from-brand-50/60 to-white px-2.5 py-2">
+            <div className="flex items-center gap-1.5">
+              <Target className="w-3.5 h-3.5 text-brand-600 shrink-0" />
+              <span className="text-xs font-bold text-slate-700">
+                Projected {fmtMetricValue(insight.metric, range.point)}
+                <span className="text-slate-400 font-semibold"> · likely </span>
+                <span className="tabular-nums">{fmtMetricValue(insight.metric, range.lo)}–{fmtMetricValue(insight.metric, range.hi)}</span>
+              </span>
+            </div>
+            <p className="text-[10px] font-medium text-slate-400 leading-relaxed mt-0.5 pl-5">
+              {range.pct != null ? `${range.pct}% confidence · ` : ''}self-tuned from this client&rsquo;s forecast track record
+            </p>
+          </div>
+        )}
 
         {/* recommended action — turns the observation into a next step */}
         {action?.text && (

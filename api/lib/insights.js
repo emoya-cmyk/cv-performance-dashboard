@@ -54,7 +54,7 @@ const {
 const { monthEndProjection }              = require('./forecast')
 const { callMessages, DEFAULT_MODEL }     = require('./anthropic')
 const { collectAllowedNumbers, verifyGrounding } = require('./ai')
-const { gradeOne, scoreboardOf, calibrationFor }  = require('./selftune')
+const { gradeOne, scoreboardOf, calibrationFor, intervalFor } = require('./selftune')
 const {
   confidenceTable, signatureKey, bandOf, weightFor, PRIOR_MEAN,
 } = require('./precision')
@@ -316,6 +316,12 @@ function detectForecast(rows, goal, asOf, cal = {}) {
     const projected = p.projectedTotal * bf      // bias-corrected published landing
     const ratio     = projected / p.target
 
+    // Self-tuned prediction band: once this client has SAMPLES_MIN graded months
+    // the learned mape sizes an 80% interval around the projection (lib/selftune.js
+    // #intervalFor). Below that evidence it's null → the finding stays a clean point,
+    // byte-identical to before this loop existed.
+    const interval = intervalFor(projected, c)
+
     let severity = null, direction = null
     if (ratio < critRatio)            { severity = 'critical'; direction = 'down' }
     else if (ratio < warnRatio)       { severity = 'warning';  direction = 'down' }
@@ -333,6 +339,12 @@ function detectForecast(rows, goal, asOf, cal = {}) {
         target:          roundFor(meta, p.target),
         mtd:             roundFor(meta, p.mtd),
         projected_total: roundFor(meta, projected),
+        // Learned interval, present only once earned (keystone no-op when null).
+        ...(interval ? {
+          projected_low:  roundFor(meta, interval.lo),
+          projected_high: roundFor(meta, interval.hi),
+          interval_pct:   r0(interval.level * 100),   // 80
+        } : {}),
         pct_of_target:   r0(ratio * 100),
         weekly_rate:     roundFor(meta, p.trendWeekly),
         days_elapsed:    p.daysElapsed,

@@ -119,6 +119,51 @@ export const METRIC_LABEL = {
 }
 export const metricLabel = (m) => METRIC_LABEL[m] || titleCase(m)
 
+// ── self-tuned forecast interval → a visible "likely range" ───────────────────
+// lib/selftune.js#intervalFor is the VISIBLE half of the forecast self-tuning loop:
+// once a client has a realized track record, the engine's learned forecast error
+// (mape) sizes an 80% prediction band around a projection — tighter as the client
+// earns accuracy, wider when they're noisy, with no hand-set width anywhere. The
+// engine writes the band INTO a forecast finding's evidence (projected_low /
+// projected_high / interval_pct), so a narrated range can never drift from the
+// numbers behind it. forecastRange() pulls those keys back out as one typed object
+// the surfaces render as a prominent "likely range" line. It returns null whenever
+// the band wasn't earned (the keystone no-op — a fresh forecast shows a clean point,
+// exactly as before the loop existed).
+export function forecastRange(insight) {
+  const e = insight && insight.evidence
+  if (!e) return null
+  const lo = Number(e.projected_low)
+  const hi = Number(e.projected_high)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return null
+  const point = Number(e.projected_total)
+  const pct   = Number(e.interval_pct)
+  return {
+    lo, hi,
+    point: Number.isFinite(point) ? point : null,
+    pct:   Number.isFinite(pct)   ? pct   : null,
+  }
+}
+
+// The three evidence keys forecastRange() consumes. The collapsed evidence list on
+// each surface filters these OUT — they read as one "likely range" line instead of
+// three lonely raw numbers — but they STAY in evidence as the grounded data layer the
+// LLM narration, the API and the tests read. De-duplication, not suppression.
+export const FORECAST_RANGE_KEYS = new Set(['projected_low', 'projected_high', 'interval_pct'])
+
+// Metric-aware value formatter for the range line: money metrics render as whole
+// dollars ($2,715), counts as comma-grouped integers (1,200). Self-contained (mirrors
+// utils.fmtDollar output) so insightMeta stays a dependency-free presentation module.
+const MONEY_METRICS = new Set(['revenue', 'spend', 'cpl'])
+export function fmtMetricValue(metric, v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  if (MONEY_METRICS.has(metric)) {
+    return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+  }
+  return Math.round(n).toLocaleString('en-US')
+}
+
 function titleCase(s) {
   return String(s || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

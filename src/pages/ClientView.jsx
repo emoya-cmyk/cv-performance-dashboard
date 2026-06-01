@@ -4,12 +4,12 @@ import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
-  CheckCircle, AlertCircle, Clock, Sparkles,
+  CheckCircle, AlertCircle, Clock, Sparkles, Target,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -287,6 +287,10 @@ function ClientInsights({ insights }) {
           const action   = item.recommended_action
           const urg      = action ? urgencyMeta(action.urgency) : null
           const UrgIcon  = urg ? urg.icon : null
+          // Self-tuned prediction band, if this forecast earned one. Client-appropriate:
+          // a confident, honest range reassures, where the agency-only precision chip
+          // ("your team ignores these") would not. Null → no line, a clean point.
+          const range    = forecastRange(item)
           return (
             <div
               key={item.id}
@@ -302,6 +306,20 @@ function ClientInsights({ insights }) {
                   <p className="text-sm font-black text-slate-800 leading-snug">{item.title}</p>
                   {item.detail && (
                     <p className="text-xs text-slate-500 leading-relaxed mt-0.5">{item.detail}</p>
+                  )}
+                  {/* Likely range — the self-tuned prediction band in plain English.
+                      Its width is the engine's own realized forecast accuracy for THIS
+                      client, so it tightens as we earn it — honest, not a bare guess. */}
+                  {range && (
+                    <div className="mt-2 flex items-start gap-1.5">
+                      <Target className="w-3.5 h-3.5 text-brand-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                        Projected around <span className="font-bold text-slate-800">{fmtMetricValue(item.metric, range.point)}</span> this month — likely{' '}
+                        <span className="tabular-nums">{fmtMetricValue(item.metric, range.lo)}</span> to{' '}
+                        <span className="tabular-nums">{fmtMetricValue(item.metric, range.hi)}</span>
+                        {range.pct != null ? <span className="text-slate-400"> ({range.pct}% confidence)</span> : null}.
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>

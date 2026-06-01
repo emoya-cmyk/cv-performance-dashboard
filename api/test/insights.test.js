@@ -194,8 +194,45 @@ test('forecast: a trend landing far below goal fires a grounded critical forecas
   assert.equal(f.evidence.days_in_month, 31)
   // Forecast OWNS the metric → the naive pacing alarm for revenue is suppressed.
   assert.equal(out.some(x => x.kind === 'pacing'), false)
+  // Keystone: with no learned track record there's no earned interval — the
+  // evidence stays a clean point, byte-identical to before the band existed.
+  assert.equal('projected_low'  in f.evidence, false)
+  assert.equal('projected_high' in f.evidence, false)
+  assert.equal('interval_pct'   in f.evidence, false)
 
   // Title + detail are grounded by construction — every figure is in evidence.
+  const text = `${titleFor(f)} ${templateDetailFor(f)}`
+  const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
+  assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)
+})
+
+test('forecast interval: a learned track record sizes a visible prediction band', () => {
+  // SAME flat-$1k history as the test above (projects to $4000 vs an $8000 goal),
+  // but now this client carries a realized calibration: 4 graded months at a 20%
+  // mape. selftune#intervalFor turns that learned error into an 80% band around the
+  // projection — no hand-set width. With zero bias the point stays $4000 and the
+  // severity stays critical; only the band is added.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+  const out    = detectFindings(series, {
+    goal: { revenue_target: 8000 }, asOf: '2026-05-17',
+    calibration: { forecast: { revenue: { samples: 4, mape: 0.2 } } },
+  })
+
+  assert.equal(out.length, 1)
+  const f = out[0]
+  assert.equal(f.kind, 'forecast')
+  assert.equal(f.severity, 'critical')             // bias_factor defaults to 1 → point unchanged
+  assert.equal(f.evidence.projected_total, 4000)   // band is centered on the point
+  assert.equal(f.evidence.interval_pct, 80)
+  // rel = Z_80·√(π/2)·0.2 ≈ 0.3212 → 4000·(1∓0.3212)
+  assert.equal(f.evidence.projected_low, 2715)
+  assert.equal(f.evidence.projected_high, 5285)
+  assert.ok(f.evidence.projected_low  < f.evidence.projected_total)
+  assert.ok(f.evidence.projected_high > f.evidence.projected_total)
+
+  // The band's edges are themselves grounded — they live in evidence, so a narrated
+  // "likely $2,715–$5,285" can never drift from the numbers behind it.
   const text = `${titleFor(f)} ${templateDetailFor(f)}`
   const { grounded, offending } = verifyGrounding(text, { values: f.evidence })
   assert.equal(grounded, true, `ungrounded tokens: ${offending.join(', ')}`)

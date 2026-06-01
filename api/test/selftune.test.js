@@ -19,8 +19,8 @@ const { test } = require('node:test')
 const assert   = require('node:assert/strict')
 
 const {
-  absPctError, signedPctError, gradeOne, scoreboardOf, calibrationFor,
-  SAMPLES_MIN, FC_WARN_DEFAULT, FC_CRIT_DEFAULT,
+  absPctError, signedPctError, gradeOne, scoreboardOf, calibrationFor, intervalFor,
+  SAMPLES_MIN, FC_WARN_DEFAULT, FC_CRIT_DEFAULT, Z_80, MAE_TO_SIGMA,
 } = require('../lib/selftune')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -216,4 +216,53 @@ test('calibrationFor: an absent win_rate defaults to 0.5 (no head-to-head signal
   // skill = 1 − 0.1/0.5 = 0.8; trust = 0.6*0.8 + 0.4*0.5 = 0.68
   approx(c.trust, 0.68)
   approx(c.bias_factor, 1)                       // zero bias → no correction
+})
+
+// ---- intervalFor -----------------------------------------------------------
+// The VISIBLE half of the loop: the learned mape sizes a prediction band around a
+// projection. mape is a mean-absolute error → σ = mape·√(π/2); the 80% half-width
+// is rel = z·σ as a fraction of the point. Below SAMPLES_MIN, or without a finite
+// positive mape, there's no earned band → null (the keystone no-op).
+
+test('intervalFor: a learned mape sizes an 80% band centered on the point', () => {
+  const iv = intervalFor(4000, { samples: 4, mape: 0.2 })
+  const rel = Z_80 * MAE_TO_SIGMA * 0.2          // ≈ 0.32125
+  approx(iv.rel, Math.round(rel * 1e4) / 1e4)    // round4, same as the impl
+  approx(iv.lo, 4000 * (1 - rel), 0.01)          // ≈ 2715
+  approx(iv.hi, 4000 * (1 + rel), 0.01)          // ≈ 5285
+  // the band straddles the point — honest by construction
+  assert.ok(iv.lo < 4000 && 4000 < iv.hi)
+  // metadata the UI reads
+  assert.equal(iv.level, 0.80)
+  assert.equal(iv.samples, 4)
+  assert.equal(iv.basis, 'realized')
+})
+
+test('intervalFor: null below the sample floor — no band until it is earned', () => {
+  assert.equal(intervalFor(4000, { samples: SAMPLES_MIN - 1, mape: 0.2 }), null)
+  assert.equal(intervalFor(4000, { samples: 1, mape: 0.2 }), null)
+  assert.equal(intervalFor(4000, { samples: 0, mape: 0.2 }), null)
+})
+
+test('intervalFor: null without a finite positive mape — never false precision', () => {
+  assert.equal(intervalFor(4000, { samples: 6, mape: null }), null)
+  assert.equal(intervalFor(4000, { samples: 6, mape: 0 }), null)    // a zero-width band is false certainty
+  assert.equal(intervalFor(4000, { samples: 6, mape: NaN }), null)
+  assert.equal(intervalFor(4000, { samples: 6 }), null)             // mape missing
+  assert.equal(intervalFor(4000, {}), null)
+  assert.equal(intervalFor(null, { samples: 6, mape: 0.2 }), null)  // no point to band
+})
+
+test('intervalFor: the low edge floors at 0 — a month-end total cannot go negative', () => {
+  // a >100% mape would push the raw low below zero without the floor
+  const iv = intervalFor(100, { samples: 4, mape: 2 })
+  assert.equal(iv.lo, 0)
+  assert.ok(iv.hi > 100)
+})
+
+test('intervalFor: a tighter learned error yields a narrower band (the loop pays off)', () => {
+  const wide  = intervalFor(4000, { samples: 6, mape: 0.30 })
+  const tight = intervalFor(4000, { samples: 6, mape: 0.05 })
+  assert.ok((tight.hi - tight.lo) < (wide.hi - wide.lo),
+    'lower realized error → narrower interval')
 })

@@ -50,6 +50,15 @@ const BIAS_MIN = 0.5, BIAS_MAX = 1.5
 const FC_WARN_DEFAULT = 0.9
 const FC_CRIT_DEFAULT = 0.7
 
+// Prediction-interval constants. Once a client has a realized track record the
+// learned mape IS the honest half-width of a forecast band — no hand-set width
+// anywhere. mape is a MEAN-ABSOLUTE error; for a roughly-normal error
+// E|X| = σ·√(2/π), so σ = mape·√(π/2). An 80% two-sided interval is ± z·σ with
+// z = Z_80. (forecast.js carries the same Z_80 for its in-sample residual band;
+// kept independently here so intervalFor stays pure with no cross-module import.)
+const Z_80         = 1.2816                  // 80% two-sided standard-normal quantile
+const MAE_TO_SIGMA = Math.sqrt(Math.PI / 2)  // ≈ 1.2533 — mean-abs-error → σ
+
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 const clamp   = (x, lo, hi) => Math.min(hi, Math.max(lo, x))
 const clamp01 = x => clamp(x, 0, 1)
@@ -179,9 +188,50 @@ function calibrationFor(scoreboard) {
   }
 }
 
+// ── calibration → a visible prediction interval ──────────────────────────────
+
+// The VISIBLE half of the self-tuning loop. calibrationFor() learns a client's
+// realized, out-of-sample forecast error (mape); here that SAME mape sizes the
+// band the dashboard shows around a projection — so the interval tightens as a
+// client earns accuracy and widens when they're noisy, with no hand-tuned width
+// anywhere. This closes the loop: grade a projection → learn mape → mape sizes the
+// band on the next projection.
+//
+// `point` is the published (already bias-corrected) projection; `cal` is the
+// client's calibration row — it needs `mape` (fraction) and `samples`. Below
+// SAMPLES_MIN graded months, or without a finite positive mape, we have NOT earned
+// an interval → return null and the caller shows a clean point. That null path is
+// the keystone no-op: a fresh forecast's evidence is byte-identical to before this
+// function existed (same discipline as the precision chip below n>0).
+//
+// mape is a MEAN-absolute error → σ = mape·√(π/2); the 80% half-width is
+// rel = z·σ as a fraction of the point. `lo` floors at 0 — a month-end total can't
+// be negative. Centering on the bias-corrected point while sizing from the RAW mape
+// (which graded the pre-correction projection) is mildly conservative: the
+// systematic component is already removed, so the band can only be a touch wide —
+// the safe direction for a prediction interval.
+function intervalFor(point, cal = {}, { z = Z_80 } = {}) {
+  const pt   = numOf(point)
+  const mape = numOf(cal && cal.mape)
+  const n    = Number(cal && cal.samples) || 0
+  if (pt == null || mape == null || !(mape > 0) || n < SAMPLES_MIN) return null
+
+  const rel = z * MAE_TO_SIGMA * mape
+  return {
+    lo:      Math.max(0, round3(pt * (1 - rel))),
+    hi:      round3(pt * (1 + rel)),
+    rel:     round4(rel),
+    mape:    round4(mape),
+    z,
+    level:   0.80,
+    samples: n,
+    basis:   'realized',
+  }
+}
+
 module.exports = {
-  absPctError, signedPctError, gradeOne, scoreboardOf, calibrationFor,
+  absPctError, signedPctError, gradeOne, scoreboardOf, calibrationFor, intervalFor,
   SAMPLES_MIN, MAPE_FLOOR, TRUST_SKILL_W, CONF_FULL,
   WARN_WIDE, WARN_TIGHT, CRIT_WIDE, CRIT_TIGHT, BIAS_MIN, BIAS_MAX,
-  FC_WARN_DEFAULT, FC_CRIT_DEFAULT,
+  FC_WARN_DEFAULT, FC_CRIT_DEFAULT, Z_80, MAE_TO_SIGMA,
 }
