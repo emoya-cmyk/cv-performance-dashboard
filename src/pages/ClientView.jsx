@@ -5,6 +5,7 @@ import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
+  Award, Minus, ArrowUpRight,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -457,6 +458,114 @@ function AccountHealth({ health }) {
   )
 }
 
+// ── How You Compare — the client's own peer standing, fully anonymized ─────────
+// The same cross-client benchmark the agency sees on /intelligence (lib/benchmark.js),
+// reduced to ONLY this client's placement against the anonymous portfolio — never a
+// peer's id, name, or value. The server (clientStanding) already withholds any metric
+// whose cohort is too thin to publish AND any where this client has no finite
+// percentile, so a sparse portfolio simply yields fewer rows and an unbenchmarkable
+// account yields none → the panel hides. Percentile is direction-aware "how good", so
+// the bar fills the same way whether the metric runs up (roas) or down (cpl), and the
+// 50% mark is always the typical account. Best-first from the API → leads with wins:
+// the honest, client-framed mirror of the agency's leader/laggard chips.
+function MyStanding({ benchmark }) {
+  const rows = Array.isArray(benchmark?.standing) ? benchmark.standing : []
+  if (rows.length === 0) return null
+  const n     = benchmark.cohort_size
+  const weeks = benchmark.period?.weeks || 4
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.13s' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">How You Compare</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
+        Where your account stands against {n ? `${n} other account${n === 1 ? '' : 's'}` : 'the rest of the portfolio'} we manage — fully anonymized.
+      </p>
+
+      <div className="space-y-4">
+        {rows.map(r => <StandingRow key={r.metric} r={r} />)}
+      </div>
+
+      <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
+        Measured on a rolling {weeks}-week window. We only ever show how you stack up — never who the other accounts are.
+      </p>
+    </div>
+  )
+}
+
+// One metric's standing: a direction-aware "how good" bar (fill = this client's
+// percentile, the tick at 50% = the typical account) with a friendly placement chip
+// and the client's own value beside the cohort median. Natural units throughout, so
+// "You: 4.2× · Typical: 3.1×" reads the way a client expects.
+function StandingRow({ r }) {
+  const t   = standingTier(r.percentile, r.quartile)
+  const Ico = t.Icon
+  const pct = Math.max(0, Math.min(100, Math.round(Number(r.percentile) || 0)))
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-black text-slate-800 truncate">{metricLabel(r.metric)}</span>
+          <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 border shrink-0 ${t.chip}`}>
+            <Ico className="w-3 h-3" /> {t.label}
+          </span>
+        </div>
+        <span className="text-[11px] font-bold text-slate-400 tabular-nums shrink-0">
+          You: <span className="text-slate-800">{fmtBench(r.metric, r.value)}</span>
+        </span>
+      </div>
+
+      {/* how-good axis 0–100: fill = your percentile, the tick at 50% is the
+          typical account. A higher fill is always better, whichever way the metric runs. */}
+      <div className="relative h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
+        <div className={`h-full rounded-full transition-all duration-700 ${t.bar}`} style={{ width: `${pct}%` }} />
+        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-slate-300/80 -translate-x-1/2" />
+      </div>
+
+      <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+        <span>Typical account: <span className="font-semibold text-slate-500 tabular-nums">{fmtBench(r.metric, r.median)}</span></span>
+        <span className="font-semibold text-slate-400">{Number.isFinite(r.cohort_size) ? `of ${r.cohort_size} accounts` : ''}</span>
+      </div>
+    </div>
+  )
+}
+
+// Percentile → a friendly, honest placement. Driven by the server-computed quartile
+// (top|upper|lower|bottom on the 0–100 "how good" scale) so this badge can never drift
+// from the agency's; the exact "Top N%" comes from the percentile. Client-appropriate
+// tone — wins lead, the soft spots read as "room to grow", never an operator alarm.
+function standingTier(percentile, quartile) {
+  const pct = Number(percentile)
+  if (quartile === 'top') {
+    const top = Math.max(1, Math.round(100 - (Number.isFinite(pct) ? pct : 75)))
+    return { label: `Top ${top}%`, chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', bar: 'bg-emerald-500', Icon: Award }
+  }
+  if (quartile === 'upper') return { label: 'Above average',     chip: 'bg-sky-50 text-sky-700 border-sky-200',         bar: 'bg-sky-500',   Icon: TrendingUp }
+  if (quartile === 'lower') return { label: 'Just below average', chip: 'bg-slate-100 text-slate-600 border-slate-200', bar: 'bg-slate-400', Icon: Minus }
+  return { label: 'Room to grow', chip: 'bg-amber-50 text-amber-700 border-amber-200', bar: 'bg-amber-400', Icon: ArrowUpRight }
+}
+
+// Metric-native formatting for the standing surface — ROAS as a multiple (4.2×),
+// close-rate as a percent (30%); money and counts defer to the shared fmtMetricValue.
+// Local twins of the agency panel's helpers, kept here so insightMeta keeps its single
+// contract and this surface can still speak the ratios it doesn't.
+function fmtRatio(n, suffix) {
+  const r = Math.round(Number(n) * 10) / 10
+  const s = Number.isInteger(r) ? String(r) : r.toFixed(1)
+  return `${s}${suffix}`
+}
+function fmtBench(metric, v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  if (metric === 'roas')       return fmtRatio(n, '×')
+  if (metric === 'close_rate') return fmtRatio(n, '%')
+  return fmtMetricValue(metric, n)
+}
+
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 function Sparkline({ data }) {
   if (!data?.length) return null
@@ -511,6 +620,7 @@ export default function ClientView({ store }) {
   const [connectedSet, setConnectedSet] = useState(new Set())
   const [insights,     setInsights]    = useState([])
   const [health,       setHealth]      = useState(null)   // one-number verdict from api.getClientInsights()
+  const [standing,     setStanding]    = useState(null)   // { period, cohort_size, standing } — anonymized peer benchmark
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -538,15 +648,17 @@ export default function ClientView({ store }) {
     api.listConnections(clientObj.id)
       .then(rows => setConnectedSet(new Set(rows.map(r => r.channel))))
       .catch(() => {})
-    // Autonomous analyst — this client's grounded findings + recommended actions,
-    // plus the one-number health read (the same synthesis the agency triage roster
-    // runs). Failure just hides the panels; it never blocks the rest of the dashboard.
+    // Autonomous analyst — this client's grounded findings + recommended actions, the
+    // one-number health read, and the anonymized peer standing (all the same synthesis
+    // the agency sees on /intelligence, reduced to this client). Failure just hides the
+    // panels; it never blocks the rest of the dashboard.
     api.getClientInsights(clientObj.id)
       .then(d => {
         setInsights(Array.isArray(d?.insights) ? d.insights : [])
         setHealth(d?.health || null)
+        setStanding(d?.benchmark || null)
       })
-      .catch(() => { setInsights([]); setHealth(null) })
+      .catch(() => { setInsights([]); setHealth(null); setStanding(null) })
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -741,6 +853,12 @@ export default function ClientView({ store }) {
               the synthesis is a vacuous "100 healthy" (no findings), which would read
               as a fiction rather than a verdict, so we defer to the checklist above. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <AccountHealth health={health} />}
+
+          {/* ── How You Compare — this client's own anonymized peer standing ──
+              The cross-client benchmark reduced to this account's placement only
+              (never a peer's identity). Same activity gate as the health badge;
+              null-guards to nothing when the cohort is too thin to publish. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <MyStanding benchmark={standing} />}
 
           {/* ── Funnel card: How Leads Became Jobs ── */}
           {leads > 0 && (
