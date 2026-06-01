@@ -4,12 +4,12 @@ import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
-  CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal,
+  CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, healthBandMeta, metricLabel } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -384,6 +384,79 @@ function ClientInsights({ insights }) {
   )
 }
 
+// ── Account Health — the one-number verdict, client-framed ─────────────────────
+// The same pure synthesis the agency triage roster runs (lib/health.js, surfaced
+// for staff on /intelligence) — every open finding for this client compounded into
+// one 0–100 score and band — but rewritten for the people the report is about. The
+// roster answers "which client do I open first?"; here there's only one client, so
+// the count dots, the client name, and the "biggest drag" severity jargon all fall
+// away. What's left is the honest headline a client actually wants: a confident
+// score, a plain-language read of where things stand, and — when the engine has
+// isolated the lever — the area it's mostly about, named in their own words ("your
+// ad return"), never an operator severity. Renders even at a perfect 100 (no
+// findings → healthy) so an all-clear account gets the big green reassurance, not a
+// blank space; the parent gates it out only for an empty/unconnected account where a
+// "100" would be a fiction rather than a verdict. Band colours come from the shared
+// healthBandMeta() vocabulary, so this badge and the agency roster can never drift
+// on what "Watch" looks like.
+function AccountHealth({ health }) {
+  if (!health) return null
+  const m      = healthBandMeta(health.band)
+  const score  = Math.max(0, Math.min(100, Math.round(Number(health.score) || 0)))
+  const driver = health.driver
+  // Plain-language read per band — transparency without alarm. Where the agency sees
+  // "3 critical · biggest drag: revenue", the client sees the same posture phrased as
+  // where things stand and that their team is already on it.
+  const READ = {
+    healthy:  "Everything's running smoothly across your account right now.",
+    watch:    "A few things we're keeping an eye on — nothing that needs you today.",
+    at_risk:  "A couple of areas need attention, and your team is already on them.",
+    critical: "We've flagged the priorities and your team is actively working on them.",
+  }
+  const read = READ[health.band] || READ.healthy
+  // Name the area the score is mostly about, in friendly terms — only when the engine
+  // isolated a driver and the score isn't already perfect (a 100 has no drag to name).
+  const area = driver && score < 100 ? metricLabel(driver.metric) : null
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.06s' }}>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Account Health</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+
+      <div className="flex items-center gap-4">
+        {/* Score — the marquee number, painted in the band colour */}
+        <div className="shrink-0 text-center w-20">
+          <div className={`text-4xl font-black tabular-nums leading-none ${m.text}`}>{score}</div>
+          <div className="text-[10px] font-bold text-slate-300 mt-1">out of 100</div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-2.5">
+            <span className={`inline-flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider rounded-full px-2.5 py-0.5 border ${m.chip}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${m.dot}`} /> {m.label}
+            </span>
+            <Activity className={`w-3.5 h-3.5 ${m.text}`} />
+          </div>
+          {/* Meter — the score on a 0–100 track, filled in the band colour */}
+          <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+            <div className={`h-full rounded-full transition-all duration-700 ${m.bar}`} style={{ width: `${score}%` }} />
+          </div>
+        </div>
+      </div>
+
+      <p className="text-sm text-slate-600 leading-relaxed font-medium mt-4">
+        {read}
+        {area && (
+          <> Right now that's mostly around your <span className="font-bold text-slate-800">{area}</span>.</>
+        )}
+      </p>
+    </div>
+  )
+}
+
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 function Sparkline({ data }) {
   if (!data?.length) return null
@@ -437,6 +510,7 @@ export default function ClientView({ store }) {
   const [updates,      setUpdates]     = useState([])
   const [connectedSet, setConnectedSet] = useState(new Set())
   const [insights,     setInsights]    = useState([])
+  const [health,       setHealth]      = useState(null)   // one-number verdict from api.getClientInsights()
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -464,11 +538,15 @@ export default function ClientView({ store }) {
     api.listConnections(clientObj.id)
       .then(rows => setConnectedSet(new Set(rows.map(r => r.channel))))
       .catch(() => {})
-    // Autonomous analyst — this client's grounded findings + recommended actions.
-    // Failure just hides the panel; it never blocks the rest of the dashboard.
+    // Autonomous analyst — this client's grounded findings + recommended actions,
+    // plus the one-number health read (the same synthesis the agency triage roster
+    // runs). Failure just hides the panels; it never blocks the rest of the dashboard.
     api.getClientInsights(clientObj.id)
-      .then(d => setInsights(Array.isArray(d?.insights) ? d.insights : []))
-      .catch(() => setInsights([]))
+      .then(d => {
+        setInsights(Array.isArray(d?.insights) ? d.insights : [])
+        setHealth(d?.health || null)
+      })
+      .catch(() => { setInsights([]); setHealth(null) })
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -657,6 +735,12 @@ export default function ClientView({ store }) {
               isAgency={user?.role !== 'client'}
             />
           )}
+
+          {/* ── Account Health — the AI analyst's one-number read, client-framed ──
+              Only once the account has real activity: on an empty/unconnected account
+              the synthesis is a vacuous "100 healthy" (no findings), which would read
+              as a fiction rather than a verdict, so we defer to the checklist above. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <AccountHealth health={health} />}
 
           {/* ── Funnel card: How Leads Became Jobs ── */}
           {leads > 0 && (
