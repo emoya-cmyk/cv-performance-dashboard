@@ -10,7 +10,7 @@
  * Pure data + lucide component references — no JSX — so it stays a plain .js module.
  */
 import {
-  Zap, TrendingUp, LineChart, Gauge, Activity, Shuffle, Lightbulb, Sparkles,
+  Zap, TrendingUp, LineChart, Gauge, Activity, Unplug, Shuffle, Lightbulb, Sparkles,
   ArrowUpRight, ArrowDownRight, Minus,
   Flame, CalendarClock, Eye,
   SignalHigh, SignalMedium, SignalLow,
@@ -56,6 +56,7 @@ export const KIND = {
   forecast:       { icon: LineChart,  label: 'Forecast' },
   pacing:         { icon: Gauge,      label: 'Pacing' },
   data_health:    { icon: Activity,   label: 'Data Health' },
+  coverage_gap:   { icon: Unplug,     label: 'Connection' },
   mix_shift:      { icon: Shuffle,    label: 'Mix Shift' },
   recommendation: { icon: Lightbulb,  label: 'Recommendation' },
 }
@@ -126,9 +127,14 @@ export function precisionTooltip(insight) {
 //     client's data sources… every metric is running blind") is written for the
 //     operator, not the client. Surfacing it would read as a scary defect, not an
 //     insight. The agency still sees it on /intelligence.
+//   • coverage_gap — one ad/CRM channel has gone dark beyond its own cadence
+//     (lib/coverage.js). The only fix is "reconnect <channel>," and that account is
+//     owned and administered by the agency — the client has no console to reconnect
+//     it, and "your Meta Ads stopped reporting" would read as a defect they can't act
+//     on. Same audience as data_health: agency/internal-only, shown on /intelligence.
 // Centralised here so the rule is taught once — any future client-facing surface
 // (digest email, mobile) inherits the same audience filter instead of re-deciding.
-export const CLIENT_HIDDEN_KINDS = new Set(['data_health'])
+export const CLIENT_HIDDEN_KINDS = new Set(['data_health', 'coverage_gap'])
 export const isClientFacing = (insight) =>
   !!insight && !CLIENT_HIDDEN_KINDS.has(insight.kind)
 
