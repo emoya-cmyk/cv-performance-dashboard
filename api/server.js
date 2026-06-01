@@ -19,6 +19,7 @@ const { router: sharesRouter, publicSnapshot } = require('./routes/shares')
 const campaignsRouter    = require('./routes/campaigns')
 const agencyRouter       = require('./routes/agency')
 const aiRouter           = require('./routes/ai')
+const insightsRouter     = require('./routes/insights')
 const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
@@ -78,6 +79,7 @@ app.get('/api/share/:token', publicSnapshot)             // public snapshot (no 
 app.use('/api/campaigns',  requireAuth, campaignsRouter) // campaign CRUD
 app.use('/api/agency', agencyRouter)                    // GET public, PUT self-guards with requireAuth
 app.use('/api/ai',         requireAuth, aiRouter)        // grounded recap card + ask stub
+app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intelligence feed + lifecycle
 
 // Email digest prefs — GET + PUT /api/clients/:id/email
 // Defined before the clients router so this specific path wins

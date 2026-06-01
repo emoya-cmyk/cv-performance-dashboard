@@ -141,6 +141,15 @@ export const api = {
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),
   query:         (spec) => post('/api/query', spec),
+  // Intelligence (intel-v2): autonomous insight feed + lifecycle.
+  // getInsights() → portfolio roll-up; getClientInsights() → one client's feed;
+  // ack/resolve record a human decision the engine won't overwrite; runInsights()
+  // forces a fresh pass (one client, or the whole portfolio when clientId is null).
+  getInsights:        ()         => get('/api/insights'),
+  getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
+  ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
+  resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),
+  runInsights:        (clientId) => post(clientId ? `/api/insights/${clientId}/run` : '/api/insights/run', {}),
 }
 
 export function subscribeRealtime(onRefresh) {

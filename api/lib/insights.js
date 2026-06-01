@@ -612,13 +612,16 @@ async function upsertInsight(clientId, f, o) {
   )
 }
 
-// Close out open findings that this sweep did NOT refresh: their condition has
-// cleared (e.g. data is fresh again, the spike normalised). Portable — a simple
-// timestamp compare, no Postgres-only array params.
+// Close out active findings that this sweep did NOT refresh: their condition has
+// cleared (e.g. data is fresh again, the spike normalised). Sweeps BOTH 'open' and
+// 'acknowledged' — an "someone's on it" finding the world has since fixed should
+// still leave the feed — but never 'resolved' (a terminal user decision the engine
+// must not resurrect). Portable — a simple timestamp compare, no PG-only params.
 async function expireStale(clientId, stampIso) {
   await query(
     `UPDATE insights SET status = 'expired'
-      WHERE client_id = $1 AND scope = 'client' AND status = 'open' AND last_seen < $2`,
+      WHERE client_id = $1 AND scope = 'client'
+        AND status IN ('open', 'acknowledged') AND last_seen < $2`,
     [clientId, stampIso]
   )
 }
@@ -873,6 +876,84 @@ async function getOpenInsights(clientId, { limit = 50 } = {}) {
     .slice(0, limit)
 }
 
+// The live feed shows BOTH still-open findings and the ones a human has
+// acknowledged ("someone's on it") — the agency wants to see in-flight work, not
+// have it vanish the instant it's noticed. Acknowledged rows sink below open ones
+// of equal severity so the untouched alarms always surface first; resolved and
+// expired rows drop out entirely (terminal states). Sort is total + deterministic:
+// severity, then open-before-acked, then score.
+const ACTIVE_STATUSES = ['open', 'acknowledged']
+const STATUS_RANK = { open: 1, acknowledged: 0 }
+
+function feedSort(a, b) {
+  return (SEV_RANK[b.severity] || 0) - (SEV_RANK[a.severity] || 0)
+      || (STATUS_RANK[b.status] || 0) - (STATUS_RANK[a.status] || 0)
+      || (Number(b.score) || 0) - (Number(a.score) || 0)
+}
+
+// One client's active feed (open + acknowledged), most significant first.
+async function getInsightFeed(clientId, { limit = 50 } = {}) {
+  const { rows } = await query(
+    `SELECT * FROM insights
+      WHERE client_id = $1 AND scope = 'client'
+        AND status IN ('open', 'acknowledged')`,
+    [clientId]
+  )
+  return rows.map(normalizeInsightRow).sort(feedSort).slice(0, limit)
+}
+
+// Portfolio roll-up: every client's active findings in one ranked stream, each
+// carrying its client's name so the agency view needs no extra lookups. The JOIN
+// (not a LEFT JOIN) drops orphaned insights whose client was deleted — defensive,
+// though ON DELETE CASCADE should already have removed them.
+async function getPortfolioInsights({ limit = 100 } = {}) {
+  const { rows } = await query(
+    `SELECT i.*, c.name AS client_name
+       FROM insights i
+       JOIN clients c ON c.id = i.client_id
+      WHERE i.scope = 'client' AND i.status IN ('open', 'acknowledged')`
+  )
+  return rows.map(normalizeInsightRow).sort(feedSort).slice(0, limit)
+}
+
+// Move one finding to a new lifecycle status and return the fresh row (null if the
+// id doesn't exist → the route answers 404). Two portable statements rather than
+// UPDATE … RETURNING, which the SQLite shim doesn't surface. The engine's
+// re-sweeps never touch status (upsertInsight writes everything BUT status), so a
+// human decision recorded here survives every future run.
+async function setInsightStatus(id, status) {
+  await query(`UPDATE insights SET status = $1 WHERE id = $2`, [status, id])
+  const { rows } = await query(`SELECT * FROM insights WHERE id = $1`, [id])
+  return rows.length ? normalizeInsightRow(rows[0]) : null
+}
+
+// "I see it, we're on it" — stays in the feed (muted) until reality clears it.
+const ackInsight     = (id) => setInsightStatus(id, 'acknowledged')
+// "Handled, hide it" — terminal; the engine won't resurrect it even if still true.
+const resolveInsight = (id) => setInsightStatus(id, 'resolved')
+
+// Sweep EVERY client through the full intelligence pass — the autonomous heartbeat
+// the scheduler fires nightly. One client's failure (bad data, a connector hiccup)
+// is isolated so the rest of the portfolio still updates; the per-client error is
+// collected, not thrown. asOf flows straight through to runInsightsForClient (the
+// tests pin a fixed clock; production passes none → "now").
+async function runInsightsForAll({ asOf, weeks = 26 } = {}) {
+  const { rows } = await query(`SELECT id FROM clients`)
+  let swept = 0, failed = 0, findings = 0
+  const errors = []
+  for (const { id } of rows) {
+    try {
+      const r = await runInsightsForClient(id, { asOf, weeks })
+      swept++
+      findings += r.count
+    } catch (err) {
+      failed++
+      errors.push({ client_id: id, error: err.message })
+    }
+  }
+  return { clients: rows.length, swept, failed, findings, errors }
+}
+
 module.exports = {
   // catalogue / pure detection (unit-tested without a DB)
   METRICS, METRIC_META, detectFindings, fingerprintOf,
@@ -883,6 +964,7 @@ module.exports = {
   // self-tuning loop (grade past projections → learn calibration)
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
   deriveAndPersistCalibration, loadCalibration,
-  // feed
-  getOpenInsights, normalizeInsightRow,
+  // feed (read) + lifecycle (write) + portfolio + autonomous sweep
+  getOpenInsights, getInsightFeed, getPortfolioInsights, normalizeInsightRow,
+  setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
 }

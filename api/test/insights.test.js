@@ -42,6 +42,9 @@ const {
   // roll the graded history into this client's learned forecast calibration.
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
   deriveAndPersistCalibration, loadCalibration,
+  // feed (read) + lifecycle (write) + portfolio roll-up + autonomous portfolio sweep.
+  getInsightFeed, getPortfolioInsights, setInsightStatus,
+  ackInsight, resolveInsight, runInsightsForAll,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -549,4 +552,177 @@ test('self-tuning: runInsightsForClient locks in THIS month for later grading wi
   assert.equal(g.length, 1)                            // insert-once held across sweeps
   approx(g[0].projected_total, 4000)                   // the 05-17 snapshot, not a 05-24 re-guess
   assert.equal(g[0].actual_total, null)               // still open → still ungraded
+})
+
+// ============================================================
+// 4. FEED · LIFECYCLE · PORTFOLIO · AUTONOMOUS SWEEP
+//    The live read+write surface the Intelligence UI and the nightly scheduler
+//    drive. The contract that makes the layer self-sustaining: a human's ack/
+//    resolve is permanent (re-sweeps never overwrite it), yet reality can still
+//    auto-close an acknowledged finding — so nothing rots in the feed untouched.
+// ============================================================
+
+// Build a bare finding + its template narration. Local to this section (mirrors
+// the helpers the getOpenInsights sort test defines inline).
+const FEED_STAMP = new Date().toISOString()
+const mkFinding = (kind, metric, severity, score, period = '2026-05-04') =>
+  ({ scope: 'client', kind, metric, severity, direction: 'up', score, period_start: period, evidence: { x: 1 } })
+const mkNarr = (title) => ({ title, detail: 'd', model: 'template', grounded: true, stampIso: FEED_STAMP })
+async function idForFingerprint(fp) {
+  const { rows } = await db.query(`SELECT id FROM insights WHERE fingerprint = $1`, [fp])
+  return rows.length ? rows[0].id : null
+}
+
+test('feed: acknowledge keeps a finding (muted, sunk below open); resolve drops it', async () => {
+  await ready()
+  const c = await freshClient('Lifecycle Roofing Co')
+
+  // One critical, two same-severity warnings (scores 8 then 7), one info.
+  await upsertInsight(c, mkFinding('anomaly', 'revenue', 'critical', 9), { ...mkNarr('crit'),  fingerprint: `fp-c-${c}` })
+  await upsertInsight(c, mkFinding('pacing',  'jobs',    'warning',  8), { ...mkNarr('warnA'), fingerprint: `fp-wa-${c}` })
+  await upsertInsight(c, mkFinding('pacing',  'leads',   'warning',  7), { ...mkNarr('warnB'), fingerprint: `fp-wb-${c}` })
+  await upsertInsight(c, mkFinding('trend',   'leads',   'info',     5), { ...mkNarr('info'),  fingerprint: `fp-i-${c}` })
+
+  // Fresh feed: severity DESC, then score DESC within a tier → warnA(8) ahead of warnB(7).
+  const feed0 = await getInsightFeed(c)
+  assert.deepEqual(feed0.map(r => r.title),  ['crit', 'warnA', 'warnB', 'info'])
+  assert.deepEqual(feed0.map(r => r.status), ['open', 'open', 'open', 'open'])
+
+  // Acknowledge the HIGHER-scored warning. It stays in the feed but sinks below the
+  // still-open warnB despite warnB's lower score — active status outranks score.
+  const acked = await ackInsight(await idForFingerprint(`fp-wa-${c}`))
+  assert.equal(acked.status, 'acknowledged')
+  assert.equal(acked.title, 'warnA')
+  assert.equal(acked.grounded, true)                 // normalized boolean (SQLite 0/1)
+  assert.equal(typeof acked.evidence, 'object')      // normalized from TEXT
+
+  const feed1 = await getInsightFeed(c)
+  assert.equal(feed1.length, 4)                      // ack does NOT drop it
+  assert.deepEqual(feed1.map(r => r.title),  ['crit', 'warnB', 'warnA', 'info'])
+  assert.deepEqual(feed1.map(r => r.status), ['open', 'open', 'acknowledged', 'open'])
+
+  // Resolve the info finding → it leaves the feed entirely (terminal).
+  const resolved = await resolveInsight(await idForFingerprint(`fp-i-${c}`))
+  assert.equal(resolved.status, 'resolved')
+
+  const feed2 = await getInsightFeed(c)
+  assert.deepEqual(feed2.map(r => r.title), ['crit', 'warnB', 'warnA'])
+  assert.ok(!feed2.some(r => r.title === 'info'), 'a resolved finding is gone from the feed')
+
+  // The resolved row still exists in the table — just not in the active feed.
+  const all = await allInsights(c)
+  assert.equal(all.find(r => r.title === 'info').status, 'resolved')
+
+  // setInsightStatus on an unknown id is a clean null (the route turns this into 404).
+  assert.equal(await setInsightStatus(999999, 'resolved'), null)
+})
+
+test('portfolio: getPortfolioInsights spans clients, tags client_name, ranks by severity', async () => {
+  await ready()
+  const a = await freshClient('Alpha Roofing Co')
+  const b = await freshClient('Bravo Roofing Co')
+  await upsertInsight(a, mkFinding('pacing',  'jobs',    'warning',  6), { ...mkNarr('a-warn'), fingerprint: `fp-aw-${a}` })
+  await upsertInsight(b, mkFinding('anomaly', 'revenue', 'critical', 9), { ...mkNarr('b-crit'), fingerprint: `fp-bc-${b}` })
+
+  const port = await getPortfolioInsights()
+  const aRow = port.find(r => r.title === 'a-warn')
+  const bRow = port.find(r => r.title === 'b-crit')
+  assert.ok(aRow && bRow, 'the portfolio stream spans both clients')
+  assert.equal(aRow.client_name, 'Alpha Roofing Co')   // the JOINed name rides along
+  assert.equal(bRow.client_name, 'Bravo Roofing Co')
+
+  // Across the whole portfolio, b's critical sorts ahead of a's warning.
+  assert.ok(port.indexOf(bRow) < port.indexOf(aRow), 'critical ranks ahead of warning portfolio-wide')
+
+  // Resolving a finding pulls it from the portfolio stream too.
+  await resolveInsight(await idForFingerprint(`fp-aw-${a}`))
+  const port2 = await getPortfolioInsights()
+  assert.ok(!port2.some(r => r.title === 'a-warn'), 'a resolved finding leaves the portfolio feed')
+})
+
+test('feed: an acknowledged finding still auto-expires once its condition clears', async () => {
+  await ready()
+  const c = await freshClient('Onit Roofing Co')
+
+  // Run 1: two stale weeks → one open data_health.
+  await seedWeek(c, '2026-04-06', { projected_revenue: 800 })
+  await seedWeek(c, '2026-04-13', { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-20' })
+  let rows = await allInsights(c)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].kind, 'data_health')
+
+  // A human acknowledges it ("we're on the data gap") — it stays in the feed, muted.
+  const acked = await ackInsight(rows[0].id)
+  assert.equal(acked.status, 'acknowledged')
+  assert.equal((await getInsightFeed(c)).length, 1)    // acknowledged ⇒ still visible
+
+  // Run 2: fresh weeks land, the data is current → the condition clears. expireStale
+  // now reaches 'acknowledged' too, so the finding closes itself — no human needed.
+  for (const wk of ['2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11'])
+    await seedWeek(c, wk, { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-18' })
+
+  rows = await allInsights(c)
+  assert.equal(rows.length, 1)                          // same row, not a duplicate
+  assert.equal(rows[0].status, 'expired')               // acknowledged → expired
+  assert.deepEqual(await getInsightFeed(c), [])         // gone from the active feed
+})
+
+test('feed: a resolved finding is terminal — re-sweeps never reopen it, clearing never expires it', async () => {
+  await ready()
+  const c = await freshClient('Closed Roofing Co')
+
+  // Run 1: two stale weeks → one open data_health, which a human resolves.
+  await seedWeek(c, '2026-04-06', { projected_revenue: 800 })
+  await seedWeek(c, '2026-04-13', { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-20' })
+  let rows = await allInsights(c)
+  assert.equal((await resolveInsight(rows[0].id)).status, 'resolved')
+
+  // Run 2: the SAME stale condition still holds → the engine re-detects it and
+  // upserts the SAME fingerprint. Status must NOT be dragged back to 'open' — the
+  // human's close survives the re-sweep.
+  await runInsightsForClient(c, { asOf: '2026-05-21' })
+  rows = await allInsights(c)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].status, 'resolved')              // upsert never overwrites status
+  assert.deepEqual(await getInsightFeed(c), [])         // and stays out of the feed
+
+  // Run 3: fresh weeks clear the condition. expireStale targets open/acknowledged
+  // only, so a resolved row is left exactly as the human left it.
+  for (const wk of ['2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11'])
+    await seedWeek(c, wk, { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-18' })
+  rows = await allInsights(c)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].status, 'resolved')              // terminal — never flipped to expired
+})
+
+test('sweep: runInsightsForAll covers every client and reports a clean summary', async () => {
+  await ready()
+  const a = await freshClient('Fleet A Roofing Co')
+  const b = await freshClient('Fleet B Roofing Co')
+  for (const cid of [a, b]) {
+    await seedGoal(cid, '2026-05-01', { revenue_target: 8000 })
+    for (const wk of ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11'])
+      await seedWeek(cid, wk, { projected_revenue: 1000 })
+  }
+
+  const { rows: [{ n }] } = await db.query(`SELECT COUNT(*) AS n FROM clients`)
+  const total = Number(n)
+
+  const res = await runInsightsForAll({ asOf: '2026-05-17' })
+  assert.equal(res.clients, total)                      // every client in the table…
+  assert.equal(res.swept, total)                        // …was swept…
+  assert.equal(res.failed, 0)                           // …none threw…
+  assert.deepEqual(res.errors, [])                      // …so the error log is empty.
+  assert.ok(res.findings >= 2, 'the sweep surfaced findings across the portfolio')
+
+  // Each NEW client got its own forecast finding persisted by the one portfolio pass.
+  for (const cid of [a, b]) {
+    const feed = await getInsightFeed(cid)
+    assert.ok(feed.some(f => f.kind === 'forecast' && f.metric === 'revenue'),
+      'the portfolio sweep persisted each client’s forecast')
+  }
 })

@@ -12,9 +12,11 @@ const { query }      = require('./db')
 const { runSync }    = require('./routes/sync')
 const { sendDigest } = require('./lib/emailDigest')
 const { getOrGenerateRecap } = require('./lib/recap')
+const { runInsightsForAll }  = require('./lib/insights')
 
-const SCHEDULE        = process.env.SYNC_CRON    || '0 */6 * * *'  // every 6 hours
-const DIGEST_SCHEDULE = process.env.DIGEST_CRON  || '0 8 * * 1'    // Monday 8am UTC
+const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
+const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
+const INSIGHTS_SCHEDULE = process.env.INSIGHTS_CRON || '0 7 * * *'    // daily 7am UTC
 
 // Minimal stats builder for digest (mirrors deriveStats in metrics.js)
 function digestStats(row) {
@@ -138,6 +140,29 @@ function startScheduler() {
   })
 
   console.log(`[scheduler] digest on schedule: ${DIGEST_SCHEDULE}`)
+
+  // ── Nightly intelligence sweep — the autonomous heartbeat ─────────────────
+  // Runs the full self-improving pass for every client: grade closed projections,
+  // learn each client's calibration, detect findings with the learned knobs, and
+  // snapshot this month for later grading. No operator involved — this is what
+  // makes the layer self-sustaining. Fired before the Monday digest so its email
+  // can read fresh insights. runInsightsForAll isolates per-client failures, so a
+  // single bad client never sinks the sweep.
+  if (!cron.validate(INSIGHTS_SCHEDULE)) {
+    console.warn('[insights] invalid INSIGHTS_CRON, using default 0 7 * * *')
+  }
+  cron.schedule(INSIGHTS_SCHEDULE, async () => {
+    console.log('[insights] starting nightly sweep', new Date().toISOString())
+    try {
+      const r = await runInsightsForAll()
+      console.log(`[insights] done — ${r.swept}/${r.clients} clients, ${r.findings} findings, ${r.failed} failed`)
+      for (const e of r.errors) console.error(`[insights] client ${e.client_id}: ${e.error}`)
+    } catch (err) {
+      console.error('[insights] fatal', err)
+    }
+  })
+
+  console.log(`[scheduler] insights on schedule: ${INSIGHTS_SCHEDULE}`)
 }
 
 module.exports = { startScheduler }
