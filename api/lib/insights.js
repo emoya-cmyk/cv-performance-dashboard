@@ -58,6 +58,11 @@ const { gradeOne, scoreboardOf, calibrationFor, intervalFor } = require('./selft
 const {
   confidenceTable, signatureKey, bandOf, weightFor, PRIOR_MEAN,
 } = require('./precision')
+// The "why" organ: decomposes a move in a composite KPI (revenue, jobs) into the
+// EXACT contributions of its stored drivers. Pure arithmetic, returns null off the
+// happy path — so wiring it in is a strict no-op for every non-composite metric and
+// every degenerate endpoint. See lib/attribution.js for the log-decomposition proof.
+const { attributeChange } = require('./attribution')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -188,6 +193,27 @@ async function loadGoal(clientId, monthFirst) {
 // DETECTION (pure) — series → findings
 // ============================================================
 
+// Stamp the driver "why" onto a finding's evidence, IN PLACE, when the metric is a
+// composite KPI and both endpoints are real, positive weekly rows. attributeChange
+// returns null for every non-composite metric and every degenerate endpoint, in
+// which case nothing is written and evidence stays byte-identical — so a caller can
+// invoke this unconditionally. The whole decomposition lands under a single nested
+// `attribution` key: nested means the FE evidence-chip filter (number|string only)
+// skips it automatically, while grounding (collectAllowedNumbers recurses arrays +
+// objects) still admits every driver number so narration can cite the cause.
+//
+// CRITICAL: the endpoints MUST be two real weekly rows. The identity
+// revenue ≡ spend×roas (and jobs ≡ leads×close_rate/100) holds per row because roas
+// was DERIVED as revenue/spend for that row — but a robust baseline (a median) and a
+// monthly sum (roas is a ratio, not additive) both break it. Attributing across
+// either would be arithmetically dishonest, so only trend (first→latest) and anomaly
+// (prior→latest) wire this in; forecast/pacing, which live on monthly sums, do not.
+function attachAttribution(evidence, metric, fromRow, toRow) {
+  const why = attributeChange(metric, fromRow, toRow)
+  if (why) evidence.attribution = why
+  return evidence
+}
+
 function makeAnomaly(rec, week, rows) {
   const meta     = METRIC_META[rec.metric]
   const latest   = rec.latest
@@ -208,6 +234,15 @@ function makeAnomaly(rec, week, rows) {
   if (pctBase  != null) evidence.pct_vs_baseline = pctBase
   if (pctPrior != null) evidence.pct_vs_prior    = pctPrior
   if (prior    != null) evidence.prior           = roundFor(meta, prior)
+
+  // Explain the week-over-week step the anomaly already reports as pct_vs_prior:
+  // decompose prior→latest (two real rows) into its drivers. Anchored to prior, not
+  // the robust baseline the z-score uses, because the identity holds only between
+  // real weekly rows (a median baseline ≠ median spend × median roas). No-op for a
+  // non-composite metric or a missing prior, leaving evidence untouched.
+  if (rows.length >= 2) {
+    attachAttribution(evidence, rec.metric, rows[rows.length - 2], rows[rows.length - 1])
+  }
 
   return {
     kind: 'anomaly', metric: rec.metric, scope: 'client',
@@ -231,16 +266,23 @@ function makeTrend(rec, week, rows) {
   const dir      = slopePct > 0 ? 'up' : 'down'
   const severity = Math.abs(slopePct) >= TREND_WARN_PCT ? 'warning' : 'info'
 
+  const evidence = {
+    slope_pct_per_week: Math.abs(slopePct),
+    weeks:    rows.length,
+    first:    roundFor(meta, first),
+    latest:   roundFor(meta, latest),
+    baseline: roundFor(meta, rec.baseline),
+  }
+  // The "why" behind the drift: decompose the first→latest move into its drivers.
+  // Both endpoints are real weekly rows and the framing matches the trend's own
+  // "first → latest" story, so the decomposition is exact and on-message. No-op for
+  // a non-composite metric, leaving evidence untouched.
+  attachAttribution(evidence, rec.metric, rows[0], rows[rows.length - 1])
+
   return {
     kind: 'trend', metric: rec.metric, scope: 'client',
     severity, direction: dir, score: Math.abs(slopePct), period_start: week,
-    evidence: {
-      slope_pct_per_week: Math.abs(slopePct),
-      weeks:    rows.length,
-      first:    roundFor(meta, first),
-      latest:   roundFor(meta, latest),
-      baseline: roundFor(meta, rec.baseline),
-    },
+    evidence,
   }
 }
 

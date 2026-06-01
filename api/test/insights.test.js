@@ -150,6 +150,67 @@ test('trend: a sustained noisy drift surfaces as a trend (no anomaly on that met
   assert.equal(out.some(f => f.kind === 'anomaly' && f.metric === 'leads'), false)
 })
 
+// ── attribution wiring: composite findings explain WHICH driver moved ─────────
+// lib/attribution.js is unit-tested in isolation; these two pin that the engine
+// actually STAMPS that decomposition onto the right findings (trend first→latest,
+// anomaly prior→latest) and stays a strict no-op for non-composite metrics.
+
+test('attribution: a composite trend carries its driver decomposition; a plain metric does not', () => {
+  // revenue ≡ spend × roas. Hold roas flat at 4 and drift spend up on the SAME
+  // jittery shape as the leads-trend fixture (~11.8%/wk → an info trend, not an
+  // anomaly), so revenue tracks it 4×. The engine should decompose the first→latest
+  // revenue move and find spend carried all of it — roas never moved.
+  const spend  = [50, 90, 70, 110, 90, 130, 110, 140]
+  const series = MONDAYS.map((wk, i) => ({
+    week_start: wk, spend: spend[i], roas: 4, revenue: spend[i] * 4,
+  }))
+  const out = detectFindings(series, { asOf: '2026-05-06' })
+
+  const trend = out.find(f => f.kind === 'trend' && f.metric === 'revenue')
+  assert.ok(trend, 'a revenue trend is detected')
+  const attr = trend.evidence.attribution
+  assert.ok(attr, 'the composite trend carries an attribution decomposition')
+  assert.equal(attr.direction, 'up')
+  assert.equal(attr.lead, 'spend')                 // spend did all the work
+  approx(attr.pct, 180)                            // 200 → 560 across the window
+  const [s, r] = attr.drivers                       // presentation order: spend, roas
+  assert.equal(s.metric, 'spend'); approx(s.share, 1); assert.equal(s.share_pct, 100)
+  assert.equal(r.metric, 'roas');  approx(r.share, 0); assert.equal(r.share_pct, 0)
+  approx(s.share + r.share, 1)                       // exact partition of the log-move
+
+  // …and the SAME run's spend trend is NON-composite, so it carries no attribution —
+  // the wiring is a strict no-op anywhere off the two exact identities.
+  const spendTrend = out.find(f => f.kind === 'trend' && f.metric === 'spend')
+  assert.ok(spendTrend, 'spend also trends up')
+  assert.equal('attribution' in spendTrend.evidence, false)
+})
+
+test('attribution: a composite anomaly explains its week-over-week jump by driver', () => {
+  // The same 6× revenue spike as the anomaly fixture, but built from real drivers:
+  // roas held at 4 while spend leaps 200 → 1250 in the final week, so revenue runs
+  // 780…800 → 5000. The anomaly the engine raises should carry the prior→latest
+  // decomposition, pinning spend and agreeing with the pct_vs_prior it already reports.
+  const spend  = [195, 205, 197.5, 202.5, 200, 1250]
+  const series = MONDAYS.slice(2).map((wk, i) => ({
+    week_start: wk, spend: spend[i], roas: 4, revenue: spend[i] * 4,
+  }))
+  const out = detectFindings(series, { asOf: '2026-05-06' })
+
+  const a = out.find(f => f.kind === 'anomaly' && f.metric === 'revenue')
+  assert.ok(a, 'the revenue spike is flagged as an anomaly')
+  const attr = a.evidence.attribution
+  assert.ok(attr, 'the composite anomaly carries an attribution decomposition')
+  assert.equal(attr.direction, 'up')               // latest 5000 vs prior 800
+  assert.equal(attr.lead, 'spend')
+  // the decomposition explains the SAME step the evidence already reports as pct_vs_prior
+  approx(Math.abs(attr.pct), a.evidence.pct_vs_prior)
+
+  // spend spikes too, but it is non-composite → no attribution stamped.
+  const sp = out.find(f => f.kind === 'anomaly' && f.metric === 'spend')
+  assert.ok(sp, 'spend spikes too')
+  assert.equal('attribution' in sp.evidence, false)
+})
+
 test('pacing: month-to-date far below a goal is flagged behind pace', () => {
   const series = [
     { week_start: '2026-05-04', revenue: 500 },
