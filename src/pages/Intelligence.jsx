@@ -5,7 +5,10 @@ import {
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta } from '@/lib/insightMeta'
+import {
+  severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta,
+  precisionMeta, hasLearnedPrecision, precisionTooltip,
+} from '@/lib/insightMeta'
 
 /**
  * Intelligence — the agency-wide window into the autonomous analyst.
@@ -286,6 +289,12 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
   const urg     = action ? urgencyMeta(action.urgency) : null
   const UrgIcon = urg ? urg.icon : null
 
+  // Learned confidence — the engine's self-read of how useful THIS client's team has
+  // found findings like this. Present only once there's decided history (n > 0); the
+  // neutral prior stays silent so a fresh feed looks exactly as it did before.
+  const prec     = hasLearnedPrecision(insight) ? precisionMeta(insight.precision.band) : null
+  const PrecIcon = prec ? prec.icon : null
+
   const evidenceEntries = Object.entries(insight.evidence || {})
     .filter(([, v]) => typeof v === 'number' || typeof v === 'string')
     .slice(0, 8)
@@ -311,6 +320,14 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
           {insight.grounded && (
             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-1.5 py-0.5" title="Narrative verified against the numbers">
               <ShieldCheck className="w-3 h-3" /> AI-verified
+            </span>
+          )}
+          {prec && (
+            <span
+              className={cn('inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide rounded-full px-1.5 py-0.5 border', prec.chip)}
+              title={precisionTooltip(insight)}
+            >
+              <PrecIcon className="w-3 h-3" /> {prec.label}
             </span>
           )}
           {acked && (

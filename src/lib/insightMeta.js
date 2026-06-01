@@ -13,6 +13,7 @@ import {
   Zap, TrendingUp, LineChart, Gauge, Activity, Shuffle, Lightbulb, Sparkles,
   ArrowUpRight, ArrowDownRight, Minus,
   Flame, CalendarClock, Eye,
+  SignalHigh, SignalMedium, SignalLow,
 } from 'lucide-react'
 
 // ── severity → light-theme palette ───────────────────────────────────────────
@@ -52,6 +53,48 @@ export const URGENCY = {
   monitor: { rank: 1, label: 'Monitor',   icon: Eye,          chip: 'bg-sky-50 text-sky-600 border-sky-200' },
 }
 export const urgencyMeta = (u) => URGENCY[u] || URGENCY.monitor
+
+// ── precision band → learned-confidence chip ──────────────────────────────────
+// lib/precision.js — the engine's SECOND self-improving organ — reads the insight
+// LIFECYCLE as a free relevance signal: a finding a client's team acknowledges or
+// resolves was useful; one they let auto-expire was noise. It rolls that history
+// into a per-(client, signature) confidence band (Beta-Bernoulli shrunk toward the
+// client's own base rate). Surfacing the band here is the visible proof the
+// intelligence layer reads its own audience — an alert type this team reliably acts
+// on reads "High signal", one they routinely ignore reads "Low", with no hand-tuned
+// threshold anywhere. The signal-strength glyph makes the learned level legible at a
+// glance. Shown ONLY once a signature has decided history (precision.n > 0); below
+// evidence the prior is neutral and the chip hides, so the engine never guesses out
+// loud. The agency page renders it in full; it is deliberately NOT surfaced to the
+// end client, where "your team ignores these" would misframe the client's own behavior.
+export const PRECISION = {
+  high:   { rank: 3, label: 'High signal',  icon: SignalHigh,   chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', dot: 'bg-emerald-500' },
+  medium: { rank: 2, label: 'Mixed signal', icon: SignalMedium, chip: 'bg-slate-50 text-slate-500 border-slate-200',       dot: 'bg-slate-400' },
+  low:    { rank: 1, label: 'Low signal',   icon: SignalLow,    chip: 'bg-slate-100 text-slate-400 border-slate-200',      dot: 'bg-slate-300' },
+}
+export const precisionMeta = (band) => PRECISION[band] || PRECISION.medium
+
+// A finding carries a learned band only once its signature has decided history for
+// this client (precision.n > 0). Below that the precision block is the neutral prior
+// — the chip hides rather than show a guess, matching the engine's "neutral below
+// evidence" contract that keeps ranking byte-identical until there's something learned.
+export const hasLearnedPrecision = (insight) =>
+  !!(insight && insight.precision && Number(insight.precision.n) > 0)
+
+// One-line human gloss for the chip's tooltip — turns the raw decided tallies into a
+// plain statement of WHAT was learned and from how much evidence. confidence is the
+// shrunk posterior (so 1-of-1 reads as cautious, not a triumphant 100%), shown beside
+// the raw fraction so the discipline is visible rather than hidden. null when there's
+// no learned history (caller already gates on hasLearnedPrecision, but be defensive).
+export function precisionTooltip(insight) {
+  const p = insight && insight.precision
+  if (!p || !(Number(p.n) > 0)) return null
+  const engaged = Number(p.engaged) || 0
+  const n       = Number(p.n) || 0
+  const pct     = Math.round((Number(p.confidence) || 0) * 100)
+  const noun    = n === 1 ? 'finding' : 'findings'
+  return `Learned from your team's engagement: acted on ${engaged} of ${n} ${noun} like this (${pct}% confidence). The feed ranks findings like this to match — no thresholds set by hand.`
+}
 
 // ── audience: which kinds reach the end client ────────────────────────────────
 // The agency Intelligence page shows every finding the engine emits. The consumer
