@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
-  Crosshair,
+  Crosshair, BarChart3, Scale, Award, TrendingDown,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -30,6 +30,7 @@ export default function Intelligence() {
   const [status, setStatus]   = useState('loading')   // loading | done | error
   const [insights, setInsights] = useState([])
   const [health, setHealth]   = useState(null)         // { roster, count, by_band } — triage synthesis
+  const [benchmarks, setBenchmarks] = useState(null)   // { period, cohort_size, metrics } — cross-client peer benchmarks
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -43,14 +44,18 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Two independent reads: the per-finding feed and the synthesized triage roster.
-      // allSettled — not Promise.all — so a roster hiccup never blanks the feed. If the
-      // health endpoint stumbles the roster simply hides and the page degrades to exactly
-      // what it showed before the synthesis layer existed; only a feed failure is fatal.
-      const [feed, roster] = await Promise.allSettled([api.getInsights(), api.getPortfolioHealth()])
+      // Three independent reads: the per-finding feed, the synthesized triage roster, and
+      // the cross-client peer benchmarks. allSettled — not Promise.all — so a roster or
+      // benchmark hiccup never blanks the feed. If either synthesis read stumbles its panel
+      // simply hides and the page degrades to exactly what it showed before that layer
+      // existed; only a feed failure is fatal.
+      const [feed, roster, bench] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(),
+      ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
       setHealth(roster.status === 'fulfilled' && Array.isArray(roster.value?.roster) ? roster.value : null)
+      setBenchmarks(bench.status === 'fulfilled' && bench.value?.metrics ? bench.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -147,6 +152,11 @@ export default function Intelligence() {
           onPick={(id) => { if (id) setClientFilter(c => (c === id ? 'all' : id)) }}
         />
       )}
+
+      {/* peer benchmarks — the cross-client lens: how each client ranks against the
+          live portfolio per KPI. Hidden until at least one metric has a publishable
+          cohort (≥ MIN_COHORT finite peers); degrades silently to nothing otherwise. */}
+      {benchmarks && <BenchmarkPanel data={benchmarks} />}
 
       {/* severity stat band — doubles as the severity filter */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -719,4 +729,199 @@ function FieldLabel({ children }) {
 function fmtEv(v) {
   if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2)
   return String(v)
+}
+
+/* ── peer benchmarks — the cross-client lens ───────────────────────────────────
+   One read of GET /api/insights/benchmarks: every KPI's cross-client distribution
+   over a trailing window, plus each client's direction-aware standing. Where the
+   triage roster ranks CLIENTS by health, this ranks the PORTFOLIO on each metric —
+   the box plot is the live cohort spread, and the leader/laggard chips name who's
+   winning and who's a triage candidate. This is the agency surface, so naming peers
+   is correct; the client's own dashboard gets only its anonymous standing (via
+   getClientInsights().benchmark), never a peer's name or number.
+
+   The benchmark self-calibrates with zero config: it IS the connected portfolio, so
+   adding an account re-shapes every cohort on the next sweep. Metrics whose cohort is
+   too thin to publish (cohort !== 'ok', i.e. < MIN_COHORT finite peers) are withheld
+   server-side and simply don't appear — and if none qualify, the whole panel hides. */
+
+// Efficiency (size-neutral) before volume (scales with account size); fixed order
+// inside each so the panel reads the same on every load.
+const BENCHMARK_METRIC_ORDER = ['roas', 'cpl', 'close_rate', 'revenue', 'leads', 'jobs']
+
+function orderedBenchmarkMetrics(metrics) {
+  const rank = (m) => { const i = BENCHMARK_METRIC_ORDER.indexOf(m); return i === -1 ? 99 : i }
+  return Object.entries(metrics || {})
+    .filter(([, b]) => b && b.cohort === 'ok' && b.distribution)
+    .sort(([a], [b]) => rank(a) - rank(b))
+}
+
+function BenchmarkPanel({ data }) {
+  const metrics = orderedBenchmarkMetrics(data?.metrics)
+  if (metrics.length === 0) return null   // nothing publishable → degrade to no panel
+  const p = data.period || {}
+  const n = data.cohort_size
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <BarChart3 className="w-4 h-4 text-brand-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">How clients stack up</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {n} client{n === 1 ? '' : 's'} benchmarked
+        </span>
+        {p.from && p.to && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+            <Clock className="w-3 h-3" /> {p.weeks}-week window · {p.from} → {p.to}
+          </span>
+        )}
+      </div>
+
+      <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {metrics.map(([metric, b]) => (
+          <MetricDistribution key={metric} metric={metric} b={b} />
+        ))}
+      </div>
+
+      <div className="px-4 py-2.5 bg-slate-50/40 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The benchmark <span className="font-bold text-slate-500">is</span> your live portfolio — connect another
+          account and every cohort re-shapes on the next sweep. Standing is direction-aware:
+          <span className="font-bold text-slate-500"> the leader is always the best performer</span>, whichever way the metric runs.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One KPI's cross-client distribution: a mini box plot of the cohort spread (min ·
+   IQR · median · max) with the agency-only leader and laggard named beneath. Values
+   render in metric-native units (ROAS ×, CPL/revenue $, close-rate %, counts plain). */
+function MetricDistribution({ metric, b }) {
+  const d       = b.distribution
+  const kind    = b.kind === 'volume' ? 'volume' : 'efficiency'
+  const clients = Array.isArray(b.clients) ? b.clients : []
+  const best    = clients[0] || null                       // sorted best-first → rank 1
+  const worst   = clients.length > 1 ? clients[clients.length - 1] : null
+  // Only name a peer the engine itself flagged a standout (real cohort + genuine spread
+  // + top/bottom quarter); when peers are bunched, nobody is singled out.
+  const leader  = best && best.standout ? best : null
+  const laggard = worst && worst !== best && worst.standout ? worst : null
+
+  return (
+    <div className="rounded-xl border border-slate-100 bg-gradient-to-br from-slate-50/40 to-white p-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-xs font-black text-slate-800">{metricLabel(metric)}</span>
+        <BenchmarkKindChip kind={kind} />
+        <span className="ml-auto text-[10px] font-semibold text-slate-400 tabular-nums">{b.n} clients</span>
+      </div>
+
+      <BoxPlot dist={d} />
+
+      <div className="flex items-center justify-between text-[10px] tabular-nums text-slate-400 mt-0.5">
+        <span>{fmtBench(metric, d.min)}</span>
+        <span className="font-bold text-slate-600">median {fmtBench(metric, d.median)}</span>
+        <span>{fmtBench(metric, d.max)}</span>
+      </div>
+
+      {(leader || laggard) && (
+        <div className="flex items-center gap-1.5 flex-wrap mt-2">
+          {leader && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5"
+              title={`Top performer on ${metricLabel(metric)}`}
+            >
+              <Award className="w-3 h-3" />
+              <span className="truncate max-w-[8rem]">{leader.client_name || 'Unknown'}</span>
+              <span className="tabular-nums text-emerald-600">{fmtBench(metric, leader.value)}</span>
+            </span>
+          )}
+          {laggard && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-full px-2 py-0.5"
+              title={`Lagging the cohort on ${metricLabel(metric)} — a triage candidate`}
+            >
+              <TrendingDown className="w-3 h-3" />
+              <span className="truncate max-w-[8rem]">{laggard.client_name || 'Unknown'}</span>
+              <span className="tabular-nums text-rose-600">{fmtBench(metric, laggard.value)}</span>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// efficiency = size-neutral (a small account can top it); volume = scales with size.
+// The framing keeps a big client from looking "best" on revenue while a lean one
+// quietly wins on the efficiency metrics that actually measure the work.
+function BenchmarkKindChip({ kind }) {
+  if (kind === 'volume') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-sky-50 text-sky-600 border-sky-200"
+        title="Volume metric — naturally scales with account size"
+      >
+        <BarChart3 className="w-3 h-3" /> Volume
+      </span>
+    )
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-violet-50 text-violet-600 border-violet-200"
+      title="Efficiency metric — size-neutral, compares quality regardless of account size"
+    >
+      <Scale className="w-3 h-3" /> Efficiency
+    </span>
+  )
+}
+
+/* A minimal Tukey box plot over the cohort distribution, in natural units: a whisker
+   from min to max, an inter-quartile box (p25–p75), and the median tick. Positions are
+   percentages across [min, max]; a zero-span cohort (everyone identical) collapses to a
+   centered mark rather than dividing by zero. */
+function BoxPlot({ dist }) {
+  if (!dist) return null
+  const { min, max, p25, p75, median } = dist
+  const span = Number.isFinite(max) && Number.isFinite(min) ? max - min : 0
+  const pos  = (v) => (span > 0 && Number.isFinite(v) ? Math.max(0, Math.min(100, ((v - min) / span) * 100)) : 50)
+  const boxL = pos(p25)
+  const boxR = pos(p75)
+  const med  = pos(median)
+
+  return (
+    <div className="relative h-7">
+      {/* whisker baseline (min → max) */}
+      <div className="absolute top-1/2 left-0 right-0 h-px bg-slate-200 -translate-y-1/2" />
+      {/* min / max caps */}
+      <div className="absolute top-1/2 left-0  w-px h-3 bg-slate-300 -translate-y-1/2" />
+      <div className="absolute top-1/2 right-0 w-px h-3 bg-slate-300 -translate-y-1/2" />
+      {/* inter-quartile box */}
+      <div
+        className="absolute top-1/2 h-4 rounded bg-brand-100 border border-brand-200 -translate-y-1/2"
+        style={{ left: `${boxL}%`, width: `${Math.max(boxR - boxL, 0)}%` }}
+      />
+      {/* median tick */}
+      <div className="absolute top-1/2 w-0.5 h-4 bg-brand-600 rounded -translate-y-1/2" style={{ left: `${med}%`, marginLeft: '-1px' }} />
+    </div>
+  )
+}
+
+// Metric-native formatter for the benchmark surface. ROAS reads as a multiple (2.5×),
+// close-rate as a percent (30%); money and counts defer to the shared fmtMetricValue
+// (CPL/revenue → whole $, leads/jobs → grouped int). Kept local so the shared formatter
+// keeps its single contract and this surface can speak ratios it doesn't.
+function fmtRatio(n, suffix) {
+  const r = Math.round(Number(n) * 10) / 10
+  const s = Number.isInteger(r) ? String(r) : r.toFixed(1)
+  return `${s}${suffix}`
+}
+function fmtBench(metric, v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  if (metric === 'roas')       return fmtRatio(n, '×')
+  if (metric === 'close_rate') return fmtRatio(n, '%')
+  return fmtMetricValue(metric, n)
 }
