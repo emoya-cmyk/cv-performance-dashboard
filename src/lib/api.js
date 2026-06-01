@@ -150,6 +150,11 @@ export const api = {
   // the per-finding feed; getClientInsights() now also returns that client's health.
   getInsights:        ()         => get('/api/insights'),
   getPortfolioHealth: ()         => get('/api/insights/health'),
+  // getBenchmarks() → portfolio PEER benchmark: each KPI's cross-client distribution
+  // + every client's direction-aware percentile/quartile over a trailing window
+  // (agency view; carries peer identities). A client's OWN anonymous standing rides
+  // along inside getClientInsights() (.benchmark), never exposing peers.
+  getBenchmarks:      (weeks)    => get(`/api/insights/benchmarks${weeks ? `?weeks=${weeks}` : ''}`),
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

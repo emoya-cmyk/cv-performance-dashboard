@@ -13,9 +13,17 @@
 //        and band, ranked worst-first — the "where do I look first?" capstone. The
 //        synthesis grain on top of the per-finding stream above.
 //
+//   GET  /api/insights/benchmarks[?weeks=]
+//        Portfolio PEER BENCHMARK: each KPI's cross-client distribution + every
+//        client's direction-aware percentile/quartile over a trailing window. The
+//        one axis the per-client baselines can't see — "who leads, who lags." Agency
+//        surface only (carries peer identities); the client view is the standing
+//        folded into GET /:clientId, which is stripped to anonymous self-numbers.
+//
 //   GET  /api/insights/:clientId[?limit=]
 //        One client's active feed — the per-client Insights card — plus that
-//        client's own health verdict (same pure synthesis as the roster).
+//        client's own health verdict (same pure synthesis as the roster) and its
+//        privacy-safe peer STANDING (own percentile vs the anonymous distribution).
 //
 //   POST /api/insights/:id/ack
 //   POST /api/insights/:id/resolve
@@ -39,6 +47,7 @@ const express = require('express')
 const { query } = require('../db')
 const {
   getInsightFeed, getPortfolioInsights, getPortfolioHealth,
+  getPortfolioBenchmarks, getClientStanding,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -53,6 +62,16 @@ function parseLimit(raw, fallback) {
   const n = Number(raw)
   if (!Number.isFinite(n) || n <= 0) return fallback
   return Math.min(Math.floor(n), 500)
+}
+
+// Clamp a caller-supplied ?weeks (benchmark trailing window) to 1..52; undefined →
+// fallback. Coerced HERE because query params arrive as strings — the lib's numeric
+// guard would otherwise see "4" (a string), fail Number.isFinite, and silently default.
+function parseWeeks(raw, fallback) {
+  if (raw == null || raw === '') return fallback
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return fallback
+  return Math.min(Math.floor(n), 52)
 }
 
 // Insights FK-reference clients(id); a sweep for an unknown client would trip the
@@ -104,6 +123,22 @@ router.get('/health', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET health error', err.message)
     res.status(500).json({ error: 'Failed to load portfolio health' })
+  }
+})
+
+// ── GET /api/insights/benchmarks ──────────────────────────────────────────────
+// Portfolio peer benchmark: per-KPI cross-client distribution + each client's
+// direction-aware percentile/quartile over a trailing window (default 4 weeks).
+// Agency surface — this payload CARRIES peer identities; the client-facing view is
+// the anonymous standing folded into GET /:clientId. Declared before the :clientId
+// route so the literal "benchmarks" can never be captured as a client id.
+router.get('/benchmarks', async (req, res) => {
+  try {
+    const benchmarks = await getPortfolioBenchmarks({ weeks: parseWeeks(req.query.weeks, 4) })
+    res.json(benchmarks)
+  } catch (err) {
+    console.error('[insights] GET benchmarks error', err.message)
+    res.status(500).json({ error: 'Failed to load portfolio benchmarks' })
   }
 })
 
@@ -181,7 +216,10 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const insights = await getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) })
+    const [insights, standing] = await Promise.all([
+      getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
+      getClientStanding(clientId),
+    ])
     res.json({
       client_id: clientId,
       insights,
@@ -190,6 +228,10 @@ router.get('/:clientId', async (req, res) => {
       // the one-number verdict for this client's badge, from the same pure synthesis
       // the portfolio roster uses — score, band, counts, and the headline driver
       health: scoreClient(insights),
+      // privacy-safe peer standing: this client's OWN percentile vs the anonymous
+      // portfolio distribution (never a peer's identity). Empty `standing` under a
+      // thin cohort — the surface shows nothing, never a half-built comparison.
+      benchmark: standing,
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)

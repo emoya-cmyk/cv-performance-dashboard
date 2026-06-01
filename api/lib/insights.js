@@ -67,6 +67,13 @@ const { attributeChange } = require('./attribution')
 // score + band + headline driver, and ranks the whole portfolio worst-first into a
 // triage roster. Pure arithmetic, no-op under no learned history. See lib/health.js.
 const { rankPortfolio } = require('./health')
+// The cross-client organ: ranks each client against the REST of the live portfolio
+// (direction-aware percentile + quartile per metric) — the one axis the per-client
+// baselines structurally cannot see. Pure + privacy-aware: clientStanding() returns
+// ONLY the asking client's anonymous standing, never a peer's identity. The cohort
+// is the live portfolio itself, so it self-calibrates with zero config — connect
+// another account and it re-shapes next sweep. See lib/benchmark.js.
+const { benchmarkPortfolio, clientStanding } = require('./benchmark')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -82,6 +89,21 @@ const METRIC_META = {
   close_rate: { col: 'close_rate',    label: 'Close rate',    unit: 'pct',   dp: 1, goodWhenUp: true  },
 }
 const METRICS = Object.keys(METRIC_META)
+
+// ── cross-client benchmark catalogue ──────────────────────────────────────────
+// Which KPIs are ranked across the portfolio, and how each is FRAMED:
+//   • 'efficiency' (roas, cpl, close_rate) — size-neutral, a fair apples-to-apples
+//     comparison: a small account can genuinely out-perform a large one, so a
+//     percentile here means "doing better."
+//   • 'volume' (revenue, leads, jobs) — scales with account size, so a percentile
+//     reads as "standing/scale," not "doing better." The surfaces label it as such.
+// Raw `spend` is omitted on purpose: it is an INPUT, not a result — ranking it would
+// crown the smallest spender "best." Its efficiency already lives in roas + cpl.
+const BENCHMARK_KIND = {
+  roas: 'efficiency', cpl: 'efficiency', close_rate: 'efficiency',
+  revenue: 'volume',  leads: 'volume',   jobs: 'volume',
+}
+const BENCHMARK_METRICS = Object.keys(BENCHMARK_KIND)
 
 // Thresholds (tuned conservative so the autonomous feed earns trust, not noise).
 const TREND_MIN_WEEKS    = 5     // need a real window before calling a trend
@@ -1311,6 +1333,91 @@ async function getPortfolioHealth() {
   return rankPortfolio([...groups.values()])
 }
 
+// A metric is a REAL, comparable measurement for a client only when its denominator
+// basis is positive over the window. Without this gate, derive()'s zero-fill would
+// inject fake "perfect" zeros — a client who ran no ads posts cpl 0 / roas 0 and
+// masquerades as the cohort leader; a client with no leads posts close_rate 0 and
+// looks like the worst. The gate reads the WINDOW totals (the summed raw columns),
+// not the ratio, so a GENUINE weak ratio (real spend, poor return) still counts.
+function benchmarkable(metric, d) {
+  switch (metric) {
+    case 'roas':       return d.total_spend   > 0
+    case 'cpl':        return d.total_spend   > 0 && d.total_leads > 0
+    case 'close_rate': return d.total_leads   > 0
+    case 'revenue':    return d.total_revenue > 0
+    case 'leads':      return d.total_leads   > 0
+    // jobs is a funnel OUTCOME — real iff there were leads to convert, so 0 jobs on
+    // real leads is a TRUE bottom, not a fake zero from an empty pipeline.
+    case 'jobs':       return d.total_leads   > 0
+    default:           return false
+  }
+}
+
+// PORTFOLIO BENCHMARK: rank every client against the rest of the live portfolio
+// over a trailing window. ONE whole-fleet read — sum each client's raw columns
+// across the last `weeks` completed weeks, derive() to a comparable metric vector
+// (window ratios are recomputed from window totals, matching the live dashboard),
+// then lib/benchmark orients + percentile-ranks each metric. Self-calibrating with
+// zero config: connect another account and the cohort re-shapes next sweep. Below
+// benchmark.MIN_COHORT peers a metric degrades to ranks-only (agency may show,
+// clients must not) — the privacy split lives in getClientStanding, not here. Each
+// metric carries its framing `kind` (efficiency vs volume) for the surfaces.
+async function getPortfolioBenchmarks({ asOf, weeks = 4 } = {}) {
+  const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const w   = Number.isFinite(weeks) && weeks >= 1 ? Math.floor(weeks) : 4
+  const to  = lastCompletedWeek(day)
+  const fromD = new Date(to + 'T00:00:00Z')
+  fromD.setUTCDate(fromD.getUTCDate() - 7 * (w - 1)) // w Mondays inclusive: to-7(w-1) … to
+  const from = fromD.toISOString().slice(0, 10)
+
+  const { rows } = await query(
+    `SELECT i.client_id, c.name AS client_name, ${AGG}
+       FROM weekly_reports i
+       JOIN clients c ON c.id = i.client_id
+      WHERE i.week_start >= $1 AND i.week_start <= $2
+      GROUP BY i.client_id, c.name`,
+    [from, to]
+  )
+
+  const byMetric = {}
+  for (const m of BENCHMARK_METRICS) byMetric[m] = []
+  const contributing = new Set()
+  for (const row of rows) {
+    const d    = derive(row)
+    const id   = String(row.client_id) // normalize: clientStanding compares with ===
+    const name = row.client_name
+    let counted = false
+    for (const m of BENCHMARK_METRICS) {
+      if (!benchmarkable(m, d)) continue
+      const value = d[METRIC_META[m].col]
+      if (!Number.isFinite(value)) continue
+      byMetric[m].push({ client_id: id, client_name: name, value })
+      counted = true
+    }
+    if (counted) contributing.add(id)
+  }
+
+  const ranked = benchmarkPortfolio(byMetric, METRIC_META)
+  const metrics = {}
+  for (const m of Object.keys(ranked)) metrics[m] = { kind: BENCHMARK_KIND[m], ...ranked[m] }
+
+  return { period: { from, to, weeks: w }, cohort_size: contributing.size, metrics }
+}
+
+// The asking client's OWN standing vs the live portfolio — the CLIENT-surface view.
+// Computes the full benchmark, then strips to this client's ANONYMOUS numbers via
+// lib/benchmark.clientStanding (never a peer's id/name/value, and any thin-cohort
+// metric is withheld). Empty `standing` when the client doesn't yet qualify anywhere
+// (thin portfolio / no comparable metrics) — a clean no-op, never a throw.
+async function getClientStanding(clientId, { asOf, weeks = 4 } = {}) {
+  const pb = await getPortfolioBenchmarks({ asOf, weeks })
+  return {
+    period: pb.period,
+    cohort_size: pb.cohort_size,
+    standing: clientStanding(pb.metrics, String(clientId)),
+  }
+}
+
 // Move one finding to a new lifecycle status and return the fresh row (null if the
 // id doesn't exist → the route answers 404). Two portable statements rather than
 // UPDATE … RETURNING, which the SQLite shim doesn't surface. The engine's
@@ -1364,4 +1471,6 @@ module.exports = {
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
+  // cross-client peer benchmarking (agency distribution + privacy-safe client standing)
+  getPortfolioBenchmarks, getClientStanding,
 }

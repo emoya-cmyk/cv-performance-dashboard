@@ -46,6 +46,8 @@ const {
   // feed (read) + lifecycle (write) + portfolio roll-up + autonomous portfolio sweep.
   getInsightFeed, getPortfolioInsights, getPortfolioHealth, setInsightStatus,
   ackInsight, resolveInsight, runInsightsForAll,
+  // cross-client peer benchmarking: agency-wide distribution + a client's own standing.
+  getPortfolioBenchmarks, getClientStanding,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -1080,4 +1082,166 @@ test('every detected finding, once normalized, carries actionable advice end-to-
   assert.equal(norm.recommended_action.urgency, 'act_now')                // critical forecast
   assert.ok(norm.recommended_action.text.includes('50% of the Revenue goal'))
   assert.ok(norm.recommended_action.text.includes('shift budget'))
+})
+
+// ============================================================
+// 6. CROSS-CLIENT PEER BENCHMARKING — the one axis self-history can't see.
+//    Every other detector measures a client against its OWN past; this ranks it
+//    against the LIVE portfolio. Two reads: getPortfolioBenchmarks (agency-wide
+//    distribution, names peers) and getClientStanding (a client's own ANONYMOUS
+//    standing, never a peer identity). The DB is shared/polluted across tests, so
+//    we seed our OWN cohort and assert membership + RELATIVE order, never absolute
+//    positions/counts — exactly the portfolio-health roster's robustness contract.
+// ============================================================
+
+// Repeat one identical week across the benchmark window [2026-04-20 … 2026-05-04]
+// (the three Mondays getPortfolioBenchmarks reads for asOf 2026-05-12, weeks 3).
+const BENCH_WK = ['2026-04-20', '2026-04-27', '2026-05-04']
+async function seedBench(name, perWeek) {
+  const id = await freshClient(name)
+  for (const wk of BENCH_WK) await seedWeek(id, wk, perWeek)
+  return id
+}
+
+test('benchmark: the agency distribution ranks the live cohort; window ratios derive from summed totals; the denominator gate keeps derive() zero-fill out', async () => {
+  await ready()
+
+  // Six core peers with ASCENDING roas r = 2..7. Each of the three weeks is
+  // identical, so the window TOTALS are spend 3000 / leads 30 / closed 9 /
+  // revenue 3000·r → derive() recomputes WINDOW ratios roas=r, cpl=100,
+  // close_rate=30 for every core peer (matching the live dashboard's math).
+  const core = []
+  for (let r = 2; r <= 7; r++) {
+    const id = await seedBench(`Bench Core roas=${r}`, {
+      ads_spend: 1000, raw_leads: 10, closed_won: 3, projected_revenue: 1000 * r,
+    })
+    core.push({ r, id })
+  }
+  const lowId  = core[0].id   // roas 2 — worst of my core
+  const highId = core[5].id   // roas 7 — best of my core
+
+  // Two probes that derive()'s zero-fill would POISON if the engine ranked raw
+  // ratios blind. The benchmarkable() gate reads WINDOW TOTALS, not the ratio:
+  //   • noSpend — ran no ads → fake roas 0 / cpl 0. Drop from roas & cpl; KEEP
+  //     where the basis is real (close_rate, revenue, leads, jobs).
+  const noSpend = await seedBench('Bench NoSpend', {
+    ads_spend: 0, raw_leads: 8, closed_won: 2, projected_revenue: 5000,
+  }) // window totals: spend 0 / leads 24 / closed 6 / revenue 15000
+  //   • noLeads — real spend, zero leads → fake close_rate 0 / cpl 0, but a
+  //     GENUINE roas 10 (revenue 30000 / spend 3000). Keep on roas & revenue;
+  //     drop from every lead-basis metric (cpl, close_rate, leads, jobs).
+  const noLeads = await seedBench('Bench NoLeads', {
+    ads_spend: 1000, raw_leads: 0, closed_won: 0, projected_revenue: 10000,
+  }) // window totals: spend 3000 / leads 0 / closed 0 / revenue 30000 → roas 10
+
+  const pb = await getPortfolioBenchmarks({ asOf: '2026-05-12', weeks: 3 })
+
+  // Window math is exact and independent of whatever else lives in the DB.
+  assert.deepEqual(pb.period, { from: '2026-04-20', to: '2026-05-04', weeks: 3 })
+  // cohort_size counts DISTINCT contributing clients — at least my eight seeds.
+  assert.ok(pb.cohort_size >= 8, `cohort spans my eight seeds, saw ${pb.cohort_size}`)
+
+  const find = (block, id) => (block && block.clients.find((c) => c.client_id === id))
+
+  // ── roas: efficiency framing, a real cohort, ascending values derive correctly ──
+  const roas = pb.metrics.roas
+  assert.ok(roas, 'roas block present')
+  assert.equal(roas.kind, 'efficiency')
+  assert.equal(roas.cohort, 'ok')            // my 7 roas-eligible alone clear MIN_COHORT
+  // sum-then-derive: the low peer reads exactly 2, the high peer exactly 7.
+  approx(find(roas, lowId).value, 2)
+  approx(find(roas, highId).value, 7)
+  // higher roas ranks better (rank 1 = best) and scores a higher percentile.
+  // Asserted RELATIVE to my own ids — never absolute positions (DB is shared).
+  assert.ok(find(roas, highId).rank < find(roas, lowId).rank, 'roas 7 outranks roas 2')
+  assert.ok(find(roas, highId).percentile > find(roas, lowId).percentile)
+  // strictly monotone across all six core peers, best-first.
+  for (let i = 1; i < core.length; i++) {
+    const lo = find(roas, core[i - 1].id)
+    const hi = find(roas, core[i].id)
+    assert.ok(hi.rank < lo.rank, `roas ${core[i].r} outranks roas ${core[i - 1].r}`)
+    assert.ok(hi.percentile > lo.percentile, `roas ${core[i].r} scores above roas ${core[i - 1].r}`)
+  }
+  // mean-rank keeps the extremes strictly inside (0,100): the best peer is never a
+  // misleading exact 100, the worst never an exact 0.
+  for (const c of roas.clients) {
+    assert.ok(c.percentile > 0 && c.percentile < 100, `percentile ${c.percentile} strictly inside (0,100)`)
+  }
+
+  // ── the denominator-basis gate: derive() zero-fill never poisons a cohort ──
+  // roas: noSpend (fake 0) DROPPED; noLeads (genuine 10) KEPT and reads 10.
+  assert.equal(find(roas, noSpend), undefined, 'no-spend client is absent from roas')
+  assert.ok(find(roas, noLeads), 'genuine-roas no-leads client IS present on roas')
+  approx(find(roas, noLeads).value, 10)
+  // cpl: BOTH probes lack a sound basis → absent; the six real-spend peers remain.
+  assert.equal(find(pb.metrics.cpl, noSpend), undefined, 'no-spend absent from cpl')
+  assert.equal(find(pb.metrics.cpl, noLeads), undefined, 'no-leads absent from cpl')
+  assert.ok(find(pb.metrics.cpl, lowId), 'a real-spend peer is present on cpl')
+  approx(find(pb.metrics.cpl, lowId).value, 100)        // 3000 spend / 30 leads
+  // close_rate: leads-basis → noSpend KEPT (24 leads), noLeads DROPPED (0 leads).
+  assert.ok(find(pb.metrics.close_rate, noSpend), 'no-spend present on close_rate')
+  assert.equal(find(pb.metrics.close_rate, noLeads), undefined, 'no-leads absent from close_rate')
+  approx(find(pb.metrics.close_rate, lowId).value, 30)  // 9 closed / 30 leads · 100
+  // revenue (volume): real for BOTH probes → both present.
+  assert.ok(find(pb.metrics.revenue, noSpend), 'no-spend present on revenue')
+  assert.ok(find(pb.metrics.revenue, noLeads), 'no-leads present on revenue')
+  // leads & jobs are lead-basis: noSpend KEPT, noLeads DROPPED.
+  assert.ok(find(pb.metrics.leads, noSpend), 'no-spend present on leads')
+  assert.equal(find(pb.metrics.leads, noLeads), undefined, 'no-leads absent from leads')
+  assert.ok(find(pb.metrics.jobs, noSpend), 'no-spend present on jobs')
+  assert.equal(find(pb.metrics.jobs, noLeads), undefined, 'no-leads absent from jobs')
+
+  // volume framing is stamped distinctly from efficiency.
+  assert.equal(pb.metrics.revenue.kind, 'volume')
+  assert.equal(pb.metrics.leads.kind, 'volume')
+  assert.equal(pb.metrics.jobs.kind, 'volume')
+})
+
+test('benchmark: getClientStanding returns a client OWN anonymous standing — agency sees peers, the client never does', async () => {
+  await ready()
+
+  // A fresh roas ladder, independent of the prior test's clients (both persist in
+  // the shared DB — fine, we assert on our own ids and on cross-payload equality).
+  const core = []
+  for (let r = 2; r <= 7; r++) {
+    const id = await seedBench(`Standing Core roas=${r}`, {
+      ads_spend: 1000, raw_leads: 10, closed_won: 3, projected_revenue: 1000 * r,
+    })
+    core.push({ r, id })
+  }
+  const highId   = core[5].id
+  const highName = 'Standing Core roas=7'
+
+  const pb = await getPortfolioBenchmarks({ asOf: '2026-05-12', weeks: 3 })
+
+  // AGENCY surface: the per-metric block DOES carry peer identity (id + name) —
+  // the agency is allowed to see who is who.
+  const roasBlock   = pb.metrics.roas
+  const agencyEntry = roasBlock.clients.find((c) => c.client_id === highId)
+  assert.ok(agencyEntry, 'agency block names the client')
+  assert.equal(agencyEntry.client_name, highName)
+
+  // CLIENT surface: the SAME client, stripped to its OWN anonymous numbers.
+  const mine = await getClientStanding(highId, { asOf: '2026-05-12', weeks: 3 })
+  assert.deepEqual(mine.period, { from: '2026-04-20', to: '2026-05-04', weeks: 3 })
+  assert.ok(typeof mine.cohort_size === 'number' && mine.cohort_size >= 8)
+  assert.ok(Array.isArray(mine.standing) && mine.standing.length > 0, 'the client qualifies somewhere')
+
+  const myRoas = mine.standing.find((s) => s.metric === 'roas')
+  assert.ok(myRoas, 'the client sees its own roas standing')
+  // EVERY exposed field is anonymous + self-only — no peer id, name, or roster.
+  for (const s of mine.standing) {
+    assert.ok(!('client_id' in s),   'standing leaks no client_id')
+    assert.ok(!('client_name' in s), 'standing leaks no client_name')
+    assert.ok(!('clients' in s),     'standing leaks no peer roster')
+    assert.ok(s.percentile >= 0 && s.percentile <= 100, 'own percentile is a valid 0–100')
+    assert.ok(typeof s.cohort_size === 'number', 'cohort_size is a bare count')
+    assert.ok(['top', 'upper', 'lower', 'bottom'].includes(s.quartile), 'a published quartile')
+    assert.ok(Number.isFinite(s.value) && Number.isFinite(s.rank) && Number.isFinite(s.median))
+  }
+  // Same computation, two privacy views: the client's own roas value, percentile,
+  // and rank MATCH the agency block exactly.
+  approx(myRoas.value, 7)
+  assert.equal(myRoas.percentile, agencyEntry.percentile)
+  assert.equal(myRoas.rank, agencyEntry.rank)
 })
