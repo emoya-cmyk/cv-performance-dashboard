@@ -4,11 +4,12 @@ import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
-  CheckCircle, AlertCircle, Clock,
+  CheckCircle, AlertCircle, Clock, Sparkles,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -250,6 +251,88 @@ function SourceChecklist({ connectedKeys, isAgency: agencyMode }) {
   )
 }
 
+// ── Intelligence findings — the autonomous analyst, in the client's own words ──
+// The consumer cut of the same feed the agency sees on /intelligence: capped to
+// the top few, stripped of operator chrome (ack/resolve, evidence audit, the
+// AI-verified badge), and filtered to client-facing kinds via isClientFacing()
+// so an internal data-pipeline alert never lands on a client's screen. Every
+// string — title, detail, and the recommended action — is computed by the engine
+// (no model in the render path), so it's accurate by construction and renders the
+// same whether or not an API key is present. Pairs each observation ("what we
+// noticed") with its recommendation ("what we'll do about it"), which is exactly
+// the transparency-plus-reassurance a client wants from a performance report.
+function ClientInsights({ insights }) {
+  const visible = (insights || []).filter(
+    i => isClientFacing(i) && i.status !== 'resolved' && i.status !== 'expired',
+  )
+  const items = visible.slice(0, 3)
+  const more  = visible.length - items.length
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.19s' }}>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">What We're Watching</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+
+      <div className="space-y-3">
+        {items.map(item => {
+          const sev      = severityMeta(item.severity)
+          const kind     = kindMeta(item.kind)
+          const KindIcon = kind.icon
+          const action   = item.recommended_action
+          const urg      = action ? urgencyMeta(action.urgency) : null
+          const UrgIcon  = urg ? urg.icon : null
+          return (
+            <div
+              key={item.id}
+              className="rounded-xl border border-slate-100 bg-slate-50/40 p-3.5"
+              style={{ borderLeftWidth: 3, borderLeftColor: sev.accent }}
+            >
+              {/* Observation — what the analyst noticed, grounded in the numbers */}
+              <div className="flex items-start gap-2.5">
+                <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${sev.chipBg}`}>
+                  <KindIcon className={`w-3.5 h-3.5 ${sev.chipText}`} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-black text-slate-800 leading-snug">{item.title}</p>
+                  {item.detail && (
+                    <p className="text-xs text-slate-500 leading-relaxed mt-0.5">{item.detail}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Recommendation — what we'll do about it */}
+              {action?.text && (
+                <div className="mt-3 rounded-lg bg-white border border-slate-100 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    {urg && (
+                      <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full border ${urg.chip}`}>
+                        <UrgIcon className="w-3 h-3" /> {urg.label}
+                      </span>
+                    )}
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Our Recommendation</span>
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed font-medium">{action.text}</p>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="text-[10px] text-slate-400 mt-3.5 pt-3 border-t border-slate-50 leading-relaxed">
+        {more > 0 ? `+${more} more ${more === 1 ? 'item' : 'items'} your account team is tracking. ` : ''}
+        Flagged automatically by your account's AI analyst and reviewed by your team every Monday.
+      </p>
+    </div>
+  )
+}
+
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 function Sparkline({ data }) {
   if (!data?.length) return null
@@ -302,6 +385,7 @@ export default function ClientView({ store }) {
   const [goal,         setGoal]        = useState(null)
   const [updates,      setUpdates]     = useState([])
   const [connectedSet, setConnectedSet] = useState(new Set())
+  const [insights,     setInsights]    = useState([])
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -329,6 +413,11 @@ export default function ClientView({ store }) {
     api.listConnections(clientObj.id)
       .then(rows => setConnectedSet(new Set(rows.map(r => r.channel))))
       .catch(() => {})
+    // Autonomous analyst — this client's grounded findings + recommended actions.
+    // Failure just hides the panel; it never blocks the rest of the dashboard.
+    api.getClientInsights(clientObj.id)
+      .then(d => setInsights(Array.isArray(d?.insights) ? d.insights : []))
+      .catch(() => setInsights([]))
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -683,6 +772,9 @@ export default function ClientView({ store }) {
               />
             </div>
           )}
+
+          {/* ── What We're Watching — the autonomous analyst, client-facing ── */}
+          <ClientInsights insights={insights} />
 
           {/* ── Milestone celebration — first-time only ── */}
           {showMilestone && (

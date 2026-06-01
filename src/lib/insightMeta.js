@@ -53,6 +53,20 @@ export const URGENCY = {
 }
 export const urgencyMeta = (u) => URGENCY[u] || URGENCY.monitor
 
+// ── audience: which kinds reach the end client ────────────────────────────────
+// The agency Intelligence page shows every finding the engine emits. The consumer
+// view withholds a subset that's meaningless or alarming to a business owner:
+//   • data_health — an internal data-pipeline concern owned by the account team.
+//     A client can't reconnect their own feed, and the advice copy ("re-sync this
+//     client's data sources… every metric is running blind") is written for the
+//     operator, not the client. Surfacing it would read as a scary defect, not an
+//     insight. The agency still sees it on /intelligence.
+// Centralised here so the rule is taught once — any future client-facing surface
+// (digest email, mobile) inherits the same audience filter instead of re-deciding.
+export const CLIENT_HIDDEN_KINDS = new Set(['data_health'])
+export const isClientFacing = (insight) =>
+  !!insight && !CLIENT_HIDDEN_KINDS.has(insight.kind)
+
 // ── metric labels ─────────────────────────────────────────────────────────────
 // Keeps acronyms cased correctly (ROAS/CPL) where a naive title-case would mangle
 // them. Falls back to title-case for anything the engine adds later.
