@@ -523,6 +523,112 @@ function templateDetailFor(f) {
   return titleFor(f)
 }
 
+// ============================================================
+// RECOMMENDED ACTION — turn an observation into advice (deterministic)
+// ============================================================
+// Every finding answers "what happened"; this answers "what to do about it" —
+// the step that makes the engine an ADVISOR, not just an observer. It is a PURE
+// function of fields already on the finding (kind, metric, direction, severity,
+// evidence), so it needs no migration, no storage and no model: it is derived on
+// read in normalizeInsightRow and is therefore always in sync with the code, and
+// every surface (Intelligence page, alert strip, the client view, a future email
+// digest) gets the SAME advice for free. Numbers it cites come straight from the
+// evidence pack, so it carries the same narrate-don't-compute accuracy guarantee
+// as titleFor().
+//
+// `urgency` is the action's lane, mapped from severity:
+//   critical → act_now · warning → plan (this week) · info → monitor.
+
+// Is this finding bad for the business? A move is adverse when it runs against
+// the metric's "good direction" (revenue down = bad, spend up = bad, cpl down =
+// good …). data_health is always adverse — stale data blinds every metric. With
+// no metric/direction we treat it as needing attention.
+function isAdverse(f) {
+  if (!f || f.kind === 'data_health') return true
+  const meta = f.metric ? METRIC_META[f.metric] : null
+  if (!meta || !f.direction) return true
+  return f.direction === 'up' ? !meta.goodWhenUp : meta.goodWhenUp
+}
+
+// The corrective lever to pull when a metric is moving the wrong way…
+const LEVER = {
+  revenue:    'shift budget toward your best-return channels and tighten close-rate on the jobs already open',
+  leads:      'raise budget or broaden targeting on the top-performing campaigns',
+  jobs:       'speed up follow-up and sharpen close-rate on the leads already in hand',
+  spend:      'check for a runaway campaign or a recent bid change and cap the overspend',
+  roas:       'pause the weakest campaigns and move that budget into the best returners',
+  cpl:        'trim the high-cost keywords and audiences pulling cost-per-lead up',
+  close_rate: 'review lead quality and follow-up speed with the sales team',
+}
+// …and the way to bank a win when it's moving the right way.
+const KEEP = {
+  revenue:    'hold the current plan and consider raising the goal',
+  leads:      'hold the current plan and consider raising the goal',
+  jobs:       'hold the current plan and consider raising the goal',
+  spend:      'hold the leaner spend as long as results hold',
+  roas:       'lean further into the channels driving the gain',
+  cpl:        'lock in whatever pulled cost-per-lead down',
+  close_rate: 'document what sales changed and keep it',
+}
+const leverFor = m => LEVER[m] || 'review the drivers and adjust the plan'
+const keepFor  = m => KEEP[m]  || 'keep the current approach running'
+
+function urgencyFor(severity) {
+  return severity === 'critical' ? 'act_now' : severity === 'warning' ? 'plan' : 'monitor'
+}
+
+// { text, urgency } — one imperative sentence plus its lane. Pure and total:
+// safe on any finding shape (unknown kinds fall through to a generic review nudge,
+// missing evidence numbers degrade to a neutral word rather than printing junk).
+function recommendedAction(f) {
+  const meta    = f && f.metric ? METRIC_META[f.metric] : null
+  const lbl     = meta ? meta.label : 'Data'
+  const e       = (f && f.evidence) || {}
+  const bad     = isAdverse(f)
+  const urgency = urgencyFor(f && f.severity)
+  let text
+
+  switch (f && f.kind) {
+    case 'data_health': {
+      const n  = e.weeks_behind
+      const wk = n === 1 ? 'week' : 'weeks'
+      text = `Reconnect or re-sync this client's data sources — the feed is ${n || 'several'} ${wk} behind and every metric is running blind until it's restored.`
+      break
+    }
+    case 'anomaly':
+      text = bad
+        ? `${lbl} swung sharply out of its normal range this week — rule out a tracking or billing glitch first, then ${leverFor(f.metric)}.`
+        : `${lbl} moved sharply in your favor — confirm it's real (not a tracking artifact), then ${keepFor(f.metric)}.`
+      break
+    case 'trend':
+      text = bad
+        ? `${lbl} has drifted the wrong way for ${e.weeks || 'several'} straight weeks — don't wait for one more bad week: ${leverFor(f.metric)} now.`
+        : `${lbl} has improved steadily for ${e.weeks || 'several'} weeks — ${keepFor(f.metric)}.`
+      break
+    case 'forecast':
+      if (bad) {
+        const where = e.pct_of_target != null
+          ? `to land at ${e.pct_of_target}% of the ${lbl} goal`
+          : `to fall short of the ${lbl} goal`
+        text = `Tracking ${where} — there's still runway this month, so ${leverFor(f.metric)}.`
+      } else {
+        text = `Tracking to beat the ${lbl} goal — ${keepFor(f.metric)}.`
+      }
+      break
+    case 'pacing':
+      if (bad) {
+        const where = e.pct != null ? `at ${e.pct}% of goal` : 'behind goal'
+        text = `Run-rate puts ${lbl} ${where} — ${leverFor(f.metric)} while there's still time to recover.`
+      } else {
+        text = `Ahead of pace on ${lbl} — ${keepFor(f.metric)}.`
+      }
+      break
+    default:
+      text = `Review ${lbl} and decide whether any action is needed.`
+  }
+  return { text, urgency }
+}
+
 const DETAIL_SYSTEM = [
   'You are a senior performance-marketing analyst writing ONE sentence for a',
   'client about a single finding. You are given a numbers-only JSON object.',
@@ -854,12 +960,19 @@ const SEV_RANK = { critical: 3, warning: 2, info: 1 }
 function safeParse(s) { try { return JSON.parse(s) } catch { return {} } }
 
 function normalizeInsightRow(row) {
-  return {
+  const norm = {
     ...row,
     grounded: !!row.grounded,
     period_start: isoDate(row.period_start),
     evidence: typeof row.evidence === 'string' ? safeParse(row.evidence) : (row.evidence || {}),
   }
+  // Derive the recommended action on READ rather than storing it: it stays in
+  // lock-step with the advice logic (no stale rows after a copy tweak), needs no
+  // migration, and keeps the persisted evidence pack numbers-only so the grounding
+  // verifier is unaffected. Every feed + lifecycle return passes through here, so
+  // each surface inherits the same advice for free.
+  norm.recommended_action = recommendedAction(norm)
+  return norm
 }
 
 // Open findings for one client, most significant first (severity, then score).
@@ -958,8 +1071,8 @@ module.exports = {
   // catalogue / pure detection (unit-tested without a DB)
   METRICS, METRIC_META, detectFindings, fingerprintOf,
   titleFor, templateDetailFor, monthProjections,
-  // narration + persistence + orchestration
-  narrateFinding, loadWeeklySeries, persistBaselines,
+  // narration + advice + persistence + orchestration
+  narrateFinding, recommendedAction, isAdverse, loadWeeklySeries, persistBaselines,
   upsertInsight, expireStale, runInsightsForClient,
   // self-tuning loop (grade past projections → learn calibration)
   loadMonthTotals, snapshotForecast, gradeDueForecasts,

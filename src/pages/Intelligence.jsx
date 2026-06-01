@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { severityMeta, kindMeta, directionIcon, metricLabel } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta } from '@/lib/insightMeta'
 
 /**
  * Intelligence — the agency-wide window into the autonomous analyst.
@@ -280,6 +280,12 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
   const Dir  = directionIcon(insight.direction)
   const acked = insight.status === 'acknowledged'
 
+  // The engine's advice — what to DO about this finding, not just what happened.
+  // Derived server-side on every row, so it's always present and always current.
+  const action  = insight.recommended_action
+  const urg     = action ? urgencyMeta(action.urgency) : null
+  const UrgIcon = urg ? urg.icon : null
+
   const evidenceEntries = Object.entries(insight.evidence || {})
     .filter(([, v]) => typeof v === 'number' || typeof v === 'string')
     .slice(0, 8)
@@ -317,6 +323,19 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
         {/* title + detail */}
         <p className="text-sm font-black text-slate-900 leading-snug">{insight.title}</p>
         {insight.detail && <p className="text-xs text-slate-500 leading-relaxed mt-1">{insight.detail}</p>}
+
+        {/* recommended action — turns the observation into a next step */}
+        {action?.text && (
+          <div className="mt-2 rounded-xl border border-slate-100 bg-gradient-to-br from-slate-50 to-white px-2.5 py-2">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full border', urg.chip)}>
+                <UrgIcon className="w-3 h-3" /> {urg.label}
+              </span>
+              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Recommended action</span>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed font-medium">{action.text}</p>
+          </div>
+        )}
 
         {/* evidence (collapsible, for auditability) */}
         {evidenceEntries.length > 0 && (

@@ -37,6 +37,7 @@ const db = require('../db')
 const { verifyGrounding } = require('../lib/ai')
 const {
   detectFindings, fingerprintOf, titleFor, templateDetailFor,
+  recommendedAction, isAdverse,
   runInsightsForClient, upsertInsight, getOpenInsights, normalizeInsightRow,
   // self-tuning loop: lock in a projection → grade it once the month closes →
   // roll the graded history into this client's learned forecast calibration.
@@ -725,4 +726,139 @@ test('sweep: runInsightsForAll covers every client and reports a clean summary',
     assert.ok(feed.some(f => f.kind === 'forecast' && f.metric === 'revenue'),
       'the portfolio sweep persisted each client’s forecast')
   }
+})
+
+// ============================================================
+// 5. RECOMMENDED ACTION — observation → advice (deterministic)
+// ============================================================
+// recommendedAction(finding) is a pure, total function of fields already on the
+// finding (kind, metric, direction, severity, evidence). It is what turns the
+// engine from an observer into an advisor, and it rides on every normalized row
+// so each surface inherits the same guidance for free. These tests pin: (a) the
+// adverse-vs-favorable split per metric direction, (b) the urgency↔severity lane
+// map, (c) that cited numbers come straight from evidence (never "undefined%"),
+// (d) totality on garbage input, and (e) that normalizeInsightRow attaches it.
+
+// Minimal finding factory — mirrors the shape detectFindings emits.
+const finding = (over = {}) => ({
+  kind: 'anomaly', metric: 'revenue', direction: 'down',
+  severity: 'warning', evidence: {}, ...over,
+})
+
+test('action urgency maps straight off severity: critical→act_now, warning→plan, info→monitor', () => {
+  assert.equal(recommendedAction(finding({ severity: 'critical' })).urgency, 'act_now')
+  assert.equal(recommendedAction(finding({ severity: 'warning'  })).urgency, 'plan')
+  assert.equal(recommendedAction(finding({ severity: 'info'     })).urgency, 'monitor')
+})
+
+test('isAdverse reads each metric’s good direction (revenue↑ good, spend/cpl↑ bad)', () => {
+  assert.equal(isAdverse(finding({ metric: 'revenue', direction: 'down' })), true)   // less money = bad
+  assert.equal(isAdverse(finding({ metric: 'revenue', direction: 'up'   })), false)  // more money = good
+  assert.equal(isAdverse(finding({ metric: 'spend',   direction: 'up'   })), true)   // more spend = bad
+  assert.equal(isAdverse(finding({ metric: 'spend',   direction: 'down' })), false)
+  assert.equal(isAdverse(finding({ metric: 'cpl',     direction: 'up'   })), true)   // costlier lead = bad
+  assert.equal(isAdverse(finding({ metric: 'cpl',     direction: 'down' })), false)  // cheaper lead = good
+  assert.equal(isAdverse(finding({ metric: 'roas',    direction: 'down' })), true)
+  assert.equal(isAdverse({ kind: 'data_health', metric: null }), true)               // stale data always bad
+  assert.equal(isAdverse(finding({ metric: 'revenue', direction: null })), true)     // unknown move → needs eyes
+})
+
+test('action: an adverse move prescribes the corrective lever; a favorable one says keep it', () => {
+  // Adverse anomaly (revenue down, critical) → act-now lever.
+  const bad = recommendedAction(finding({ kind: 'anomaly', metric: 'revenue', direction: 'down', severity: 'critical' }))
+  assert.equal(bad.urgency, 'act_now')
+  assert.ok(bad.text.includes('Revenue'))
+  assert.ok(bad.text.includes('out of its normal range'))
+  assert.ok(bad.text.includes('shift budget toward your best-return channels'))      // leverFor('revenue')
+
+  // Favorable anomaly (revenue up) → confirm-then-keep, no alarm.
+  const good = recommendedAction(finding({ kind: 'anomaly', metric: 'revenue', direction: 'up', severity: 'info' }))
+  assert.equal(good.urgency, 'monitor')
+  assert.ok(good.text.includes('in your favor'))
+  assert.ok(good.text.includes('hold the current plan and consider raising the goal'))  // keepFor('revenue')
+})
+
+test('action: direction-neutral wording stays correct for good-when-down metrics (cpl falling = a win)', () => {
+  const good = recommendedAction(finding({ kind: 'anomaly', metric: 'cpl', direction: 'down', severity: 'info' }))
+  assert.ok(good.text.includes('Cost per lead'))
+  assert.ok(good.text.includes('in your favor'))                          // NOT "spiked above normal"
+  assert.ok(good.text.includes('lock in whatever pulled cost-per-lead down'))  // keepFor('cpl')
+})
+
+test('action: trend cites the streak length and pulls the metric’s lever', () => {
+  const bad = recommendedAction(finding({ kind: 'trend', metric: 'cpl', direction: 'up', severity: 'warning', evidence: { weeks: 6 } }))
+  assert.equal(bad.urgency, 'plan')
+  assert.ok(bad.text.includes('6 straight weeks'))
+  assert.ok(bad.text.includes('trim the high-cost keywords'))             // leverFor('cpl')
+
+  const good = recommendedAction(finding({ kind: 'trend', metric: 'leads', direction: 'up', severity: 'info', evidence: { weeks: 8 } }))
+  assert.ok(good.text.includes('improved steadily for 8 weeks'))
+  assert.equal(good.urgency, 'monitor')
+})
+
+test('action: forecast quotes pct-of-goal when present and falls back cleanly when it isn’t', () => {
+  const withPct = recommendedAction(finding({ kind: 'forecast', metric: 'revenue', direction: 'down', severity: 'critical', evidence: { pct_of_target: 50 } }))
+  assert.ok(withPct.text.includes('to land at 50% of the Revenue goal'))
+  assert.ok(withPct.text.includes('shift budget'))                        // leverFor('revenue')
+
+  // No pct in evidence → must NOT print "land at undefined% …": degrade to prose.
+  const noPct = recommendedAction(finding({ kind: 'forecast', metric: 'revenue', direction: 'down', severity: 'critical', evidence: {} }))
+  assert.ok(noPct.text.includes('to fall short of the Revenue goal'))
+  assert.ok(!noPct.text.includes('undefined'))
+  assert.ok(!noPct.text.includes('null'))
+
+  const ahead = recommendedAction(finding({ kind: 'forecast', metric: 'revenue', direction: 'up', severity: 'info', evidence: { pct_of_target: 120 } }))
+  assert.ok(ahead.text.includes('Tracking to beat the Revenue goal'))
+})
+
+test('action: pacing quotes run-rate pct and falls back cleanly without it', () => {
+  const behind = recommendedAction(finding({ kind: 'pacing', metric: 'revenue', direction: 'down', severity: 'critical', evidence: { pct: 20 } }))
+  assert.ok(behind.text.includes('at 20% of goal'))
+  assert.ok(behind.text.includes('shift budget'))
+  const noPct = recommendedAction(finding({ kind: 'pacing', metric: 'revenue', direction: 'down', severity: 'warning', evidence: {} }))
+  assert.ok(noPct.text.includes('behind goal'))
+  assert.ok(!noPct.text.includes('undefined'))
+})
+
+test('action: data_health always says reconnect, pluralizing weeks and naming the lag', () => {
+  const crit = recommendedAction({ kind: 'data_health', metric: null, severity: 'critical', evidence: { weeks_behind: 4 } })
+  assert.equal(crit.urgency, 'act_now')
+  assert.ok(/reconnect/i.test(crit.text))
+  assert.ok(crit.text.includes('4 weeks behind'))
+
+  const one = recommendedAction({ kind: 'data_health', metric: null, severity: 'warning', evidence: { weeks_behind: 1 } })
+  assert.ok(one.text.includes('1 week behind'))                          // singular
+  assert.ok(!one.text.includes('1 weeks'))
+})
+
+test('recommendedAction is total: never throws, always returns {text, urgency} even on junk', () => {
+  for (const junk of [null, undefined, {}, { kind: 'who_knows' }, { kind: 'anomaly', metric: 'not_a_metric' }]) {
+    const a = recommendedAction(junk)
+    assert.equal(typeof a.text, 'string')
+    assert.ok(a.text.length > 0)
+    assert.ok(['act_now', 'plan', 'monitor'].includes(a.urgency))
+  }
+})
+
+test('normalizeInsightRow attaches recommended_action (evidence parsed from its stored JSON string)', () => {
+  const raw = {
+    id: 7, client_id: 'c1', kind: 'forecast', metric: 'revenue', direction: 'down',
+    severity: 'critical', score: 50, status: 'open', grounded: 0,
+    period_start: '2026-05-01', evidence: JSON.stringify({ pct_of_target: 50 }),
+  }
+  const norm = normalizeInsightRow(raw)
+  assert.ok(norm.recommended_action, 'every normalized row carries advice')
+  assert.equal(norm.recommended_action.urgency, 'act_now')
+  assert.ok(norm.recommended_action.text.includes('to land at 50% of the Revenue goal'))
+})
+
+test('every detected finding, once normalized, carries actionable advice end-to-end', () => {
+  // A live forecast finding straight from the brain, run through the read path.
+  const weeks  = ['2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04', '2026-05-11']
+  const series = seriesOf(weeks, 'revenue', [1000, 1000, 1000, 1000, 1000, 1000])
+  const [f]    = detectFindings(series, { goal: { revenue_target: 8000 }, asOf: '2026-05-17' })
+  const norm   = normalizeInsightRow({ ...f, period_start: f.period_start || '2026-05-01', evidence: JSON.stringify(f.evidence), grounded: 0, status: 'open' })
+  assert.equal(norm.recommended_action.urgency, 'act_now')                // critical forecast
+  assert.ok(norm.recommended_action.text.includes('50% of the Revenue goal'))
+  assert.ok(norm.recommended_action.text.includes('shift budget'))
 })

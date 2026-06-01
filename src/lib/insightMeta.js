@@ -12,6 +12,7 @@
 import {
   Zap, TrendingUp, LineChart, Gauge, Activity, Shuffle, Lightbulb, Sparkles,
   ArrowUpRight, ArrowDownRight, Minus,
+  Flame, CalendarClock, Eye,
 } from 'lucide-react'
 
 // ── severity → light-theme palette ───────────────────────────────────────────
@@ -39,6 +40,18 @@ export const kindMeta = (k) => KIND[k] || { icon: Sparkles, label: titleCase(k) 
 
 // ── direction glyph ───────────────────────────────────────────────────────────
 export const directionIcon = (dir) => (dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus)
+
+// ── recommended-action urgency → lane chip ────────────────────────────────────
+// The engine pairs every finding's advice with an urgency lane mapped from
+// severity (critical→act_now, warning→plan, info→monitor). This is the visual
+// vocabulary for that lane: a label + icon + chip palette. Kept here so the
+// portfolio page, the client view and any future digest badge it identically.
+export const URGENCY = {
+  act_now: { rank: 3, label: 'Act now',   icon: Flame,        chip: 'bg-rose-50 text-rose-600 border-rose-200' },
+  plan:    { rank: 2, label: 'This week', icon: CalendarClock, chip: 'bg-amber-50 text-amber-600 border-amber-200' },
+  monitor: { rank: 1, label: 'Monitor',   icon: Eye,          chip: 'bg-sky-50 text-sky-600 border-sky-200' },
+}
+export const urgencyMeta = (u) => URGENCY[u] || URGENCY.monitor
 
 // ── metric labels ─────────────────────────────────────────────────────────────
 // Keeps acronyms cased correctly (ROAS/CPL) where a naive title-case would mangle
