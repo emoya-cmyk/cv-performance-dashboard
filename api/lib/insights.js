@@ -91,6 +91,16 @@ const { detectCoverageGaps } = require('./coverage')
 // lib/dayPulse.js. DEFAULT_WINDOW (7) is reused so the trailing window matches the sensor's own.
 const { dayPulse, narrateDayPulse, DEFAULT_WINDOW } = require('./dayPulse')
 
+// The "why" behind a pulse (PURE): the moment dayPulse flags a composite flow metric
+// (revenue, jobs) out of band, diagnoseComposite decomposes that SAME trailing-window
+// move into its exact stored drivers — revenue into spend × roas, jobs into leads ×
+// close_rate — by feeding attribution.attributeChange the trailing-window sums instead
+// of weekly totals (the identities are exact at any grain). narratePulseDiagnosis turns
+// the decomposition into one grounded sentence. Computed on READ here and attached IN
+// PLACE to the firing signal, so a non-composite metric or a degenerate window leaves
+// the signal byte-identical to before. See lib/pulseDiagnose.js.
+const { diagnoseComposite, narratePulseDiagnosis } = require('./pulseDiagnose')
+
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
 // channel that materially fed it. Stamps a `caused_by` pointer on the symptom and an
@@ -2282,6 +2292,15 @@ const PULSE_WINDOW = DEFAULT_WINDOW   // 7 - one trailing week, dayPulse's defau
 // folded down from its atomic fact key via FACT_TO_ENGINE so the two can never drift.
 const PULSE_METRICS = Object.keys(ENGINE_METRIC_FACTS)   // ['revenue','leads','spend','jobs']
 
+// Display names for the pulse DIAGNOSIS (the "why" sentence). narratePulseDiagnosis
+// imports no metric catalogue by design (like narrateDayPulse(label)), so we hand it
+// the labels — for a composite AND its two drivers, e.g. revenue → {revenue, spend,
+// roas}, jobs → {leads, close_rate}. Derived straight from METRIC_META so the
+// diagnosis prose can never drift from the label the pulse signal already shows.
+const PULSE_DRIVER_LABELS = Object.fromEntries(
+  Object.entries(METRIC_META).map(([k, m]) => [k, m.label]),
+)
+
 // loadDailySeries(clientId, { asOf, windowDays }) - a DENSE daily series PER FLOW metric over
 // the trailing window, read straight off the atomic grain (fact_metric) and summed across ALL
 // channels per calendar day. Returns { start, end, dates:[isoDay...], series:{ [engineMetric]:
@@ -2364,7 +2383,7 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
     if (v.status !== 'signal') continue
     const li = v.latest_index
     const ws = li - v.window + 1
-    signals.push({
+    const sig = {
       metric: m,
       label: meta.label,
       ...v,
@@ -2372,7 +2391,23 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       window_end:   dates[li] != null ? dates[li] : null,
       message:        narrateDayPulse(v, { label: meta.label, audience: 'agency' }),
       client_message: narrateDayPulse(v, { label: meta.label, audience: 'client' }),
-    })
+    }
+    // The "why": if this firing metric is a composite (revenue, jobs) whose SAME
+    // trailing-window move decomposes cleanly, attach the full diagnosis object
+    // (drivers + lead + direction, the shape the UI's DriverBreakdown reads) plus one
+    // grounded sentence per audience. diagnoseComposite reuses the already-loaded `series` (the
+    // flow driver is in there too — zero extra DB work) and returns null for every
+    // non-composite metric and every degenerate window, so a leads/spend signal — or a
+    // revenue signal in a zero-spend week — carries nothing extra and stays byte-
+    // identical to before this organ existed. Both reads (GET /pulse roster via the
+    // `...s` spread, GET /:clientId `pulse`) inherit these fields with no route change.
+    const diag = diagnoseComposite(series, m, { window })
+    if (diag) {
+      sig.diagnosis                = diag
+      sig.diagnosis_message        = narratePulseDiagnosis(diag, { labels: PULSE_DRIVER_LABELS, audience: 'agency' })
+      sig.diagnosis_client_message = narratePulseDiagnosis(diag, { labels: PULSE_DRIVER_LABELS, audience: 'client' })
+    }
+    signals.push(sig)
   }
   return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(signals) }
 }

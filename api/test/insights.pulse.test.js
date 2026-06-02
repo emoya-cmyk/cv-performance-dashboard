@@ -270,3 +270,98 @@ test('getPortfolioPulse: names each flagged client, skips the quiet/empty ones, 
     }
   }
 })
+
+// ── intel-v7 (2): the "why" — a COMPOSITE move decomposes; an atomic one doesn't ─
+// jobs ≡ leads × (close_rate/100). Halving leads while holding the close rate at 50%
+// collapses BOTH jobs and leads to a fifth of their usual week, so both fire as
+// critical drops — but only the composite (jobs) carries a driver diagnosis. The
+// baseline window the diagnosis picks is a usual week (jobs 100 / leads 200 / close
+// 50%); the latest week is jobs 20 / leads 40 / close 50%, so leads moved the whole
+// identity and the close rate held.
+test('getClientPulse: a jobs collapse is diagnosed as leads-driven (close rate held); the atomic leads signal carries no diagnosis', async () => {
+  await ready()
+  const c = await freshClient('Diagnosis Jobs Co')
+  await seedWeekly(c, 'closed_won', [20, 90, 100, 110, 95, 105, 100, 98, 102])
+  await seedWeekly(c, 'leads',      [40, 180, 200, 220, 190, 210, 200, 196, 204])
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  assert.equal(out.signals.length, 2)             // jobs + leads (close_rate isn't a pulse metric)
+
+  // the COMPOSITE — jobs, decomposed into its exact stored drivers
+  const jobs = out.signals.find(s => s.metric === 'jobs')
+  assert.ok(jobs, 'jobs signal present')
+  assert.equal(jobs.severity, 'critical')
+  assert.equal(jobs.adverse, true)
+  assert.ok(jobs.diagnosis, 'jobs carries a diagnosis')
+  assert.equal(jobs.diagnosis.direction, 'down')
+  assert.equal(jobs.diagnosis.lead, 'leads')      // leads moved the identity; close rate held
+  const jLeads = jobs.diagnosis.drivers.find(d => d.metric === 'leads')
+  const jClose = jobs.diagnosis.drivers.find(d => d.metric === 'close_rate')
+  assert.equal(jLeads.pct, -80)                   // leads fell 80% …
+  assert.equal(jLeads.share_pct, 100)             // … which is 100% of the move
+  assert.equal(jClose.pct, 0)                     // close rate didn't budge …
+  assert.equal(jClose.share_pct, 0)               // … so it owns none of the move
+  assert.equal(
+    jobs.diagnosis_message,
+    'Jobs won is down 80% — the driver is Leads (down 80%), while Close rate held.',
+  )
+  assert.equal(
+    jobs.diagnosis_client_message,
+    'Your jobs won is down 80% — the driver is Leads (down 80%), while Close rate held.',
+  )
+
+  // the ATOMIC sibling — leads fires the same collapse but cannot decompose
+  const leads = out.signals.find(s => s.metric === 'leads')
+  assert.ok(leads, 'leads signal present')
+  assert.equal(leads.severity, 'critical')
+  assert.equal(leads.diagnosis, undefined)
+  assert.equal(leads.diagnosis_message, undefined)
+  assert.equal(leads.diagnosis_client_message, undefined)
+})
+
+// ── intel-v7 (2): the showcase — a revenue drop with a CUSHIONING driver ────────
+// revenue ≡ spend × roas. Spend is cut harder (−50%) than revenue falls (−30%), so
+// ROAS actually ROSE (1.0 → 1.4) and SOFTENED the drop — a negative-share driver,
+// the case a flat "revenue is down" alert can't express. spend fires too, but a drop
+// on a spike-adverse metric is non-adverse, and spend is atomic ⇒ no decomposition.
+test('getClientPulse: a revenue drop is diagnosed as spend-driven, with ROAS shown as a cushion', async () => {
+  await ready()
+  const c = await freshClient('Diagnosis Revenue Co')
+  await seedWeekly(c, 'revenue', [700, 1000, 900, 1100, 1000, 1050, 950, 1000, 1020])
+  await seedWeekly(c, 'spend',   [500, 1000, 950, 1050, 1000, 980, 1020, 1000, 990])
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  assert.equal(out.signals.length, 2)             // revenue (adverse) + spend (a drop on a spike-adverse metric ⇒ not adverse)
+
+  // the COMPOSITE — revenue, decomposed: spend is the lever, ROAS the cushion
+  const rev = out.signals.find(s => s.metric === 'revenue')
+  assert.ok(rev, 'revenue signal present')
+  assert.equal(rev.severity, 'critical')
+  assert.equal(rev.adverse, true)
+  assert.ok(rev.diagnosis, 'revenue carries a diagnosis')
+  assert.equal(rev.diagnosis.direction, 'down')
+  assert.equal(rev.diagnosis.lead, 'spend')       // spend, not ROAS, drove the drop
+  const dSpend = rev.diagnosis.drivers.find(d => d.metric === 'spend')
+  const dRoas  = rev.diagnosis.drivers.find(d => d.metric === 'roas')
+  assert.equal(dSpend.pct, -50)                   // spend fell 50% …
+  assert.equal(dSpend.share_pct, 194)             // … over-explaining the 30% drop (share > 1)
+  assert.ok(dSpend.share > 1)
+  assert.equal(dRoas.pct, 40)                     // ROAS rose 40% …
+  assert.equal(dRoas.share_pct, -94)              // … a NEGATIVE share: it cushioned the move
+  assert.ok(dRoas.share < 0)
+  assert.equal(
+    rev.diagnosis_message,
+    'Revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.',
+  )
+  assert.equal(
+    rev.diagnosis_client_message,
+    'Your revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.',
+  )
+
+  // the ATOMIC sibling — spend fires too, but cannot decompose
+  const spend = out.signals.find(s => s.metric === 'spend')
+  assert.ok(spend, 'spend signal present')
+  assert.equal(spend.adverse, false)              // a spend DROP isn't adverse on a spike-adverse metric
+  assert.equal(spend.diagnosis, undefined)
+  assert.equal(spend.diagnosis_message, undefined)
+})
