@@ -1467,6 +1467,24 @@ const ACCURACY_TONE = {
   learning:   { chip: 'bg-slate-50 text-slate-400 border-slate-200',     Icon: Radar,     label: 'Learning'   },
 }
 
+/* The FOURTH, SELF-TUNING axis — the only chip that reports an action the system took ON
+   ITSELF, not just a grade it assigned. lib/pulseTuning reads pulseAccuracy's precision and,
+   where the early call has earned it, moves THIS client × metric's live trigger band: a proven
+   sensor trips on LESS movement ('Sharper' — buys an earlier head-start where the false-alarm
+   cost is low because precision is high), a mixed one needs MORE before it speaks ('Calmer' —
+   spends less of the client's attention on noise). It answers none of the other three questions
+   — not "how bad" (severity), not "how often does it hold up" (reliability), not "did the early
+   call prove out" (accuracy) — but "given all that, how has the sensor RECALIBRATED itself."
+   Given a teal slider family so it reads as a dial the system turned, distinct from the violet
+   foresight, the emerald/slate shield, and the rose/amber severity. Keyed by the engine's tuning
+   direction; absent (no earned adjustment → the canonical band, unchanged) → no chip at all. The
+   precision that drives it is always measured at the canonical band, so the loop can't chase its
+   own tail. Hover for the grounded one-sentence reason. Agency-only — never surfaced to a client. */
+const TUNING_TONE = {
+  sensitize: { chip: 'bg-teal-50 text-teal-600 border-teal-200',    Icon: SlidersHorizontal, label: 'Sharper' },
+  tighten:   { chip: 'bg-teal-50/60 text-teal-500 border-teal-100', Icon: SlidersHorizontal, label: 'Calmer'  },
+}
+
 function PulsePanel({ data }) {
   const roster = Array.isArray(data?.roster) ? data.roster : []
   if (roster.length === 0) return null              // nobody moving → degrade to no panel
@@ -1533,6 +1551,10 @@ function PulseRow({ r }) {
   // The pulse's own predictive-precision track record (lib/pulseAccuracy) — how often the
   // early call proved out by week-close. Same null-safe contract: absent until gradeable.
   const acc   = ACCURACY_TONE[r.accuracy_label] || null
+  // The pulse's own SELF-TUNING action (lib/pulseTuning) — where that precision has earned it,
+  // this client × metric's live trigger band has actually MOVED. Keyed by direction; null when
+  // nothing was earned (canonical band, unchanged) → no chip. The one axis that's an act, not a grade.
+  const tun   = (r.tuning && TUNING_TONE[r.tuning.direction]) || null
 
   return (
     <div className="px-4 py-3">
@@ -1572,6 +1594,19 @@ function PulseRow({ r }) {
               >
                 <acc.Icon className="w-2.5 h-2.5" />
                 {acc.label}
+              </span>
+            )}
+            {/* SELF-TUNING rides last — the one chip that reports an ACT, not a grade: where
+                the foresight has earned it, the live trigger has actually MOVED. Sharper (trips
+                on less movement) or Calmer (needs more before it speaks). Hover for the grounded
+                reason. Silent until an adjustment is earned (canonical band → no chip). */}
+            {tun && (
+              <span
+                title={r.tuning_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', tun.chip)}
+              >
+                <tun.Icon className="w-2.5 h-2.5" />
+                {tun.label}
               </span>
             )}
           </div>
@@ -1687,6 +1722,7 @@ function ActTodayRow({ r }) {
   const lane     = laneTone(r)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null   // null when too thin to grade → no chip
   const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record; null until gradeable
+  const tun      = (r.tuning && TUNING_TONE[r.tuning.direction]) || null  // self-tuning act; null until earned
   const delta    = Math.round(Number(r.delta_pct))
   const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%` : null
   const rank     = Number(r.priority_rank)
@@ -1728,6 +1764,17 @@ function ActTodayRow({ r }) {
               >
                 <acc.Icon className="w-2.5 h-2.5" />
                 {acc.label}
+              </span>
+            )}
+            {/* the SELF-TUNING act that foresight earned: this row's live trigger has actually
+                moved — Sharper or Calmer. Hover for the grounded reason. Silent until earned. */}
+            {tun && (
+              <span
+                title={r.tuning_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', tun.chip)}
+              >
+                <tun.Icon className="w-2.5 h-2.5" />
+                {tun.label}
               </span>
             )}
           </div>

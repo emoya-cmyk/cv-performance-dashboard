@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, Radar, Target } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, Radar, Target, SlidersHorizontal } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -59,6 +59,19 @@ const ACCURACY_TONE = {
   proven:     { chip: 'bg-violet-50 text-violet-600 border-violet-200',   Icon: Target,    label: 'Proven'     },
   developing: { chip: 'bg-violet-50/60 text-violet-500 border-violet-100', Icon: Crosshair, label: 'Developing' },
   learning:   { chip: 'bg-slate-50 text-slate-400 border-slate-200',      Icon: Radar,     label: 'Learning'   },
+}
+
+// ── self-tuning tone (copied from Intelligence.jsx 6c so the preview matches) ──
+// The FOURTH axis — and the only one that reports an ACT, not a grade. lib/pulseTuning reads the
+// foresight precision and, where the early call has earned it, MOVES this metric's live trigger
+// band: a proven sensor trips on less movement ('Sharper'), a mixed one needs more before it speaks
+// ('Calmer'). Teal slider family so it reads as a dial the system turned, distinct from the violet
+// foresight, the emerald/slate shield, and the rose/amber severity. Keyed by the engine's tuning
+// direction; absent (no earned adjustment → canonical band, unchanged) → no chip. The precision that
+// drives it is always measured at the canonical band, so the loop never chases its own tail.
+const TUNING_TONE = {
+  sensitize: { chip: 'bg-teal-50 text-teal-600 border-teal-200',    Icon: SlidersHorizontal, label: 'Sharper' },
+  tighten:   { chip: 'bg-teal-50/60 text-teal-500 border-teal-100', Icon: SlidersHorizontal, label: 'Calmer'  },
 }
 
 // ── action-lane tone (copied from Intelligence.jsx 4c so the preview matches) ──
@@ -106,10 +119,10 @@ function orderClientPulse(signals) {
 // HEADLINE lives at ranks 2–3: a RELIABLE Warning (worth a look) outranks a NOISY Critical
 // (verify) — exactly the cross this layer exists to make. Sample numbers; names fictional.
 const ACT_TODAY = [
-  { client_id: 'c1', client_name: 'Skyline Dental',    label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -48, lane: 'act_now',      priority_rank: 1, reliability_label: 'reliable', reliability_note: 'Reliable — this leads alert held up 9 of the last 11 times it fired for Skyline Dental.',     accuracy_label: 'proven',     accuracy_note: 'Leads early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 5 days before it closed — a proven lead.',          triage_reason: 'Leads is critical and this alert has a reliable track record — act today.' },
-  { client_id: 'c2', client_name: 'Harbor Family Law', label: 'Revenue', adverse: true, severity: 'warning',  delta_pct: -24, lane: 'worth_a_look', priority_rank: 2, reliability_label: 'reliable', reliability_note: 'Reliable — this revenue alert held up 8 of the last 10 times it fired for Harbor Family Law.', accuracy_label: 'proven',     accuracy_note: 'Revenue early-warnings for this client have called the week right 7 of 8 times recently (~88%), about 6 days before it closed — a proven lead.',         triage_reason: 'Revenue is slipping and this alert has held up before — worth a look today.' },
-  { client_id: 'c3', client_name: 'Vista Auto Group',  label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -51, lane: 'verify',       priority_rank: 3, reliability_label: 'noisy',    reliability_note: 'Noisy — this leads alert reverted 7 of the last 9 times it fired for Vista Auto Group.',      accuracy_label: 'learning',   accuracy_note: 'Leads early-warnings for this client have called the week right 2 of 7 times recently (~29%) — still learning.',                                       triage_reason: 'Leads is critical, but this alert has been noisy lately — confirm before acting.' },
-  { client_id: 'c4', client_name: 'Peak Roofing Co.',  label: 'Spend',   adverse: true, severity: 'warning',  delta_pct: 31,  lane: 'monitor',      priority_rank: 4, reliability_label: 'mixed',    reliability_note: 'Mixed — this spend alert held up 5 of the last 11 times it fired for Peak Roofing Co.',       accuracy_label: 'developing', accuracy_note: 'Spend early-warnings for this client have called the week right 4 of 8 times recently (~50%), about 3 days before it closed — developing.',                triage_reason: 'Spend is slipping, but this alert flickers (mixed) — monitor for now.' },
+  { client_id: 'c1', client_name: 'Skyline Dental',    label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -48, lane: 'act_now',      priority_rank: 1, reliability_label: 'reliable', reliability_note: 'Reliable — this leads alert held up 9 of the last 11 times it fired for Skyline Dental.',     accuracy_label: 'proven',     accuracy_note: 'Leads early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 5 days before it closed — a proven lead.',          tuning: { status: 'tuned', factor: 0.9056, direction: 'sensitize', warn: 1.811, crit: 2.717, base_warn: 2, base_crit: 3, precision: 0.8889, label: 'proven' }, tuning_note: "Leads early-warnings here have proven out, so the sensor now trips on about 9% less movement — it's earned a lighter trigger.", triage_reason: 'Leads is critical and this alert has a reliable track record — act today.' },
+  { client_id: 'c2', client_name: 'Harbor Family Law', label: 'Revenue', adverse: true, severity: 'warning',  delta_pct: -24, lane: 'worth_a_look', priority_rank: 2, reliability_label: 'reliable', reliability_note: 'Reliable — this revenue alert held up 8 of the last 10 times it fired for Harbor Family Law.', accuracy_label: 'proven',     accuracy_note: 'Revenue early-warnings for this client have called the week right 7 of 8 times recently (~88%), about 6 days before it closed — a proven lead.',         tuning: { status: 'tuned', factor: 0.9125, direction: 'sensitize', warn: 1.825, crit: 2.738, base_warn: 2, base_crit: 3, precision: 0.875, label: 'proven' }, tuning_note: "Revenue early-warnings here have proven out, so the sensor now trips on about 9% less movement — it's earned a lighter trigger.", triage_reason: 'Revenue is slipping and this alert has held up before — worth a look today.' },
+  { client_id: 'c3', client_name: 'Vista Auto Group',  label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -51, lane: 'verify',       priority_rank: 3, reliability_label: 'noisy',    reliability_note: 'Noisy — this leads alert reverted 7 of the last 9 times it fired for Vista Auto Group.',      accuracy_label: 'learning',   accuracy_note: 'Leads early-warnings for this client have called the week right 2 of 7 times recently (~29%) — still learning.',                                       tuning: { status: 'tuned', factor: 1.2072, direction: 'tighten', warn: 2.414, crit: 3.622, base_warn: 2, base_crit: 3, precision: 0.2857, label: 'learning' }, tuning_note: 'Leads early-warnings here have been mixed, so the sensor now needs about 21% more movement before it speaks — fewer false alarms.', triage_reason: 'Leads is critical, but this alert has been noisy lately — confirm before acting.' },
+  { client_id: 'c4', client_name: 'Peak Roofing Co.',  label: 'Spend',   adverse: true, severity: 'warning',  delta_pct: 31,  lane: 'monitor',      priority_rank: 4, reliability_label: 'mixed',    reliability_note: 'Mixed — this spend alert held up 5 of the last 11 times it fired for Peak Roofing Co.',       accuracy_label: 'developing', accuracy_note: 'Spend early-warnings for this client have called the week right 4 of 8 times recently (~50%), about 3 days before it closed — developing.',                tuning: { status: 'tuned', factor: 1.1, direction: 'tighten', warn: 2.2, crit: 3.3, base_warn: 2, base_crit: 3, precision: 0.5, label: 'developing' }, tuning_note: 'Spend early-warnings here have been mixed, so the sensor now needs about 10% more movement before it speaks — fewer false alarms.', triage_reason: 'Spend is slipping, but this alert flickers (mixed) — monitor for now.' },
 ]
 
 // One ranked decision: lane-tinted rank badge (order + call), client + metric, the action
@@ -119,6 +132,7 @@ function ActTodayRowPreview({ r }) {
   const lane     = laneTone(r)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null
   const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record; null until gradeable
+  const tun      = (r.tuning && TUNING_TONE[r.tuning.direction]) || null  // self-tuning act; null until earned
   const deltaStr = `${r.delta_pct >= 0 ? '+' : '−'}${Math.abs(r.delta_pct)}%`
   return (
     <div className="px-4 py-3">
@@ -145,6 +159,13 @@ function ActTodayRowPreview({ r }) {
                 <acc.Icon className="w-2.5 h-2.5" />{acc.label}
               </span>
             )}
+            {/* SELF-TUNING (6c) rides last — the one chip that reports an ACT: where the foresight
+                earned it, this row's live trigger has actually moved. Sharper / Calmer. Hover for why. */}
+            {tun && (
+              <span title={r.tuning_note || undefined} className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${tun.chip}`}>
+                <tun.Icon className="w-2.5 h-2.5" />{tun.label}
+              </span>
+            )}
           </div>
           <p className="mt-1.5 text-[11px] font-semibold text-slate-500 leading-relaxed">{r.triage_reason}</p>
         </div>
@@ -166,6 +187,7 @@ function PreviewPulseRow({ r }) {
   const baseN    = Number(r.baseline?.n)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null   // learned trust grade for THIS metric's firing history
   const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record (5c); null until gradeable
+  const tun      = (r.tuning && TUNING_TONE[r.tuning.direction]) || null  // self-tuning act (6c); null until earned
   return (
     <div className="px-4 py-3">
       <div className="flex items-start gap-3">
@@ -196,6 +218,19 @@ function PreviewPulseRow({ r }) {
               >
                 <acc.Icon className="w-2.5 h-2.5" />
                 {acc.label}
+              </span>
+            )}
+            {/* SELF-TUNING (6c) — the fourth chip, and the only one that reports an ACT the system
+                took ON ITSELF: where the foresight proved out, this client's live trigger on THIS
+                metric has actually moved (Sharper / Calmer). Hover for the plain-language why. Silent
+                until earned — a canonical, unchanged band shows no chip. Agency-only. */}
+            {tun && (
+              <span
+                title={r.tuning_note || undefined}
+                className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${tun.chip}`}
+              >
+                <tun.Icon className="w-2.5 h-2.5" />
+                {tun.label}
               </span>
             )}
           </div>
@@ -279,6 +314,8 @@ const AGENCY = [
     reliability_note: 'Jobs won alerts for this client have held up 9 of 10 times recently (~90%) — a reliable signal.',
     accuracy_label: 'proven',
     accuracy_note: 'Jobs won early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 4 days before it closed — a proven lead.',
+    tuning: { status: 'tuned', factor: 0.9056, direction: 'sensitize', warn: 1.811, crit: 2.717, base_warn: 2, base_crit: 3, precision: 0.8889, label: 'proven' },
+    tuning_note: "Jobs won early-warnings here have proven out, so the sensor now trips on about 9% less movement — it's earned a lighter trigger.",
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'leads',
       drivers: [{ metric: 'leads', pct: -50, share: 1, share_pct: 100 }, { metric: 'close_rate', pct: 0, share: 0, share_pct: 0 }] },
     diagnosis_message: 'Jobs won is down 50% — the driver is Leads (down 50%), while Close rate held.' },
@@ -289,6 +326,8 @@ const AGENCY = [
     reliability_note: 'Revenue alerts for this client have held up 2 of 6 times recently (~33%) — a noisy signal, read it with care.',
     accuracy_label: 'learning',
     accuracy_note: 'Revenue early-warnings for this client have called the week right 2 of 6 times recently (~33%) — still learning.',
+    tuning: { status: 'tuned', factor: 1.1834, direction: 'tighten', warn: 2.367, crit: 3.55, base_warn: 2, base_crit: 3, precision: 0.3333, label: 'learning' },
+    tuning_note: 'Revenue early-warnings here have been mixed, so the sensor now needs about 18% more movement before it speaks — fewer false alarms.',
     diagnosis: { metric: 'revenue', direction: 'down', lead: 'spend',
       drivers: [{ metric: 'spend', pct: -50, share: 1.9434, share_pct: 194.3 }, { metric: 'roas', pct: 40, share: -0.9434, share_pct: -94.3 }] },
     diagnosis_message: 'Revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.' },
@@ -299,6 +338,8 @@ const AGENCY = [
     reliability_note: 'Jobs won alerts for this client have held up 3 of 6 times recently (~50%) — a mixed signal.',
     accuracy_label: 'developing',
     accuracy_note: 'Jobs won early-warnings for this client have called the week right 3 of 6 times recently (~50%), about 2 days before it closed — developing.',
+    tuning: { status: 'tuned', factor: 1.1, direction: 'tighten', warn: 2.2, crit: 3.3, base_warn: 2, base_crit: 3, precision: 0.5, label: 'developing' },
+    tuning_note: 'Jobs won early-warnings here have been mixed, so the sensor now needs about 10% more movement before it speaks — fewer false alarms.',
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'close_rate',
       drivers: [{ metric: 'leads', pct: -20, share: 0.2435, share_pct: 24.3 }, { metric: 'close_rate', pct: -50, share: 0.7565, share_pct: 75.7 }] },
     diagnosis_message: 'Jobs won is down 60% — the driver is Close rate (down 50%), with Leads also down 20%.' },
@@ -309,6 +350,8 @@ const AGENCY = [
     reliability_note: 'Revenue alerts for this client have held up 8 of 9 times recently (~89%) — a reliable signal.',
     accuracy_label: 'proven',
     accuracy_note: 'Revenue early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 5 days before it closed — a proven lead.',
+    tuning: { status: 'tuned', factor: 0.9056, direction: 'sensitize', warn: 1.811, crit: 2.717, base_warn: 2, base_crit: 3, precision: 0.8889, label: 'proven' },
+    tuning_note: "Revenue early-warnings here have proven out, so the sensor now trips on about 9% less movement — it's earned a lighter trigger.",
     diagnosis: { metric: 'revenue', direction: 'up', lead: 'roas',
       drivers: [{ metric: 'spend', pct: 10, share: 0.2665, share_pct: 26.6 }, { metric: 'roas', pct: 30, share: 0.7335, share_pct: 73.3 }] },
     diagnosis_message: 'Revenue is up 43% — the driver is ROAS (up 30%), with Ad spend also up 10%.' },
@@ -350,8 +393,8 @@ export default function PulseDiagnosisPreview() {
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) + (3) + (4) + (5)</p>
-          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record</h1>
+          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) + (3) + (4) + (5) + (6)</p>
+          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record → self-tuning</h1>
           <p className="text-sm text-slate-500 font-medium mt-1.5 max-w-3xl leading-relaxed">
             The pulse already says <span className="font-bold text-slate-700">what</span> moved this week, and (2) adds the{' '}
             <span className="font-bold text-slate-700">why</span> — decomposing each composite move (revenue ≡ spend × ROAS,
@@ -366,8 +409,12 @@ export default function PulseDiagnosisPreview() {
             eventual weekly outcome right — scoring past firings against how the week truly closed — and labels its own track record{' '}
             <span className="font-bold text-violet-600">proven</span> / <span className="font-bold text-violet-500">developing</span> /{' '}
             <span className="font-bold text-slate-400">learning</span>, so a sensor that keeps calling the week early (often days ahead)
-            carries earned weight while a thin or weak record stays quiet. No model, no tuning;
-            every figure traces to a stored daily fact. Sample numbers; client names fictional.
+            carries earned weight while a thin or weak record stays quiet. Finally (6) acts on that record —{' '}
+            <span className="font-bold text-teal-600">self-tuning</span> each client&rsquo;s own trigger: where the foresight has proven out the
+            sensor earns a lighter touch (<span className="font-bold text-teal-600">Sharper</span> — it speaks sooner), and where it&rsquo;s been
+            mixed it sets a higher bar (<span className="font-bold text-teal-500">Calmer</span> — fewer false alarms), always graded against the
+            canonical band and never its own tuned one, so the loop can never chase its own tail. No LLM and no human-set dial anywhere in the
+            chain; every figure traces to a stored daily fact. Sample numbers; client names fictional.
           </p>
         </div>
 
@@ -435,7 +482,12 @@ export default function PulseDiagnosisPreview() {
                   early-warnings have actually <span className="font-bold text-violet-600">called the eventual week right</span> (hover
                   for the precision and how many days ahead): a <span className="font-semibold text-violet-600">proven</span> track
                   record has earned the right to move you; a <span className="font-semibold text-slate-400">learning</span> one
-                  hasn&rsquo;t yet. Reliability is whether the alarm was true; foresight is whether it was early. Agency-only.
+                  hasn&rsquo;t yet. Reliability is whether the alarm was true; foresight is whether it was early. And the teal{' '}
+                  <span className="font-bold text-teal-600">Sharper</span> / <span className="font-bold text-teal-500">Calmer</span> chip,
+                  when it shows, is the system <span className="font-semibold text-teal-600">acting on that foresight</span> — a proven
+                  sensor here has earned a lighter trigger (it now speaks on less movement), a mixed one a higher bar (fewer false
+                  alarms), retuned automatically against the canonical band so it never chases its own tail (hover for the
+                  plain-language why). Agency-only.
                 </p>
               </div>
             </div>
