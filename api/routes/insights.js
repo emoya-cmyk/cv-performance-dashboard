@@ -32,6 +32,12 @@
 //        Agency surface ONLY (a signal names other clients + the book-wide share — the
 //        same cross-tenant boundary as /benchmarks); never in the per-client payload.
 //
+//   GET  /api/insights/trajectory[?horizon=]
+//        Portfolio EARLY-WARNING ROSTER: the PREDICTIVE grain. Reads the per-sweep health
+//        history forward and flags clients still in a safe band but projected to slide
+//        THROUGH a floor within the horizon — "will churn unless you act," not "churned."
+//        Agency surface ONLY (the roster names other clients); never per-client payload.
+//
 //   GET  /api/insights/:clientId[?limit=]
 //        One client's active feed — the per-client Insights card — plus that
 //        client's own health verdict (same pure synthesis as the roster), its
@@ -63,6 +69,7 @@ const {
   getPortfolioBenchmarks, getClientStanding,
   getRecentRecoveries, getPortfolioRecoveries,
   getPortfolioSystemic,
+  getPortfolioTrajectory,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -114,6 +121,15 @@ function parseMinShare(raw) {
   const n = Number(raw)
   if (!Number.isFinite(n) || n < 0) return null
   return Math.min(n, 1)
+}
+
+// Clamp ?horizon (trajectory: sweeps ahead to project) to 1..52; undefined/invalid → null
+// so the lib default of 4 stands. Same string-coercion rationale as parseWeeks.
+function parseHorizon(raw) {
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return null
+  return Math.min(Math.floor(n), 52)
 }
 
 // Insights FK-reference clients(id); a sweep for an unknown client would trip the
@@ -227,6 +243,31 @@ router.get('/systemic', async (req, res) => {
   } catch (err) {
     console.error('[insights] GET systemic error', err.message)
     res.status(500).json({ error: 'Failed to load systemic signals' })
+  }
+})
+
+// ── GET /api/insights/trajectory ──────────────────────────────────────────────
+// Portfolio EARLY-WARNING ROSTER: the PREDICTIVE grain. Every other endpoint is
+// retrospective — it reports where clients stand now or stood lately. This one reads the
+// per-sweep health history (table 017) FORWARD: clients still inside a safe band but, by
+// the slope of their own recent scores, projected to slide THROUGH a band floor within the
+// horizon. It is the difference between "this client churned" and "this client will churn
+// unless you act this week." rankEarlyWarnings already filters to the actionable set
+// (crossing a floor, declining, not already-critical) and ranks by urgency. AGENCY-ONLY:
+// the roster names other clients, the same cross-tenant boundary /systemic and /benchmarks
+// respect, so it lives here and never rides the per-client GET /:clientId (or shared-link)
+// payload. Declared before the :clientId route so the literal "trajectory" can never be
+// captured as a client id. Optional ?horizon (sweeps ahead to project, 1..52; default 4).
+router.get('/trajectory', async (req, res) => {
+  try {
+    const opts = {}
+    const h = parseHorizon(req.query.horizon)
+    if (h != null) opts.horizon = h
+    const out = await getPortfolioTrajectory(opts)
+    res.json({ ...out, count: out.warnings.length })
+  } catch (err) {
+    console.error('[insights] GET trajectory error', err.message)
+    res.status(500).json({ error: 'Failed to load trajectory warnings' })
   }
 })
 

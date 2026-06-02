@@ -107,6 +107,15 @@ const { classifyRecovery } = require('./outcomes')
 // other clients + the book-wide share). See lib/systemic.js — findings in, descriptors out.
 const { detectSystemicSignals } = require('./systemic')
 
+// Predictive early-warning (PURE): every other layer is reactive — it scores where a
+// client stands TODAY. rankEarlyWarnings projects each client's SERIES of past health
+// scores FORWARD (forecast.js's Holt) and returns only the clients still green but
+// sliding THROUGH the floor of their band — "heading for trouble in N weeks," with the
+// runway to act. Fed by health_score_history (017), which snapshotPortfolioHealth below
+// writes one row per client per sweep. AGENCY-ONLY as a ranked roster (it names clients),
+// though each verdict is computed from that client's OWN scores alone. See lib/trajectory.js.
+const { rankEarlyWarnings } = require('./trajectory')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -1805,6 +1814,92 @@ async function getPortfolioSystemic(opts = {}) {
   }
 }
 
+// ── predictive early-warning: the per-sweep memory + the forward-looking roster ──
+// Trailing-window size for the trajectory read: how many recent sweep scores feed the
+// Holt projection per client. 12 fits a real trend without letting stale regime data
+// dominate; floored at MIN so a thin series still attempts a fit (trajectory itself
+// withholds confidence until MIN_FIT_N — see lib/trajectory.js).
+const TRAJECTORY_HISTORY     = 12
+const MIN_TRAJECTORY_HISTORY = 4
+
+// Persist ONE health score per client for THIS sweep — the memory that makes prediction
+// possible. Health is otherwise recomputed from the live feed each read and thrown away
+// (getPortfolioHealth), so lib/trajectory had no series to project. This writes the score
+// FORWARD into health_score_history (017). It reuses getPortfolioHealth's exact roster, so
+// the persisted number is byte-for-byte the score the triage roster shows — one source of
+// truth, never a re-derivation that could drift. Every row in one sweep shares a single
+// `scored_at` (the sweep's stamp, or "now") so ORDER BY scored_at is a true sweep ordering.
+// Additive + best-effort by the caller: a history hiccup must never abort the nightly sweep
+// that already did the real per-client work. Returns { snapshotted } for the sweep summary.
+async function snapshotPortfolioHealth(stampIso) {
+  const roster = await getPortfolioHealth()
+  if (!roster.length) return { snapshotted: 0 }
+  const stamp = stampIso || new Date().toISOString()
+  let snapshotted = 0
+  for (const r of roster) {
+    if (r.client_id == null || !Number.isFinite(r.score) || !r.band) continue
+    await query(
+      `INSERT INTO health_score_history (client_id, scored_at, score, band)
+       VALUES ($1, $2, $3, $4)`,
+      [r.client_id, stamp, r.score, r.band])
+    snapshotted++
+  }
+  return { snapshotted }
+}
+
+// PORTFOLIO EARLY-WARNING ROSTER: the predictive grain. getPortfolioHealth answers "where
+// do I look first TODAY?"; this answers "who is still green but HEADING for trouble?" — the
+// one question that buys runway to act before a client crosses into a worse band. Two reads,
+// no N+1, mirroring the other portfolio passes: every client's trailing health-score history
+// (017, oldest→newest) and the full client list for id→name. lib/trajectory does the pure
+// Holt projection + band-crossing logic; here we only group each client's series, keep the
+// trailing window, and enrich each warning with the client name for the roster.
+//
+// AGENCY-ONLY by contract: the ranked roster names other clients, the same cross-tenant
+// boundary health's triage list and systemic respect — the caller mounts it behind
+// requireAuth and must NEVER let it ride a per-client or shared-link payload. (A SINGLE
+// client's own verdict is per-client-safe — computed from that client's scores alone — but
+// this whole-book ranking is not.) Cold-start / thin history → a clean { warnings: [] }, so
+// a young install renders exactly as it did before this layer existed.
+async function getPortfolioTrajectory(opts = {}) {
+  const req = numOrNull(opts.history)
+  const history = req != null && req > 0
+    ? Math.max(MIN_TRAJECTORY_HISTORY, Math.trunc(req))
+    : TRAJECTORY_HISTORY
+
+  // Whole-history read grouped in JS (not a per-client windowed query): portable across the
+  // PG/SQLite split with no window functions, and the volume is small (clients × sweeps). The
+  // ORDER BY makes each client's scores chronological; slice(-history) bounds what feeds Holt.
+  const [scores, clients] = await Promise.all([
+    query(
+      `SELECT client_id, score
+         FROM health_score_history
+        ORDER BY client_id ASC, scored_at ASC`),
+    query(`SELECT id, name FROM clients`),
+  ])
+  const nameById = new Map()
+  for (const c of clients.rows) nameById.set(String(c.id), c.name)
+
+  const byClient = new Map()
+  for (const r of scores.rows) {
+    const cid = String(r.client_id)
+    let arr = byClient.get(cid)
+    if (!arr) { arr = []; byClient.set(cid, arr) }
+    arr.push(Number(r.score))
+  }
+
+  const groups = []
+  for (const [cid, arr] of byClient) {
+    groups.push({
+      client_id:   cid,
+      client_name: nameById.get(cid) || null,
+      scores:      arr.slice(-history),
+    })
+  }
+
+  return { warnings: rankEarlyWarnings(groups, opts) }
+}
+
 // A metric is a REAL, comparable measurement for a client only when its denominator
 // basis is positive over the window. Without this gate, derive()'s zero-fill would
 // inject fake "perfect" zeros — a client who ran no ads posts cpl 0 / roas 0 and
@@ -1925,7 +2020,27 @@ async function runInsightsForAll({ asOf, weeks = 26 } = {}) {
       errors.push({ client_id: id, error: err.message })
     }
   }
-  return { clients: rows.length, swept, failed, findings, errors }
+
+  // After the whole book is scored, snapshot one health row per client into
+  // health_score_history — the memory the predictive early-warning layer reads next
+  // sweep (lib/trajectory). Stamp every row with the sweep's own clock (asOf when the
+  // tests pin one, else "now") so the series aligns. Best-effort and isolated, exactly
+  // like the per-client loop: a history-write hiccup must never fail a sweep that has
+  // already persisted the real findings. Errors are recorded, not thrown.
+  let snapshotted = 0
+  try {
+    const stamp = (() => {
+      if (asOf == null) return undefined
+      const d = new Date(asOf)
+      return Number.isNaN(d.getTime()) ? undefined : d.toISOString()
+    })()
+    const snap = await snapshotPortfolioHealth(stamp)
+    snapshotted = snap.snapshotted
+  } catch (err) {
+    errors.push({ client_id: null, error: `health-snapshot: ${err.message}` })
+  }
+
+  return { clients: rows.length, swept, failed, findings, snapshotted, errors }
 }
 
 module.exports = {
@@ -1953,4 +2068,6 @@ module.exports = {
   getPortfolioBenchmarks, getClientStanding,
   // cross-client common-cause detection (agency-only — names other clients + book share)
   getPortfolioSystemic,
+  // predictive early-warning (agency-only): per-sweep health snapshot + forward-looking roster
+  snapshotPortfolioHealth, getPortfolioTrajectory,
 }

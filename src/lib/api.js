@@ -172,6 +172,17 @@ export const api = {
     const q = qs.toString()
     return get(`/api/insights/systemic${q ? `?${q}` : ''}`)
   },
+  // getTrajectory() → portfolio EARLY-WARNING roster: the PREDICTIVE grain. Reads the
+  // per-sweep health history forward and flags clients still in a safe band but, by the
+  // slope of their own scores, projected to slide THROUGH a floor within ?horizon sweeps —
+  // "will churn unless you act this week," not "churned." AGENCY-ONLY: the roster names
+  // other clients, so (like getSystemic) it never rides getClientInsights().
+  getTrajectory:      (opts = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.horizon != null) qs.set('horizon', opts.horizon)
+    const q = qs.toString()
+    return get(`/api/insights/trajectory${q ? `?${q}` : ''}`)
+  },
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

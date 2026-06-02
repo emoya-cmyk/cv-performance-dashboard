@@ -55,6 +55,8 @@ const {
   getRecentRecoveries, getPortfolioRecoveries,
   // cross-client common-cause (agency-only): the systemic scan over the active book.
   getPortfolioSystemic,
+  // predictive early-warning (agency-only): persist the per-sweep health series, read it forward.
+  snapshotPortfolioHealth, getPortfolioTrajectory,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -1198,6 +1200,104 @@ test('sweep: runInsightsForAll covers every client and reports a clean summary',
     assert.ok(feed.some(f => f.kind === 'forecast' && f.metric === 'revenue'),
       'the portfolio sweep persisted each client’s forecast')
   }
+})
+
+// ============================================================
+// 3b. PREDICTIVE EARLY WARNING — snapshot the health series, then read it forward
+// ============================================================
+// intel-v4 (5b). Every reactive layer above reads the CURRENT book. This pair proves
+// the PREDICTIVE wiring at its two I/O seams. (1) PERSIST: runInsightsForAll — and the
+// direct snapshotPortfolioHealth — write one health row per client per sweep into
+// health_score_history (table 017, the "missing memory" health never used to keep).
+// (2) READ FORWARD: getPortfolioTrajectory reads that series back, groups it by client,
+// and hands it to trajectory.js's pure rankEarlyWarnings. The projection math itself is
+// exhaustively unit-tested in trajectory.test.js; these tests pin only the persistence +
+// read/group seam that 5b adds on top of it.
+
+test('predictive snapshot: snapshotPortfolioHealth persists the live roster byte-for-byte, and runInsightsForAll stamps one row per client per sweep', async () => {
+  await ready()
+  // One client bleeding a lone critical (→ 45 / at_risk), one spotless (→ 100 / healthy):
+  // the exact two-number contract the getPortfolioHealth roster test pins above.
+  const crit  = await freshClient('Snapshot Critical Co')
+  const clean = await freshClient('Snapshot Clean Co')
+  await upsertInsight(crit, mkFinding('anomaly', 'revenue', 'critical', 9), { ...mkNarr('snap-crit'), fingerprint: `fp-snc-${crit}` })
+
+  const { rows: [{ n }] } = await db.query(`SELECT COUNT(*) AS n FROM clients`)
+  const total = Number(n)
+
+  // A direct snapshot at a pinned stamp writes one row for EVERY client in the book —
+  // the findingless included (a series with holes would make the forecast lie).
+  const STAMP = '2026-05-20T07:00:00.000Z'
+  const snap = await snapshotPortfolioHealth(STAMP)
+  assert.equal(snap.snapshotted, total, 'every client in the book is snapshotted, the findingless included')
+
+  // What landed is byte-identical to the live roster the snapshot read from.
+  const roster = await getPortfolioHealth()
+  const liveCrit  = roster.find(r => r.client_id === crit)
+  const liveClean = roster.find(r => r.client_id === clean)
+  assert.equal(liveCrit.score, 45);   assert.equal(liveCrit.band, 'at_risk')
+  assert.equal(liveClean.score, 100); assert.equal(liveClean.band, 'healthy')
+
+  const rowFor = async (cid) => {
+    const { rows } = await db.query(
+      `SELECT score, band FROM health_score_history WHERE client_id = $1 AND scored_at = $2`, [cid, STAMP])
+    return rows
+  }
+  const hc = await rowFor(crit), hk = await rowFor(clean)
+  assert.equal(hc.length, 1); assert.equal(Number(hc[0].score), 45);  assert.equal(hc[0].band, 'at_risk')
+  assert.equal(hk.length, 1); assert.equal(Number(hk[0].score), 100); assert.equal(hk[0].band, 'healthy')
+
+  // The nightly sweep folds the snapshot into its own run: the normalized asOf becomes the
+  // shared scored_at, and the summary now reports how many history rows it wrote.
+  const res = await runInsightsForAll({ asOf: '2026-05-21' })
+  assert.equal(res.snapshotted, res.clients, 'the sweep snapshots exactly the clients it swept')
+  const { rows: [{ m }] } = await db.query(
+    `SELECT COUNT(*) AS m FROM health_score_history WHERE scored_at = $1`, ['2026-05-21T00:00:00.000Z'])
+  assert.equal(Number(m), res.clients, 'one row per client landed at the sweep’s shared timestamp')
+})
+
+test('predictive read: getPortfolioTrajectory flags a client sliding toward a band floor, stays silent on a steady one, and threads the horizon', async () => {
+  await ready()
+  const slider = await freshClient('Sliding Toward Trouble Co')
+  const steady = await freshClient('Steady As She Goes Co')
+
+  const WEEKS = ['2026-03-30', '2026-04-06', '2026-04-13', '2026-04-20', '2026-04-27', '2026-05-04']
+  const seedHistory = async (cid, scores, band) => {
+    for (let i = 0; i < scores.length; i++)
+      await db.query(
+        `INSERT INTO health_score_history (client_id, scored_at, score, band) VALUES ($1,$2,$3,$4)`,
+        [cid, `${WEEKS[i]}T07:00:00.000Z`, scores[i], band])
+  }
+  // slider: every week still inside WATCH (65–84), but bleeding ~3.6 pts/sweep — Holt
+  // projects it straight THROUGH the 65 floor into at_risk. steady: pinned healthy, flat.
+  await seedHistory(slider, [84, 80, 76, 72, 68, 66], 'watch')
+  await seedHistory(steady, [100, 100, 100, 100, 100, 100], 'healthy')
+
+  const out = await getPortfolioTrajectory()
+  const w = out.warnings.find(x => x.client_id === slider)
+  assert.ok(w, 'the sliding client is on the early-warning roster')
+  assert.equal(w.client_name, 'Sliding Toward Trouble Co')  // the JOINed name rides along
+  assert.equal(w.current_band, 'watch')                     // still in a safe band today…
+  assert.equal(w.direction, 'deteriorating')                // …but trending down…
+  assert.equal(w.band_change, 'downgrade')                  // …into a worse band by the horizon…
+  assert.ok(w.crossing, 'a projected floor-crossing is attached')
+  assert.equal(w.crossing.from_band, 'watch')
+  assert.equal(w.crossing.to_band, 'at_risk')
+  assert.equal(w.crossing.cutoff, 65)
+  assert.equal(w.horizon, 4)                                // default projection length
+
+  // A steady, in-band client has no floor within reach → never a warning.
+  assert.equal(out.warnings.some(x => x.client_id === steady), false,
+    'a flat, in-band client is not flagged')
+
+  // The horizon opt threads end-to-end: ask for a longer projection and the verdict says so.
+  const longer = await getPortfolioTrajectory({ horizon: 6 })
+  const w6 = longer.warnings.find(x => x.client_id === slider)
+  assert.ok(w6 && w6.horizon === 6, 'the horizon flows through to the projection')
+
+  // Pure read: the same persisted series yields an identical roster on a second call.
+  const again = await getPortfolioTrajectory()
+  assert.deepEqual(again.warnings, out.warnings)
 })
 
 // ============================================================
