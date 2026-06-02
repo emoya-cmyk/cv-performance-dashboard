@@ -160,6 +160,18 @@ export const api = {
   // first, each tagged with client_name. The positive counterpart to getInsights().
   // A client's OWN recent wins ride along inside getClientInsights() (.recoveries).
   getRecoveries:      (days)     => get(`/api/insights/recoveries${days ? `?days=${days}` : ''}`),
+  // getSystemic() → portfolio SYSTEMIC scan: cross-client common-cause clusters (the same
+  // adverse channel/metric/direction independently hitting ≥ minClients clients), collapsed
+  // into one signal apiece — "leads down across 14 clients, 38% of the book". Answers "is
+  // this us, or the platform?" AGENCY-ONLY: a signal names other clients + the book-wide
+  // share, so this never rides getClientInsights() — it's the agency Intelligence view only.
+  getSystemic:        (opts = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.minClients != null) qs.set('minClients', opts.minClients)
+    if (opts.minShare   != null) qs.set('minShare',   opts.minShare)
+    const q = qs.toString()
+    return get(`/api/insights/systemic${q ? `?${q}` : ''}`)
+  },
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

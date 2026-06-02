@@ -25,6 +25,13 @@
 //        findings (problem measurably cleared), newest fix first, each tagged with
 //        its client_name. The positive counterpart to GET / (active problems).
 //
+//   GET  /api/insights/systemic[?minClients=&minShare=]
+//        Portfolio SYSTEMIC SCAN: cross-client common-cause clusters — the same adverse
+//        signal (channel, metric, direction) independently hitting ≥ minClients distinct
+//        clients, collapsed into ONE signal that answers "is this us, or the platform?"
+//        Agency surface ONLY (a signal names other clients + the book-wide share — the
+//        same cross-tenant boundary as /benchmarks); never in the per-client payload.
+//
 //   GET  /api/insights/:clientId[?limit=]
 //        One client's active feed — the per-client Insights card — plus that
 //        client's own health verdict (same pure synthesis as the roster), its
@@ -55,6 +62,7 @@ const {
   getInsightFeed, getPortfolioInsights, getPortfolioHealth,
   getPortfolioBenchmarks, getClientStanding,
   getRecentRecoveries, getPortfolioRecoveries,
+  getPortfolioSystemic,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -88,6 +96,24 @@ function parseDays(raw, fallback) {
   const n = Number(raw)
   if (!Number.isFinite(n) || n < 1) return fallback
   return Math.min(Math.floor(n), 365)
+}
+
+// Clamp ?minClients (systemic distinct-client floor) to 1..100; undefined/invalid → null
+// so the lib default of 3 stands. Coerced HERE — query params arrive as strings.
+function parseMinClients(raw) {
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return null
+  return Math.min(Math.floor(n), 100)
+}
+
+// Clamp ?minShare (systemic book-fraction floor) to [0,1]; undefined/invalid → null so the
+// lib default of 0 (off) stands.
+function parseMinShare(raw) {
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.min(n, 1)
 }
 
 // Insights FK-reference clients(id); a sweep for an unknown client would trip the
@@ -174,6 +200,33 @@ router.get('/recoveries', async (req, res) => {
   } catch (err) {
     console.error('[insights] GET recoveries error', err.message)
     res.status(500).json({ error: 'Failed to load recoveries' })
+  }
+})
+
+// ── GET /api/insights/systemic ────────────────────────────────────────────────
+// Portfolio SYSTEMIC SCAN: the cross-client common-cause pass. When one upstream event
+// hits the whole book (Meta dark platform-wide, an iOS update tanking attribution), the
+// per-client engine surfaces it as N independent findings; this collapses each such
+// cluster into ONE signal — "leads down across 14 clients, 38% of the book, 4 critical" —
+// answering the only question that changes the response: "is this us, or the platform?"
+// AGENCY-ONLY: a signal names other clients (affected_clients) + the book-wide share, the
+// same cross-tenant boundary /benchmarks respects, so it lives here and never rides the
+// per-client GET /:clientId (or any shared-link) payload. Declared before the :clientId
+// route so the literal "systemic" can never be captured as a client id. Optional
+// ?minClients (distinct-client floor, default 3) and ?minShare (0..1 book-fraction floor,
+// default 0 = off; the count gate is the size-independent primary).
+router.get('/systemic', async (req, res) => {
+  try {
+    const opts = {}
+    const mc = parseMinClients(req.query.minClients)
+    if (mc != null) opts.minClients = mc
+    const ms = parseMinShare(req.query.minShare)
+    if (ms != null) opts.minShare = ms
+    const out = await getPortfolioSystemic(opts)
+    res.json({ ...out, count: out.signals.length })
+  } catch (err) {
+    console.error('[insights] GET systemic error', err.message)
+    res.status(500).json({ error: 'Failed to load systemic signals' })
   }
 })
 

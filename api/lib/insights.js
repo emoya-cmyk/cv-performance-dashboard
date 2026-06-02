@@ -98,6 +98,15 @@ const { linkCoverageToImpact } = require('./correlate')
 // lib/outcomes.js — finding + in-memory probe in, a verdict out; no DB, never throws.
 const { classifyRecovery } = require('./outcomes')
 
+// Cross-client common-cause detection (PURE): the engine evaluates each client alone, so
+// one upstream event (Meta dark platform-wide, an iOS update tanking attribution) surfaces
+// as N independent per-client findings. detectSystemicSignals groups the portfolio's active
+// findings by the signal that would share a cause — (channel, metric, direction) — and emits
+// one signal per cluster that hit ≥ minClients distinct clients, answering the only question
+// that changes the response: "is this us, or the platform?" AGENCY-ONLY (a signal names
+// other clients + the book-wide share). See lib/systemic.js — findings in, descriptors out.
+const { detectSystemicSignals } = require('./systemic')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -1739,6 +1748,63 @@ async function getPortfolioHealth() {
   return rankPortfolio([...groups.values()])
 }
 
+// Portfolio SYSTEMIC SCAN: the cross-client common-cause pass. Where getPortfolioHealth
+// rolls each client into one score (the "where do I look first?" grain) and the feed is a
+// flat stream of individual findings ("what is wrong"), this is the grain for the question
+// a human would otherwise answer by hand — "are these eleven 'leads down' findings ONE
+// story, or eleven?" Two reads, no N+1, mirroring getPortfolioHealth: every ACTIVE finding
+// whole-fleet UN-sliced (systemic detection must see the COMPLETE book, never a display-
+// truncated view — exactly why this can't reuse getPortfolioInsights' limit-capped stream)
+// and the full client list, so portfolioSize counts the healthy clients too — share is "of
+// the whole book", not "of clients with findings" (a denominator that can only overstate
+// breadth). normalizeInsightRow is the right normalizer here for one load-bearing reason:
+// it PARSES evidence from its stored JSON string to an object, and systemic reads
+// evidence.channel — under the SQLite shim a raw evidence string would make `typeof ===
+// 'object'` false and silently drop every coverage_gap signal. lib/systemic does the pure
+// grouping + scoring; here we only load, pass the true size, and enrich each signal's id set
+// with client names for the roster the surface renders. member_indices (systemic's internal
+// map-back aid into the array WE hold) is stripped — meaningless to an HTTP consumer.
+//
+// AGENCY-ONLY by contract: a signal names other clients (affected_clients) and the book-wide
+// share, the same cross-tenant boundary the anonymized peer benchmark respects. The caller
+// mounts this behind requireAuth and must NEVER let it ride a per-client or shared-link
+// payload. Empty book / no qualifying cluster → { portfolio_size, signals: [] }.
+async function getPortfolioSystemic(opts = {}) {
+  const [findings, clients] = await Promise.all([
+    query(
+      `SELECT i.*, c.name AS client_name
+         FROM insights i
+         JOIN clients c ON c.id = i.client_id
+        WHERE i.scope = 'client' AND i.status IN ('open', 'acknowledged')`
+    ),
+    query(`SELECT id, name FROM clients`),
+  ])
+  // Authoritative id→name map so each signal can show WHICH clients, not just how many.
+  const nameById = new Map()
+  for (const c of clients.rows) nameById.set(String(c.id), c.name)
+
+  // Single-arg normalize (NOT `.map(normalizeInsightRow)`): Array.map would leak the index
+  // in as precisionMap. Precision is irrelevant to systemic grouping, so we skip the
+  // whole-fleet precision read — we only need evidence parsed + the raw signal columns.
+  const normalized = findings.rows.map(r => normalizeInsightRow(r))
+  const { signals } = detectSystemicSignals(normalized, {
+    portfolioSize: clients.rows.length,
+    ...opts,
+  })
+
+  // Enrich into a NEW array (systemic's output is never mutated — its purity is a tested
+  // contract): drop the internal member_indices, keep the stable id list, add the roster.
+  return {
+    portfolio_size: clients.rows.length,
+    signals: signals.map(({ member_indices, ...s }) => ({
+      ...s,
+      affected_clients: s.affected_client_ids.map(id => ({
+        id, name: nameById.get(String(id)) || null,
+      })),
+    })),
+  }
+}
+
 // A metric is a REAL, comparable measurement for a client only when its denominator
 // basis is positive over the window. Without this gate, derive()'s zero-fill would
 // inject fake "perfect" zeros — a client who ran no ads posts cpl 0 / roas 0 and
@@ -1885,4 +1951,6 @@ module.exports = {
   getRecentRecoveries, getPortfolioRecoveries,
   // cross-client peer benchmarking (agency distribution + privacy-safe client standing)
   getPortfolioBenchmarks, getClientStanding,
+  // cross-client common-cause detection (agency-only — names other clients + book share)
+  getPortfolioSystemic,
 }

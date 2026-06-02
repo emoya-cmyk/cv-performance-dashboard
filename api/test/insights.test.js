@@ -53,6 +53,8 @@ const {
   getPortfolioBenchmarks, getClientStanding,
   // recoveries (read): the "what we fixed" win stream — per-client + whole-portfolio.
   getRecentRecoveries, getPortfolioRecoveries,
+  // cross-client common-cause (agency-only): the systemic scan over the active book.
+  getPortfolioSystemic,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -1032,6 +1034,83 @@ test('portfolio health: getPortfolioHealth rolls every client into one score, ra
   assert.equal(rc2.score, 100)
   assert.equal(rc2.band, 'healthy')
   assert.equal(rc2.counts.total, 0)
+})
+
+test('portfolio systemic: getPortfolioSystemic collapses a common-cause cluster across clients, names them, threads the floor, and clears below it', async () => {
+  await ready()
+  // Three clients independently hit by the SAME adverse signal — leads down on one channel —
+  // the textbook "is this us, or the platform?" cluster the systemic scan exists to collapse
+  // into a single agency-facing signal. A unique channel token (pid-scoped) isolates MY
+  // cluster from whatever else the shared test DB is carrying.
+  const CH  = `systemic_probe_${process.pid}`
+  const KEY = `${CH}|leads|down`
+  const n1 = 'Systemic Alpha Co', n2 = 'Systemic Bravo Co', n3 = 'Systemic Carol Co'
+  const s1 = await freshClient(n1)
+  const s2 = await freshClient(n2)
+  const s3 = await freshClient(n3)
+
+  // anomaly/leads/down on the same channel; two critical + one warning → severity rolls up to
+  // critical. evidence.channel is the load-bearing field: it only survives the read if
+  // getPortfolioSystemic PARSES the stored JSON (the SQLite shim keeps evidence as TEXT) — a
+  // dropped channel would re-key the signal under `*|leads|down` and fail the channel assert
+  // below. That is exactly the wiring this test guards.
+  const mkSys = (sev) => ({
+    scope: 'client', kind: 'anomaly', metric: 'leads', severity: sev, direction: 'down',
+    score: 7, period_start: '2026-05-04',
+    evidence: { channel: CH, channel_label: 'Systemic Probe', x: 1 },
+  })
+  await upsertInsight(s1, mkSys('critical'), { ...mkNarr('s1'), fingerprint: `fp-sy1-${s1}` })
+  await upsertInsight(s2, mkSys('critical'), { ...mkNarr('s2'), fingerprint: `fp-sy2-${s2}` })
+  await upsertInsight(s3, mkSys('warning'),  { ...mkNarr('s3'), fingerprint: `fp-sy3-${s3}` })
+
+  const out = await getPortfolioSystemic()
+  assert.ok(Array.isArray(out.signals), 'returns a signals array')
+  assert.ok(typeof out.portfolio_size === 'number' && out.portfolio_size >= 3,
+    'echoes the portfolio-size denominator')
+
+  const sig = out.signals.find(s => s.key === KEY)
+  assert.ok(sig, 'the three independent leads-down findings collapse into ONE systemic signal')
+
+  // The descriptor names the cluster exactly — the channel survived the JSON round-trip
+  // (proves the evidence parse is in the read path; a dropped channel lands under `*|leads|down`).
+  assert.equal(sig.channel, CH)
+  assert.equal(sig.channel_label, 'Systemic Probe')
+  assert.equal(sig.metric, 'leads')
+  assert.equal(sig.direction, 'down')
+  assert.deepEqual(sig.kinds, ['anomaly'])
+  assert.equal(sig.severity, 'critical')            // ≥1 critical member → critical roll-up
+  assert.equal(sig.affected_count, 3)
+
+  // The affected set is exactly my three clients, and the HTTP-facing roster carries the
+  // JOINed names (affected_client_ids enriched → affected_clients [{id,name}], same order).
+  const mine = [s1, s2, s3].sort((a, b) => String(a).localeCompare(String(b)))
+  assert.deepEqual(sig.affected_client_ids, mine)
+  const nameById = { [s1]: n1, [s2]: n2, [s3]: n3 }
+  assert.deepEqual(sig.affected_clients.map(c => c.id),   mine)
+  assert.deepEqual(sig.affected_clients.map(c => c.name), mine.map(id => nameById[id]))
+
+  // The internal map-back pointer is stripped before the signal reaches an HTTP consumer.
+  assert.equal('member_indices' in sig, false, 'member_indices is internal, never serialized')
+
+  // Share/confidence are present and well-formed. Exact values are pinned in the PURE
+  // systemic.test.js; here the denominator is the whole shared DB, so assert bounds only.
+  assert.ok(sig.confidence > 0 && sig.confidence <= 1, 'confidence ∈ (0,1]')
+  assert.ok(sig.share_pct >= 0 && sig.share_pct <= 100, 'share_pct is a percentage')
+  assert.ok(sig.share_of_portfolio > 0 && sig.share_of_portfolio <= 1, 'share ∈ (0,1]')
+
+  // The distinct-client floor threads straight through from opts: at minClients=4 my
+  // 3-client cluster is below the bar and must NOT surface.
+  const strict = await getPortfolioSystemic({ minClients: 4 })
+  assert.ok(!strict.signals.some(s => s.key === KEY),
+    'a below-floor cluster is withheld when minClients is raised')
+
+  // Lifecycle: resolve one member → the cluster falls to two clients (< the default floor of
+  // three) and the signal cleanly disappears. Deterministic regardless of the shared-DB
+  // denominator — the whole reason the call counts DISTINCT clients.
+  await resolveInsight(await idForFingerprint(`fp-sy3-${s3}`))
+  const after = await getPortfolioSystemic()
+  assert.ok(!after.signals.some(s => s.key === KEY),
+    'dropping below minClients clears the systemic signal')
 })
 
 test('feed: an acknowledged finding still auto-expires once its condition clears', async () => {
