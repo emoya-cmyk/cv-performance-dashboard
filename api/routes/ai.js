@@ -27,7 +27,7 @@ const express = require('express')
 const { query } = require('../db')
 const { weekStartOf } = require('../lib/rollup')
 const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
-const { runAsk } = require('../lib/ask')
+const { runAsk, runSuggestions } = require('../lib/ask')
 
 const router = express.Router()
 
@@ -54,8 +54,9 @@ async function clientExists(clientId) {
 // never from a body param a caller could forge to widen their own view. The
 // posture is an allow-list: only an explicit `agency` role may ever see across
 // clients; every other token is pinned to its own client_id or refused.
-//   agency role → may optionally narrow to one client via body.clientId
-//                 (must exist → 404); absent → the whole book (null scope).
+//   agency role → may optionally narrow to one client via clientId (body for the
+//                 POST ask, query for the GET suggestions; must exist → 404);
+//                 absent → the whole book (null scope).
 //   any other   → hard-pinned to its own token client_id; the body's clientId is
 //                 ignored. No client_id on a non-agency token is a broken account
 //                 that can't be safely scoped → 403.
@@ -65,7 +66,7 @@ async function clientExists(clientId) {
 async function resolveAskScope(req) {
   const user = req.user || {}
   if (user.role === 'agency') {
-    const wanted = req.body?.clientId
+    const wanted = req.body?.clientId ?? req.query?.clientId
     if (wanted != null && wanted !== '') {
       if (!(await clientExists(wanted))) return { error: 'client not found', status: 404 }
       return { scopeClientId: wanted }
@@ -145,6 +146,28 @@ router.post('/ask', async (req, res) => {
     }
     console.error('[ai] POST ask error', err.message)
     res.status(500).json({ error: 'Failed to answer question' })
+  }
+})
+
+// ── GET /api/ai/ask/suggestions[?clientId=…] ──────────────────────────────────
+// Dynamic opening chips for the Ask box: the biggest period-over-period movers
+// for whatever the caller is allowed to see — the SAME resolveAskScope boundary
+// as POST /ask (a client token only ever gets its own movers; an agency token
+// gets the whole book, or one client via ?clientId). Pure DB aggregation, NO LLM,
+// so it never needs ANTHROPIC_API_KEY. A soft/runtime fault degrades to an empty
+// list (HTTP 200) so the box quietly falls back to its static suggestions instead
+// of surfacing an error on first paint. The scope authz boundary (403/404) is
+// still honoured — only runtime faults degrade.
+router.get('/ask/suggestions', async (req, res) => {
+  try {
+    const scope = await resolveAskScope(req)
+    if (scope.error) return res.status(scope.status).json({ error: scope.error })
+
+    const { suggestions, window_label } = await runSuggestions({ scopeClientId: scope.scopeClientId })
+    res.json({ suggestions, window_label })
+  } catch (err) {
+    console.error('[ai] GET ask/suggestions error', err.message)
+    res.json({ suggestions: [], window_label: 'vs the prior week' })  // soft-degrade, never 5xx
   }
 })
 

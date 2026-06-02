@@ -142,6 +142,13 @@ export const api = {
   getLatestReport: (clientId)     => get(`/api/reports/${clientId}/latest`),
   // Ask-your-data (Sprint 2): natural-language portfolio questions
   ask,
+  // askSuggestions (intel-v6): dynamic opening chips for the Ask box — the biggest
+  // period-over-period movers for whatever the caller is allowed to see, each a
+  // click-to-run question. Same scope rules as ask(): a client token only ever gets
+  // its own movers; an agency token gets the whole book, or one client via clientId.
+  // Returns { suggestions, window_label }; the route soft-degrades to an empty list
+  // on a runtime fault, so the box quietly falls back to its static prompts.
+  askSuggestions: (clientId) => get(`/api/ai/ask/suggestions${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
   // Weekly AI recap (intel-v5): the grounded, verifier-checked narration of a client's most
   // recently completed week — now carrying the intelligence-posture digest folded into its
   // evidence pack (lib/intelDigest.js). getRecap() READS it, generating on the first miss for

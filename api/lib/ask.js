@@ -636,8 +636,63 @@ async function runAsk(question, opts = {}) {
   }
 }
 
+// ── DYNAMIC SUGGESTIONS (intel-v6 (3): data-driven "movers") ──────────────────
+// Power the Ask box's opening chips with what ACTUALLY moved for the caller's
+// scope, instead of a static hard-coded list. For each metric we compute its
+// most-recent-complete-week total and the week-before total — through the SAME
+// scope-safe compile path runAsk uses (so a scoped caller's movers can't read
+// another client) — then hand the raw pairs to lib/suggest.rankMovers, which
+// reuses THIS module's computeComparison/formatValue so a chip's headline can
+// never disagree with the answer its question produces.
+//
+// No LLM: ~14 small bound aggregate queries, all deterministic. The baseline
+// window is a date predicate on wr.week_start (metric-independent), so we resolve
+// it ONCE and reuse the same { wheres } for every metric's baseline half.
+//
+// require('./suggest') is LAZY (here, not at module top) on purpose: suggest.js
+// top-level requires THIS file, so deferring our require to call-time keeps the
+// cycle from biting — ask.js is fully loaded before suggest.js destructures it.
+//
+// @param {object} [opts]
+// @param {Date}    [opts.now]            inject "now" (tests / fixed clock)
+// @param {boolean} [opts.isPg]           override backend detection
+// @param {string}  [opts.scopeClientId]  HARD client boundary (the /my-dashboard
+//                                         surface); null = the whole agency book
+// @param {number}  [opts.limit]          max chips (rankMovers clamps 1..7)
+// @returns {Promise<{window_label:string, suggestions:Array}>}
+async function runSuggestions(opts = {}) {
+  const { rankMovers } = require('./suggest')   // lazy — see note above
+  const now   = opts.now || new Date()
+  const isPg  = opts.isPg != null ? opts.isPg : !!process.env.DATABASE_URL
+  const scope = opts.scopeClientId != null ? opts.scopeClientId : null
+
+  // Last COMPLETE week vs the week before — the most actionable, fully-closed
+  // comparison. comparisonRange depends only on time_range, so resolve it once.
+  const probe = validateSpec({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  const cmp   = comparisonRange(probe, now)
+  if (!cmp) return { window_label: 'vs the prior week', suggestions: [] }   // defensive (last_week is always comparable)
+  const windowLabel = 'vs ' + cmp.label
+
+  const raw = await Promise.all(Object.keys(METRICS).map(async (metric) => {
+    const spec  = validateSpec({ metric, group_by: 'none', time_range: 'last_week' })
+    const curC  = compileQuery(spec, now, isPg, scope)              // last week
+    const baseC = compileQuery(spec, now, isPg, scope, () => cmp)   // the week before (same scope + whitelist)
+    const [curRes, baseRes] = await Promise.all([
+      query(curC.sql, curC.params),
+      query(baseC.sql, baseC.params),
+    ])
+    return {
+      metric,
+      current:  Number(curRes.rows[0]  && curRes.rows[0].value)  || 0,
+      baseline: Number(baseRes.rows[0] && baseRes.rows[0].value) || 0,
+    }
+  }))
+
+  return { window_label: windowLabel, suggestions: rankMovers(raw, { limit: opts.limit, windowLabel }) }
+}
+
 module.exports = {
-  runAsk, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  runAsk, runSuggestions, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,
