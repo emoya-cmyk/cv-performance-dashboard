@@ -353,6 +353,124 @@ function ForecastPanel({ forecast, rows, timeLabel }) {
   )
 }
 
+// One grounded figure in the pacing strip — copied verbatim from the verdict's display
+// string (never recomputed), so it can't disagree with the rest of the dashboard.
+function PaceStat({ label, value, accent }) {
+  return (
+    <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-1.5 text-center">
+      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+      <p className={`text-sm font-extrabold tabular-nums ${accent || 'text-slate-900'}`}>{value}</p>
+    </div>
+  )
+}
+
+const PACE_BAND = {
+  ahead:    { tone: 'emerald', Icon: TrendingUp,    label: 'Pacing ahead' },
+  on_track: { tone: 'brand',   Icon: ShieldCheck,   label: 'On track' },
+  behind:   { tone: 'amber',   Icon: TrendingDown,  label: 'Behind pace' },
+  at_risk:  { tone: 'rose',    Icon: AlertTriangle, label: 'At risk' },
+  early:    { tone: 'slate',   Icon: Minus,         label: 'Too early to call' },
+}
+const PACE_TONE = {
+  emerald: { badge: 'text-emerald-700 bg-emerald-50 border-emerald-100', bar: 'bg-emerald-400', ghost: 'bg-emerald-400/30', text: 'text-emerald-700' },
+  brand:   { badge: 'text-brand-600 bg-brand-50 border-brand-100',       bar: 'bg-brand-500',   ghost: 'bg-brand-500/25',   text: 'text-brand-600' },
+  amber:   { badge: 'text-amber-700 bg-amber-50 border-amber-200',       bar: 'bg-amber-400',   ghost: 'bg-amber-400/30',   text: 'text-amber-700' },
+  rose:    { badge: 'text-rose-700 bg-rose-50 border-rose-100',          bar: 'bg-rose-400',    ghost: 'bg-rose-400/30',    text: 'text-rose-700' },
+  slate:   { badge: 'text-slate-600 bg-slate-100 border-slate-200',      bar: 'bg-slate-300',   ghost: 'bg-slate-300/40',   text: 'text-slate-500' },
+}
+
+// intel-v6 (8): the grounded GOAL answer — "are we on track to hit our number?". The Ask
+// box now answers the question an owner leads with, off the SAME pacing.js the health badge
+// and the at-risk roster already trust (lib/pacingAnswer → classifyPacing). This panel
+// renders ONLY what the server graded — the status band, the pace bar (where we ARE vs where
+// the run-rate LANDS us against the goal line), the three figures and the day-of-month
+// context — and recomputes no number, so it carries the "Verified" mark, never "AI-written".
+// HONEST BY CONSTRUCTION: too little of the month gone → a muted "too early to call" state
+// that reports the figures but withholds the verdict (mirrors the forecast's directional-only
+// gate); the closed-month and catch-up caveats ride in the verdict, never by hiding a number.
+// LEAK-SAFE on both surfaces: a single client's actual-vs-goal names no other tenant, so this
+// is equally safe on the agency Intelligence page and a client's /my-dashboard — exactly like
+// the per-client badge pacing.js already feeds.
+function PacingPanel({ pacing }) {
+  // grounded-null paths (no goal set, a non-goal metric, "which client?") carry their honest
+  // sentence in the answer line above with meta.pacing:null — nothing to chart, so opt out
+  // exactly like the forecast panel does on no-history (avoids an empty, misleading bar).
+  if (!pacing) return null
+
+  const band  = PACE_BAND[pacing.status] || PACE_BAND.early
+  const tone  = PACE_TONE[band.tone]
+  const Icon  = band.Icon
+  const early = pacing.status === 'early'
+  const lagging = pacing.status === 'behind' || pacing.status === 'at_risk'
+
+  // ── Pace-bar geometry. COSMETIC ONLY: the 100%-of-goal line is pinned at GOAL_X of the
+  // track, leaving headroom so an "ahead" overshoot stays visible; the solid fill is where
+  // we ARE (actual/goal) and the ghosted extension is where today's run-rate LANDS us
+  // (projected/goal = attainment). Widths are derived from the server's grounded raw values
+  // purely for pixels — every NUMBER shown as text is the server's *_display string, which is
+  // recomputed nowhere here (mirrors how WhyPanel/ForecastPanel derive only geometry).
+  const GOAL_X  = 74                                  // % of track where the goal line sits
+  const target  = pacing.target || 1                  // always > 0 when a verdict is shown
+  const px = (v) => Math.max(0, Math.min(100, (v / target) * GOAL_X))
+  const actualW    = px(pacing.actual)
+  const projectedW = px(pacing.projected)             // ≥ actualW (run-rate ≥ booked-to-date)
+
+  return (
+    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+      {/* Status band + attainment headline — the scannable verdict before the bar */}
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2.5">
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${tone.badge}`}>
+          <Icon className="w-3.5 h-3.5" /> {band.label}
+        </span>
+        {pacing.attainment_pct != null && (
+          <span className={`text-xs font-bold tabular-nums ${tone.text}`}>
+            {early ? 'tracking ' : ''}{pacing.attainment_pct}% of goal
+          </span>
+        )}
+      </div>
+
+      {/* The pace bar: solid = booked to date, ghosted = projected on the current run-rate;
+          a dashed marker pins the 100%-of-goal line. Muted/dashed when 'early' so a month
+          that has barely begun never reads as a confident call. */}
+      <div className="relative h-3 rounded-full bg-slate-100 overflow-hidden">
+        <div className={`absolute inset-y-0 left-0 ${tone.ghost} ${early ? 'opacity-60' : ''}`} style={{ width: `${projectedW}%` }} />
+        <div className={`absolute inset-y-0 left-0 ${tone.bar} ${early ? 'opacity-70' : ''}`} style={{ width: `${actualW}%` }} />
+      </div>
+      <div className="relative h-4 mt-0.5">
+        <div className="absolute top-0 -translate-x-1/2 flex flex-col items-center" style={{ left: `${GOAL_X}%` }}>
+          <div className="h-1.5 w-px bg-slate-300" />
+          <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">goal</span>
+        </div>
+      </div>
+
+      {/* Three grounded figures — verbatim from the verdict's display strings */}
+      <div className="grid grid-cols-3 gap-2 mt-2">
+        <PaceStat label="Booked" value={pacing.actual_display} />
+        <PaceStat label="Projected" value={pacing.projected_display} accent={tone.text} />
+        <PaceStat label="Goal" value={pacing.target_display} />
+      </div>
+
+      {/* Context: where in the month we are, plus the honest caveat for this band */}
+      <p className="mt-2.5 text-[11px] text-slate-500 leading-relaxed">
+        Day {pacing.days_elapsed} of {pacing.days_in_month}
+        {pacing.days_remaining > 0
+          ? ` · ${pacing.days_remaining} ${pacing.days_remaining === 1 ? 'day' : 'days'} left`
+          : ' · month closed'}
+        {lagging && pacing.shortfall_display && (
+          <span className={tone.text}> · {pacing.shortfall_display} short at this pace</span>
+        )}
+        {pacing.catchup != null && (
+          <span className={`font-semibold ${tone.text}`}> · need ~{pacing.catchup}× the current pace to still hit it</span>
+        )}
+      </p>
+
+      <p className="mt-2 text-[10px] text-slate-400">
+        Run-rate pacing — the solid bar is booked so far, the lighter bar is where today’s pace lands you by month-end against the goal line.
+      </p>
+    </div>
+  )
+}
+
 function AskResult({ result, clientId, onClear, onPick }) {
   const { answer, narrated, meta, columns, rows, followups } = result
   const hasBucket    = columns.includes('bucket')
@@ -362,6 +480,15 @@ function AskResult({ result, clientId, onClear, onPick }) {
   // of a bucket breakdown or a single past figure. Detect it so it renders as a fan + band
   // (ForecastPanel) instead of falling through to the single-overall-figure branch below.
   const isForecast   = columns.includes('step')
+  // intel-v6 (8): a goal-PACING answer ("are we on track?") rides the standard envelope but
+  // carries the three-row actual/projected/goal verdict (columns ['label','value'], with
+  // meta.pacing set when a verdict is shown, null on the honest "no goal to pace" paths).
+  // 'label' is unique to pacing — single-figure is ['value'], bucket ['bucket',…], forecast
+  // ['step',…] — so this is the clean parallel detector to isForecast. Like forecast, it must
+  // be carved OUT of the single-figure branch (a 3-row verdict would misread as one big
+  // number) and out of the empty state (a grounded-null verdict already says its piece in the
+  // answer line), then rendered as the PacingPanel below.
+  const isPacing     = columns.includes('label')
 
   // intel-v6 (5): the on-demand "why did it change?" sub-flow — its own little state
   // machine (idle → loading → done | error) so the breakdown loads inline under the
@@ -438,8 +565,10 @@ function AskResult({ result, clientId, onClear, onPick }) {
 
       {/* Single overall figure (group_by none), with an optional period-over-period delta.
           A forecast also has no bucket, so it's excluded here (!isForecast) and rendered as
-          the projection fan below — otherwise it would misread as one big step-1 number. */}
-      {rows.length > 0 && !hasBucket && !isForecast && (
+          the projection fan below — otherwise it would misread as one big step-1 number. A
+          pacing verdict is likewise no-bucket but 3-row, so it's excluded (!isPacing) and
+          drawn as the pace bar below rather than collapsing to its first row's $figure. */}
+      {rows.length > 0 && !hasBucket && !isForecast && !isPacing && (
         <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
@@ -452,6 +581,13 @@ function AskResult({ result, clientId, onClear, onPick }) {
       {/* Forward FORECAST — the projection fan + per-step receipts + honest trust gate.
           Same envelope, same shared component on agency Intelligence and client /my-dashboard. */}
       {isForecast && <ForecastPanel forecast={meta.forecast} rows={rows} timeLabel={meta.time_label} />}
+
+      {/* Goal PACING — "are we on track?": the status band + pace bar + the three grounded
+          figures + month-context. meta.pacing is null on the honest "no goal to pace" paths
+          (the answer line above carries that sentence), so PacingPanel renders nothing then.
+          Shared, so it's identical on the agency Intelligence page and a client /my-dashboard
+          — a single client's actual-vs-goal names no other tenant, so it's leak-safe on both. */}
+      {isPacing && <PacingPanel pacing={meta.pacing} />}
 
       {/* intel-v6 (5)+(6): grounded "why did it change?" — offered ONLY when the server
           flagged this exact figure decomposable (meta.explainable: a single figure that
@@ -487,9 +623,10 @@ function AskResult({ result, clientId, onClear, onPick }) {
         </div>
       )}
 
-      {/* Honest empty state — a no-history forecast carries its own grounded message in the
-          answer line above, so it opts out here to avoid double-rendering "no data". */}
-      {rows.length === 0 && !isForecast && (
+      {/* Honest empty state — a no-history forecast, and a "no goal to pace against" pacing
+          verdict, each carry their own grounded message in the answer line above, so both opt
+          out here (!isForecast && !isPacing) to avoid double-rendering "no data". */}
+      {rows.length === 0 && !isForecast && !isPacing && (
         <p className="mt-2 text-xs text-slate-400">No matching data for that question and timeframe.</p>
       )}
 
