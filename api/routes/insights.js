@@ -20,10 +20,16 @@
 //        surface only (carries peer identities); the client view is the standing
 //        folded into GET /:clientId, which is stripped to anonymous self-numbers.
 //
+//   GET  /api/insights/recoveries[?limit=&days=]
+//        Portfolio "what we fixed" win stream: every client's recently RECOVERED
+//        findings (problem measurably cleared), newest fix first, each tagged with
+//        its client_name. The positive counterpart to GET / (active problems).
+//
 //   GET  /api/insights/:clientId[?limit=]
 //        One client's active feed — the per-client Insights card — plus that
-//        client's own health verdict (same pure synthesis as the roster) and its
-//        privacy-safe peer STANDING (own percentile vs the anonymous distribution).
+//        client's own health verdict (same pure synthesis as the roster), its
+//        privacy-safe peer STANDING (own percentile vs the anonymous distribution),
+//        and its recent RECOVERIES (the "what we fixed lately" win list).
 //
 //   POST /api/insights/:id/ack
 //   POST /api/insights/:id/resolve
@@ -48,6 +54,7 @@ const { query } = require('../db')
 const {
   getInsightFeed, getPortfolioInsights, getPortfolioHealth,
   getPortfolioBenchmarks, getClientStanding,
+  getRecentRecoveries, getPortfolioRecoveries,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -72,6 +79,15 @@ function parseWeeks(raw, fallback) {
   const n = Number(raw)
   if (!Number.isFinite(n) || n < 1) return fallback
   return Math.min(Math.floor(n), 52)
+}
+
+// Clamp a caller-supplied ?days (recoveries trailing window) to 1..365; undefined →
+// fallback. Same string-coercion rationale as parseWeeks.
+function parseDays(raw, fallback) {
+  if (raw == null || raw === '') return fallback
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 1) return fallback
+  return Math.min(Math.floor(n), 365)
 }
 
 // Insights FK-reference clients(id); a sweep for an unknown client would trip the
@@ -139,6 +155,25 @@ router.get('/benchmarks', async (req, res) => {
   } catch (err) {
     console.error('[insights] GET benchmarks error', err.message)
     res.status(500).json({ error: 'Failed to load portfolio benchmarks' })
+  }
+})
+
+// ── GET /api/insights/recoveries ──────────────────────────────────────────────
+// Portfolio "what we fixed" win stream: every client's recently RECOVERED findings
+// (the problem measurably cleared — metric back to baseline / channel reconnected),
+// newest fix first, each tagged with its client_name. Default trailing window 30d.
+// The positive counterpart to GET / (active problems). Declared before the :clientId
+// route so the literal "recoveries" can never be captured as a client id.
+router.get('/recoveries', async (req, res) => {
+  try {
+    const recoveries = await getPortfolioRecoveries({
+      limit: parseLimit(req.query.limit, 50),
+      days:  parseDays(req.query.days, 30),
+    })
+    res.json({ recoveries, count: recoveries.length })
+  } catch (err) {
+    console.error('[insights] GET recoveries error', err.message)
+    res.status(500).json({ error: 'Failed to load recoveries' })
   }
 })
 
@@ -216,9 +251,12 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const [insights, standing] = await Promise.all([
+    const [insights, standing, recoveries] = await Promise.all([
       getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
       getClientStanding(clientId),
+      // recent WINS for this client — problems the engine flagged that then cleared.
+      // Folded in beside the active feed so /my-dashboard can lead with the good news.
+      getRecentRecoveries(clientId, { limit: 10, days: 30 }),
     ])
     res.json({
       client_id: clientId,
@@ -232,6 +270,8 @@ router.get('/:clientId', async (req, res) => {
       // portfolio distribution (never a peer's identity). Empty `standing` under a
       // thin cohort — the surface shows nothing, never a half-built comparison.
       benchmark: standing,
+      // "what we fixed lately" — recovered findings, newest first (may be empty).
+      recoveries,
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)

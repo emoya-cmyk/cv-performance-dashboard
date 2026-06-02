@@ -1609,6 +1609,100 @@ async function getPortfolioInsights({ limit = 100 } = {}) {
     .slice(0, limit)
 }
 
+// ── recoveries: the "what we fixed" win stream ────────────────────────────────
+// A recovered finding (status='recovered') is the engine's PROVEN win — a problem it
+// flagged that then measurably cleared: the metric returned to baseline, or a dark
+// channel reconnected (see lib/outcomes.js + markRecoveries). The active feed
+// excludes them (terminal state), so the surfaces that answer "what did we fix
+// lately?" need their own read — newest fix first, bounded to a trailing window so
+// the list shows recent wins, not all-time. No precision weighting: a win is ranked
+// by WHEN it landed, not by how often the client engages that kind.
+const RECOVERY_WINDOW_DAYS = 30
+
+// Full-timestamp normalizer (isoDate truncates to YYYY-MM-DD — right for period_start,
+// wrong for a recovered_at we want to show + sort to the minute). Postgres returns a
+// Date here, the SQLite shim returns the stored ISO text; both → a stable ISO string.
+function isoStamp(v) {
+  if (v == null) return null
+  if (typeof v === 'string') return v
+  try { return new Date(v).toISOString() } catch { return String(v) }
+}
+
+// Light normalize for a recovered row: just the win fields the surfaces read, without
+// the active-feed machinery — no recommended_action (a win needs no action) and no
+// precision block (recoveries aren't ranked by learned weight). evidence is parsed so
+// a surface can show the before/after that proves the fix.
+function normalizeRecoveryRow(row) {
+  return {
+    id: row.id,
+    client_id: row.client_id,
+    client_name: row.client_name,   // present on the portfolio JOIN; undefined per-client
+    scope: row.scope,
+    kind: row.kind,
+    metric: row.metric,
+    severity: row.severity,
+    direction: row.direction,
+    title: row.title,
+    detail: row.detail,
+    recovery_reason: row.recovery_reason,
+    recovered_at: isoStamp(row.recovered_at),
+    first_seen: isoStamp(row.first_seen),
+    last_seen: isoStamp(row.last_seen),
+    period_start: isoDate(row.period_start),
+    evidence: typeof row.evidence === 'string' ? safeParse(row.evidence) : (row.evidence || {}),
+  }
+}
+
+// Trailing-window cutoff as an ISO string. recovered_at is stored as ISO text and
+// ISO-8601 (Zulu) sorts/compares lexicographically, so a plain `>=` string compare is
+// correct under BOTH Postgres and the SQLite shim. days ≤ 0 / non-finite → no window.
+function recoveryCutoff(days) {
+  const d = Number(days)
+  if (!Number.isFinite(d) || d <= 0) return null
+  return new Date(Date.now() - d * 86400000).toISOString()
+}
+
+// Newest fix first; recovered_at is an ISO string so a string compare orders it.
+// Stable tie-break on id (descending) so equal stamps from one sweep are deterministic.
+function recoverySort(a, b) {
+  return String(b.recovered_at || '').localeCompare(String(a.recovered_at || ''))
+      || (Number(b.id) || 0) - (Number(a.id) || 0)
+}
+
+// One client's recent wins — recovered findings, newest fix first, within `days`.
+async function getRecentRecoveries(clientId, { limit = 20, days = RECOVERY_WINDOW_DAYS } = {}) {
+  const cutoff = recoveryCutoff(days)
+  const { rows } = cutoff
+    ? await query(
+        `SELECT * FROM insights
+          WHERE client_id = $1 AND scope = 'client'
+            AND status = 'recovered' AND recovered_at >= $2`,
+        [clientId, cutoff])
+    : await query(
+        `SELECT * FROM insights
+          WHERE client_id = $1 AND scope = 'client' AND status = 'recovered'`,
+        [clientId])
+  return rows.map(normalizeRecoveryRow).sort(recoverySort).slice(0, limit)
+}
+
+// Portfolio wins — every client's recent recoveries in one stream, each tagged with
+// its client name (mirrors getPortfolioInsights' JOIN). Newest fix first across the
+// whole fleet — the agency's "here's what the system cleared this month" board.
+async function getPortfolioRecoveries({ limit = 50, days = RECOVERY_WINDOW_DAYS } = {}) {
+  const cutoff = recoveryCutoff(days)
+  const { rows } = cutoff
+    ? await query(
+        `SELECT i.*, c.name AS client_name
+           FROM insights i JOIN clients c ON c.id = i.client_id
+          WHERE i.scope = 'client' AND i.status = 'recovered' AND i.recovered_at >= $1`,
+        [cutoff])
+    : await query(
+        `SELECT i.*, c.name AS client_name
+           FROM insights i JOIN clients c ON c.id = i.client_id
+          WHERE i.scope = 'client' AND i.status = 'recovered'`)
+  return rows.map(normalizeRecoveryRow).sort(recoverySort).slice(0, limit)
+}
+
 // Portfolio TRIAGE ROSTER: every client rolled into one health score, ranked
 // worst-first. Where the feed above is a flat stream of individual findings (the
 // grain for "what is wrong"), this is the grain for the question asked first every
@@ -1787,6 +1881,8 @@ module.exports = {
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
+  // recoveries (read): the "what we fixed" win stream — per-client + whole-portfolio
+  getRecentRecoveries, getPortfolioRecoveries,
   // cross-client peer benchmarking (agency distribution + privacy-safe client standing)
   getPortfolioBenchmarks, getClientStanding,
 }

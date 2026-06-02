@@ -155,6 +155,11 @@ export const api = {
   // (agency view; carries peer identities). A client's OWN anonymous standing rides
   // along inside getClientInsights() (.benchmark), never exposing peers.
   getBenchmarks:      (weeks)    => get(`/api/insights/benchmarks${weeks ? `?weeks=${weeks}` : ''}`),
+  // getRecoveries() → portfolio "what we fixed" win stream: every client's recently
+  // RECOVERED findings (metric back to baseline / channel reconnected), newest fix
+  // first, each tagged with client_name. The positive counterpart to getInsights().
+  // A client's OWN recent wins ride along inside getClientInsights() (.recoveries).
+  getRecoveries:      (days)     => get(`/api/insights/recoveries${days ? `?days=${days}` : ''}`),
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

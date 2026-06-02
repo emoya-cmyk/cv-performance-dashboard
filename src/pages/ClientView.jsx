@@ -10,7 +10,7 @@ import {
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, healthBandMeta, metricLabel } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, healthBandMeta, metricLabel, recoveryMeta, timeAgo } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -403,6 +403,72 @@ function ClientInsights({ insights }) {
   )
 }
 
+// ── Recently Resolved — the "what we fixed" win list, client-framed ────────────
+// The visible payoff of the self-improving loop. The engine flags a problem, watches
+// it, and when the number climbs back into its normal range it marks the finding
+// RECOVERED on its own — no human closes it. This surface shows the client only the
+// wins they can feel: filtered through isClientFacing, so agency-internal recoveries
+// (a reconnected reporting source — coverage_gap) never appear here; those are the
+// team's plumbing, not the client's outcome. A quiet week renders nothing.
+const CLIENT_WINS_SHOWN = 3
+function ClientWins({ recoveries }) {
+  const rows  = (recoveries || []).filter(isClientFacing)
+  const items = rows.slice(0, CLIENT_WINS_SHOWN)
+  const more  = rows.length - items.length
+  if (items.length === 0) return null
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.17s' }}>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Recently Resolved</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      <div className="space-y-3">
+        {items.map(r => <ClientWinRow key={r.id} r={r} />)}
+      </div>
+      <p className="text-[10px] text-slate-400 mt-3.5 pt-3 border-t border-slate-50 leading-relaxed">
+        {more > 0 ? `+${more} more resolved this month. ` : ''}
+        Your account&rsquo;s AI analyst watches every issue it flags and clears it automatically the
+        moment your numbers recover — nothing needed on your end.
+      </p>
+    </div>
+  )
+}
+function ClientWinRow({ r }) {
+  const meta     = recoveryMeta(r.recovery_reason)
+  const Icon     = meta.icon
+  const ago      = timeAgo(r.recovered_at)
+  const metric   = r.metric ? metricLabel(r.metric) : null
+  const baseline = r.recovery_reason === 'metric_returned_to_baseline'
+  const headline = baseline && metric ? `Your ${metric} is back to normal` : metric ? `${metric} resolved` : 'Resolved'
+  return (
+    <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3.5">
+      <div className="flex items-start gap-2.5">
+        <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 bg-emerald-100">
+          <Icon className="w-3.5 h-3.5 text-emerald-600" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-black text-slate-800 leading-snug">{headline}</p>
+            <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 rounded-full px-1.5 py-0.5">
+              <CheckCircle className="w-3 h-3" /> Resolved
+            </span>
+            {ago && (
+              <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400 shrink-0">
+                <Clock className="w-3 h-3" /> {ago}
+              </span>
+            )}
+          </div>
+          {r.title && (
+            <p className="text-xs text-slate-500 leading-relaxed mt-1 line-through decoration-slate-300">{r.title}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Account Health — the one-number verdict, client-framed ─────────────────────
 // The same pure synthesis the agency triage roster runs (lib/health.js, surfaced
 // for staff on /intelligence) — every open finding for this client compounded into
@@ -639,6 +705,7 @@ export default function ClientView({ store }) {
   const [insights,     setInsights]    = useState([])
   const [health,       setHealth]      = useState(null)   // one-number verdict from api.getClientInsights()
   const [standing,     setStanding]    = useState(null)   // { period, cohort_size, standing } — anonymized peer benchmark
+  const [recoveries,   setRecoveries]  = useState([])     // recently RECOVERED findings — the "what we fixed" win list
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -675,8 +742,9 @@ export default function ClientView({ store }) {
         setInsights(Array.isArray(d?.insights) ? d.insights : [])
         setHealth(d?.health || null)
         setStanding(d?.benchmark || null)
+        setRecoveries(Array.isArray(d?.recoveries) ? d.recoveries : [])
       })
-      .catch(() => { setInsights([]); setHealth(null); setStanding(null) })
+      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]) })
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -1043,6 +1111,9 @@ export default function ClientView({ store }) {
               />
             </div>
           )}
+
+          {/* ── Recently Resolved — the "what we fixed" wins, client-facing ── */}
+          <ClientWins recoveries={recoveries} />
 
           {/* ── What We're Watching — the autonomous analyst, client-facing ── */}
           <ClientInsights insights={insights} />

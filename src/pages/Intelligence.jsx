@@ -11,7 +11,7 @@ import {
   precisionMeta, hasLearnedPrecision, precisionTooltip,
   forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue, attributionView,
   correlateView, impactsView,
-  healthBandMeta,
+  healthBandMeta, recoveryMeta, timeAgo,
 } from '@/lib/insightMeta'
 
 /**
@@ -32,6 +32,7 @@ export default function Intelligence() {
   const [insights, setInsights] = useState([])
   const [health, setHealth]   = useState(null)         // { roster, count, by_band } — triage synthesis
   const [benchmarks, setBenchmarks] = useState(null)   // { period, cohort_size, metrics } — cross-client peer benchmarks
+  const [recoveries, setRecoveries] = useState([])     // [{ client_name, recovery_reason, recovered_at, … }] — the win stream
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -45,18 +46,19 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Three independent reads: the per-finding feed, the synthesized triage roster, and
-      // the cross-client peer benchmarks. allSettled — not Promise.all — so a roster or
-      // benchmark hiccup never blanks the feed. If either synthesis read stumbles its panel
-      // simply hides and the page degrades to exactly what it showed before that layer
-      // existed; only a feed failure is fatal.
-      const [feed, roster, bench] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(),
+      // Four independent reads: the per-finding feed, the synthesized triage roster, the
+      // cross-client peer benchmarks, and the "what we fixed" recovery stream. allSettled —
+      // not Promise.all — so a synthesis hiccup never blanks the feed. If any of the three
+      // synthesis reads stumbles its panel simply hides and the page degrades to exactly
+      // what it showed before that layer existed; only a feed failure is fatal.
+      const [feed, roster, bench, recov] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
       setHealth(roster.status === 'fulfilled' && Array.isArray(roster.value?.roster) ? roster.value : null)
       setBenchmarks(bench.status === 'fulfilled' && bench.value?.metrics ? bench.value : null)
+      setRecoveries(recov.status === 'fulfilled' && Array.isArray(recov.value?.recoveries) ? recov.value.recoveries : [])
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -158,6 +160,12 @@ export default function Intelligence() {
           live portfolio per KPI. Hidden until at least one metric has a publishable
           cohort (≥ MIN_COHORT finite peers); degrades silently to nothing otherwise. */}
       {benchmarks && <BenchmarkPanel data={benchmarks} />}
+
+      {/* recoveries — the positive mirror of the feed: problems the engine flagged that
+          then MEASURABLY cleared (metric back to baseline / channel reconnected), newest
+          fix first, each tagged with its client. The "what we fixed lately" proof the work
+          lands. Hidden until at least one win exists; degrades silently to nothing. */}
+      {recoveries.length > 0 && <RecoveriesPanel recoveries={recoveries} />}
 
       {/* severity stat band — doubles as the severity filter */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -850,6 +858,89 @@ function BenchmarkPanel({ data }) {
           account and every cohort re-shapes on the next sweep. Standing is direction-aware:
           <span className="font-bold text-slate-500"> the leader is always the best performer</span>, whichever way the metric runs.
         </p>
+      </div>
+    </div>
+  )
+}
+
+// ── recoveries panel — the "what we fixed" win stream ─────────────────────────
+// The positive counterpart to the findings feed. Each row is a problem the engine
+// flagged that then measurably cleared — promoted to status='recovered' by the engine's
+// markRecoveries() with a recovery_reason it can defend. Fixed emerald accent (a recovery
+// has no severity axis — it's unambiguously good news); recoveryMeta maps the reason to a
+// label + icon, timeAgo stamps the recency. Capped at a tidy few so a busy week of wins
+// stays a glance, not a scroll; the tail count says how many more cleared this window.
+const RECOVERIES_SHOWN = 8
+function RecoveriesPanel({ recoveries }) {
+  const rows = Array.isArray(recoveries) ? recoveries : []
+  if (rows.length === 0) return null                 // no wins yet → degrade to no panel
+  const shown  = rows.slice(0, RECOVERIES_SHOWN)
+  const hidden = rows.length - shown.length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">What we fixed lately</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {rows.length} win{rows.length === 1 ? '' : 's'} · last 30 days
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <RecoveryRow key={r.id} r={r} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more resolved this window</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-emerald-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Recoveries are detected automatically — the engine watches every finding it raised and marks it
+          <span className="font-bold text-emerald-600"> resolved</span> the moment the metric returns to baseline
+          or a dark channel starts reporting again. Nobody closes these by hand.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One win: the client, what cleared, why we can say it cleared, and how recently. The
+   icon + reason label come from recoveryMeta(recovery_reason); the title is the original
+   finding's own headline, struck through, so the row reads as "this exact problem — now
+   fixed." `ago` hides itself on an unparseable stamp (timeAgo → ''). */
+function RecoveryRow({ r }) {
+  const meta = recoveryMeta(r.recovery_reason)
+  const Icon = meta.icon
+  const ago  = timeAgo(r.recovered_at)
+  return (
+    <div className="flex items-start gap-3 px-4 py-3">
+      <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0 mt-0.5">
+        <Icon className="w-4 h-4 text-emerald-500" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-black text-slate-800 truncate max-w-[12rem]">{r.client_name || 'Unknown'}</span>
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5"
+            title={`Recovered — ${meta.blurb}`}
+          >
+            <Check className="w-3 h-3" /> {meta.label}
+          </span>
+          {ago && (
+            <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400 shrink-0">
+              <Clock className="w-3 h-3" /> {ago}
+            </span>
+          )}
+        </div>
+        {r.title && (
+          <p className="text-xs text-slate-500 mt-1 leading-snug line-through decoration-slate-300">{r.title}</p>
+        )}
       </div>
     </div>
   )

@@ -51,6 +51,8 @@ const {
   ackInsight, resolveInsight, runInsightsForAll,
   // cross-client peer benchmarking: agency-wide distribution + a client's own standing.
   getPortfolioBenchmarks, getClientStanding,
+  // recoveries (read): the "what we fixed" win stream — per-client + whole-portfolio.
+  getRecentRecoveries, getPortfolioRecoveries,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -1287,6 +1289,73 @@ test('probeFor: when the coverage scan did not run, a coverage_gap gets NO probe
   // null/garbage inputs never throw — degenerate probes are a safe no-op.
   assert.equal(probeFor(null, null), null)
   assert.equal(probeFor(gapMeta, null), null)
+})
+
+// ── the READ path: the "what we fixed" win stream ─────────────────────────────
+// markRecoveries (3b) carves the genuine wins out of the expiry stream and stamps
+// them status='recovered' + recovery_reason + recovered_at. getRecentRecoveries
+// (per-client, folded into GET /:clientId) and getPortfolioRecoveries (the agency
+// /recoveries feed) are the read side that surfaces them — newest fix first, within
+// a trailing window, shaped lean (no action/precision baggage; a win needs neither).
+// These pin: the win appears with its reason+timestamp, the portfolio read tags it
+// with client_name, evidence is parsed to an object, and the window predicate
+// (recovered_at >= cutoff) excludes an aged-out fix — exercising recoveryCutoff and
+// the $N >= comparison under the SQLite shim.
+
+test('recoveries (read): getRecentRecoveries + getPortfolioRecoveries surface the win, lean-shaped, within window', async () => {
+  await ready()
+  const c = await freshClient('Winstream Roofing Co')
+
+  // A clean client has no wins yet — the read is empty and never throws.
+  assert.deepEqual(await getRecentRecoveries(c), [])
+
+  // Drive one finding all the way to 'recovered' via the proven baseline-return recipe:
+  // a calm ~800 revenue baseline + a 5000 spike opens a critical anomaly; one week back
+  // at 800 clears it AND proves it returned to baseline → markRecoveries stamps the win.
+  const weeks = MONDAYS.slice(2)
+  const rev1  = [780, 820, 790, 810, 800, 5000]
+  for (let i = 0; i < weeks.length; i++) await seedWeek(c, weeks[i], { projected_revenue: rev1[i] })
+  await runInsightsForClient(c, { asOf: '2026-05-06' })
+  await seedWeek(c, '2026-05-11', { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-13' })
+
+  // getRecentRecoveries returns exactly that win, shaped for the "what we fixed" feed.
+  const recs = await getRecentRecoveries(c)
+  assert.equal(recs.length, 1, 'the one recovered finding is the one win read back')
+  const r = recs[0]
+  assert.equal(r.client_id, c)
+  assert.equal(r.kind, 'anomaly')
+  assert.equal(r.metric, 'revenue')
+  assert.equal(r.recovery_reason, 'metric_returned_to_baseline')
+  assert.ok(r.recovered_at, 'the win carries its fix timestamp for recency')
+  assert.ok(r.title, 'the win is human-readable on the surface')
+  // evidence arrives as a parsed object, never a raw JSON string the UI must re-parse.
+  assert.equal(typeof r.evidence, 'object')
+  assert.ok(r.evidence && !Array.isArray(r.evidence))
+  // the lean projection carries NONE of an active finding's ranking baggage — a win
+  // needs no next action and isn't ranked by learned precision, only by recency.
+  assert.equal(r.recommended_action, undefined)
+  assert.equal(r.precision, undefined)
+  assert.equal(r.score, undefined)
+
+  // The portfolio read includes it, tagged with the client's name for the agency feed.
+  const port = await getPortfolioRecoveries()
+  const mine = port.find(x => x.client_id === c)
+  assert.ok(mine, 'the portfolio win stream includes this client’s recovery')
+  assert.equal(mine.client_name, 'Winstream Roofing Co')
+  assert.equal(mine.recovery_reason, 'metric_returned_to_baseline')
+
+  // Window filter: age the fix past the look-back. It drops from the default 30-day
+  // window but reappears when the window widens — driving recoveryCutoff + the
+  // `recovered_at >= cutoff` predicate (ISO-8601 Zulu strings compare lexically, so
+  // the same SQL is correct under both Postgres and the SQLite shim).
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString()
+  await db.query(`UPDATE insights SET recovered_at = $1 WHERE client_id = $2 AND status = 'recovered'`,
+    [sixtyDaysAgo, c])
+  assert.equal((await getRecentRecoveries(c, { days: 30 })).length, 0,
+    'a 60-day-old fix is outside the default 30-day window')
+  assert.equal((await getRecentRecoveries(c, { days: 90 })).length, 1,
+    'widen the window and the aged fix returns')
 })
 
 // ============================================================

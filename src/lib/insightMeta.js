@@ -10,9 +10,9 @@
  * Pure data + lucide component references — no JSX — so it stays a plain .js module.
  */
 import {
-  Zap, TrendingUp, LineChart, Gauge, Activity, Unplug, Shuffle, Lightbulb, Sparkles,
+  Zap, TrendingUp, LineChart, Gauge, Activity, Unplug, Plug, Shuffle, Lightbulb, Sparkles,
   ArrowUpRight, ArrowDownRight, Minus,
-  Flame, CalendarClock, Eye,
+  Flame, CalendarClock, Eye, CheckCircle2,
   SignalHigh, SignalMedium, SignalLow,
 } from 'lucide-react'
 
@@ -309,6 +309,53 @@ export function fmtMetricValue(metric, v) {
     return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
   }
   return Math.round(n).toLocaleString('en-US')
+}
+
+// ── recoveries → the "what we fixed" win, presentation-ready ───────────────────
+// markRecoveries() (lib/insights.js) promotes an about-to-expire finding to
+// status='recovered' the moment its problem MEASURABLY clears, stamping recovery_reason
+// ∈ { 'metric_returned_to_baseline', 'channel_reconnected' }. This is the positive mirror
+// of severityMeta: it maps that reason to a label + icon + one-line blurb so BOTH the
+// agency Intelligence page and /my-dashboard render a win identically, from one source of
+// truth. An unknown/missing reason degrades to a neutral "Resolved" — a recovered row
+// always renders something honest rather than a blank. (Recoveries are pure good news, so
+// there is no severity axis here — the accent is fixed emerald at each call site.)
+const RECOVERY_REASON_META = {
+  metric_returned_to_baseline: {
+    label: 'Back to baseline',
+    icon:  TrendingUp,
+    blurb: 'the metric climbed back into its normal range',
+  },
+  channel_reconnected: {
+    label: 'Channel reconnected',
+    icon:  Plug,
+    blurb: 'the channel is reporting data again',
+  },
+}
+const RECOVERY_FALLBACK = { label: 'Resolved', icon: CheckCircle2, blurb: 'the problem cleared' }
+export function recoveryMeta(reason) {
+  return RECOVERY_REASON_META[reason] || RECOVERY_FALLBACK
+}
+
+// timeAgo — compact, glanceable age of a recovery's fix timestamp ("just now", "5h ago",
+// "3d ago", "2w ago", "4mo ago"). Pure presentation: returns '' on a missing/unparseable
+// stamp so a surface can simply omit the chip. Floored buckets, never decimals — a win's
+// recency is a badge, not a stopwatch. Reads the recovered_at ISO string the read layer
+// (lib/insights.js normalizeRecoveryRow → isoStamp) hands the surface.
+export function timeAgo(iso) {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return ''
+  const secs = Math.max(0, (Date.now() - t) / 1000)
+  if (secs < 45)  return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60)  return `${Math.max(1, mins)}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24)   return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7)   return `${days}d ago`
+  if (days < 30)  return `${Math.floor(days / 7)}w ago`
+  return `${Math.floor(days / 30)}mo ago`
 }
 
 function titleCase(s) {
