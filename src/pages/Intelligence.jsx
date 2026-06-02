@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
-  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle,
+  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -37,6 +37,7 @@ export default function Intelligence() {
   const [trajectory, setTrajectory] = useState(null)   // { warnings[], count } — predictive early-warning roster (agency-only)
   const [pacing, setPacing]   = useState(null)         // { roster[], month, days_elapsed, days_in_month } — goal-pacing roster (agency-only)
   const [efficacy, setEfficacy] = useState(null)       // { base, plays[], count } — action→recovery efficacy ledger (pooled, anonymous)
+  const [pulse, setPulse]     = useState(null)         // { roster[], as_of, window, lookback_days } — intra-week daily-pulse early warning (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -50,15 +51,16 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Eight independent reads: the per-finding feed, the synthesized triage roster, the
+      // Nine independent reads: the per-finding feed, the synthesized triage roster, the
       // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
-      // common-cause scan, the predictive early-warning roster, the goal-pacing roster, and
-      // the action→recovery efficacy ledger (which of our OWN plays actually fix it).
+      // common-cause scan, the predictive early-warning roster, the goal-pacing roster, the
+      // action→recovery efficacy ledger (which of our OWN plays actually fix it), and the
+      // intra-week daily-pulse roster (who's sliding RIGHT NOW, days before the week closes).
       // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
-      // of the seven synthesis reads stumbles its panel simply hides and the page degrades to
+      // of the eight synthesis reads stumbles its panel simply hides and the page degrades to
       // exactly what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj, pace, eff] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(),
+      const [feed, roster, bench, recov, sys, traj, pace, eff, pls] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -69,6 +71,7 @@ export default function Intelligence() {
       setTrajectory(traj.status === 'fulfilled' && Array.isArray(traj.value?.warnings) ? traj.value : null)
       setPacing(pace.status === 'fulfilled' && Array.isArray(pace.value?.roster) ? pace.value : null)
       setEfficacy(eff.status === 'fulfilled' && Array.isArray(eff.value?.plays) ? eff.value : null)
+      setPulse(pls.status === 'fulfilled' && Array.isArray(pls.value?.roster) ? pls.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -182,6 +185,18 @@ export default function Intelligence() {
           }
         />
       )}
+
+      {/* daily pulse — the INTRA-WEEK early warning, and the freshest read on the page. Every
+          other panel here is weekly-grain: the engine only speaks once an ISO week closes, blind
+          between Mondays. This watches each client's trailing-7-day LEVEL on the atomic DAILY
+          facts and surfaces the moment it slides out of that client's OWN recent band — a Tuesday
+          collapse, or a runaway spend, days before the Monday recap names it. Sits first among
+          the portfolio roster panels because it's the most time-sensitive: read down the page and
+          it goes "moving RIGHT NOW" (pulse) → "headed for trouble" (trajectory) → "off goal pace"
+          (pacing). Computed live off the daily grain, ranked worst-first. Agency-only (names
+          peers, like the rest); a client sees only its OWN pulse, folded into its dashboard.
+          Hidden until at least one client × metric fires. */}
+      {pulse?.roster?.length > 0 && <PulsePanel data={pulse} />}
 
       {/* heading for trouble — the PREDICTIVE companion to the triage roster. Triage ranks
           who is worst TODAY; this ranks who is still inside a safe band but, by the slope of
@@ -1380,6 +1395,139 @@ function SystemicRow({ s }) {
             </div>
             <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Daily pulse — the INTRA-WEEK early-warning roster ─────────────────────────
+   The only panel here that doesn't wait for an ISO week to close. Every weekly synthesis
+   (triage, trajectory, pacing, systemic) is blind between Mondays; this reads each client's
+   trailing-7-day LEVEL on the ATOMIC DAILY facts and flags the moment a flow metric (revenue /
+   leads / jobs / spend) slides out of that client's OWN recent band — a Tuesday collapse, or a
+   runaway spend spike, surfaced days before the Monday recap names it. The engine
+   (getPortfolioPulse) already ranks the roster worst-first (adverse before tailwind, then by
+   how far out of band) and bakes each row its own agency-toned `message`; this just paints it
+   in the family chrome. Computed live off the daily grain — no migration, no nightly sweep, no
+   thresholds touched by hand. STRICTLY AGENCY-ONLY: a row names another client, the same
+   cross-tenant boundary triage / systemic / trajectory / pacing respect — a client sees only
+   its OWN pulse, folded into its dashboard payload. Hides whole until one client × metric fires. */
+const PULSE_SHOWN = 6   // cap the rows so a moving book stays a glance
+
+// adverse + severity → chip. A flagged metric moving the WRONG way reads as an alarm (critical =
+// rose, the strongest call; warning = amber); a metric moving the client's WAY is a 'Tailwind'
+// (emerald) — surfaced too, because "lean into what's suddenly working" is as actionable
+// intra-week as "catch what's breaking," just ranked last by the engine's adverse-first order.
+const PULSE_TONE = {
+  critical: { chip: 'bg-rose-50 text-rose-600 border-rose-200',         text: 'text-rose-600',    dot: 'bg-rose-500',    label: 'Critical' },
+  warning:  { chip: 'bg-amber-50 text-amber-600 border-amber-200',      text: 'text-amber-600',   dot: 'bg-amber-500',   label: 'Warning'  },
+  good:     { chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', label: 'Tailwind' },
+}
+function pulseTone(r) {
+  if (!r?.adverse) return PULSE_TONE.good
+  return r.severity === 'critical' ? PULSE_TONE.critical : PULSE_TONE.warning
+}
+
+function PulsePanel({ data }) {
+  const roster = Array.isArray(data?.roster) ? data.roster : []
+  if (roster.length === 0) return null              // nobody moving → degrade to no panel
+  const shown   = roster.slice(0, PULSE_SHOWN)
+  const hidden  = roster.length - shown.length
+  const adverse = roster.filter(r => r?.adverse).length
+  const asOf    = data?.as_of
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-sky-50 flex items-center justify-center shrink-0">
+          <Activity className="w-4 h-4 text-sky-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Daily pulse</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {adverse > 0
+            ? `${adverse} client${adverse === 1 ? '' : 's'} off their usual week`
+            : `${roster.length} moving this week`}
+        </span>
+        {asOf && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+            <Clock className="w-3 h-3" /> trailing 7 days · through {asOf}
+          </span>
+        )}
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <PulseRow key={`${r.client_id}:${r.metric}`} r={r} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more moving this week</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-sky-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The weekly engine only speaks once an ISO week closes; this watches each client's
+          <span className="font-bold text-sky-600"> trailing-7-day level every day</span> and flags the moment it
+          slides out of that client's own recent band — a Tuesday collapse, or a runaway spend, days before the Monday
+          recap. Computed live off the daily numbers, ranked worst-first. Agency-only — a client sees only its own pulse.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One client × one flow metric whose trailing week has broken out of that client's OWN recent
+   band. The left rail and the headline read in the tone of the move — rose/amber when it's
+   adverse (a leads collapse, a spend spike), emerald when it's a tailwind (a surge, or spend
+   easing). The walk is the whole story in numbers: {this past week} vs {≈usual}, over the
+   N-week base the engine measured against; the right rail is the swing off that usual week. */
+function PulseRow({ r }) {
+  const tone  = pulseTone(r)
+  const Dir   = directionIcon(r.direction)
+  const delta = Math.round(Number(r.delta_pct))
+  const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%` : null
+  const baseN = Number(r.baseline?.n)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border', tone.chip)}>
+          <Dir className="w-4 h-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{r.client_name || 'Unknown'}</span>
+            <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+              {r.label || metricLabel(r.metric)}
+            </span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', tone.chip)}>
+              {tone.label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span className={cn('tabular-nums font-bold', tone.text)}>{fmtMetricValue(r.metric, r.latest)}</span>
+            <span className="text-slate-300">this past week · usual ≈</span>
+            <span className="tabular-nums font-bold text-slate-600">{fmtMetricValue(r.metric, r.baseline?.median)}</span>
+            {Number.isFinite(baseN) && baseN > 0 && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span className="tabular-nums">{baseN}-wk base</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {deltaStr != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', tone.text)}>{deltaStr}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">vs usual week</div>
+            </>
+          )}
         </div>
       </div>
     </div>

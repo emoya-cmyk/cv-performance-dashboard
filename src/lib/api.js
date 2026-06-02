@@ -254,6 +254,14 @@ export const api = {
   // getSystemic/getTrajectory) it never rides getClientInsights() — a client's OWN pace rides
   // inside getClientInsights() (.pacing), own numbers only. No params (current month, clock = now).
   getPacing:          ()         => get('/api/insights/pacing'),
+  // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
+  // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
+  // flags every client × flow metric whose trailing week has slid out of that client's OWN recent
+  // band RIGHT NOW — a Tuesday collapse (or a runaway spend spike) surfaced days before the Monday
+  // recap, worst first. AGENCY-ONLY: a row names another client, so (like getSystemic/getTrajectory/
+  // getPacing) it never rides getClientInsights() — a client's OWN pulse rides inside
+  // getClientInsights() (.pulse), own numbers only. No params (trailing week, clock = now).
+  getPulse:           ()         => get('/api/insights/pulse'),
   // getEfficacy() → portfolio EFFICACY LEDGER: the self-improving grain — does the recommended PLAY
   // actually fix the problem? Per play archetype (kind::metric), the measured recovery rate (shrunk
   // toward the pooled base rate, ranked by a Wilson lower bound so a deep 9/10 beats a lucky 1/1) plus
