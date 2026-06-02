@@ -60,6 +60,14 @@ const { forecastAnswer, narrateForecast, DEFAULT_HORIZON, MAX_HORIZON } = requir
 // the goal-side twin of forecastAnswer: forecast asks "what WILL it be", pacing asks
 // "do we make the number we committed to". Numbers in, verdict + one grounded sentence out.
 const { pacingAnswer, narratePacing } = require('./pacingAnswer')
+// intel-v6 (9): the PRESCRIBE answer — "what should I do?". The advice adapter is pure
+// (findings in, verdict out) so its require is trivially cycle-safe; the engine helpers
+// it consumes (getInsightFeed + the SAME decoration pipeline the GET /insights route
+// runs) live in insights.js, which never requires THIS module, so a plain top-level
+// require stays cycle-safe too. answerAdvice resolves one client, pulls its ranked feed,
+// decorates it byte-identically to the cards, and hands it here for a focused to-do list.
+const { adviceAnswer, narrateAdvice, DEFAULT_LIMIT: ADVICE_DEFAULT_LIMIT } = require('./adviceAnswer')
+const { getInsightFeed, getEfficacyTable, attachEfficacyNotes, attachEscalations } = require('./insights')
 
 // ── METRIC WHITELIST ──────────────────────────────────────────────────────────
 // Aggregate fragments over weekly_reports (alias wr). Each SUM is COALESCEd so a
@@ -162,6 +170,17 @@ function validateSpec(raw) {
   // runAsk's single dispatch can never run both paths for one question.
   if (raw.pacing === true && raw.forecast !== true) {
     out.pacing = true
+  }
+
+  // intel-v6 (9): the PRESCRIBE path. `advice:true` flips the answer to "what should I
+  // DO about it?" — surfacing the engine's already-grounded recommended actions as a
+  // focused to-do list rather than a number. OMITTED on a normal spec (like the keys
+  // above), so existing shapes stay byte-identical. It is mutually exclusive with BOTH
+  // forecast and pacing — those answer "what WILL it be" / "do we hit the goal", a
+  // different question than "what to do next" — so a tie defers to them and runAsk's
+  // single dispatch can never run two answer paths for one question.
+  if (raw.advice === true && raw.forecast !== true && raw.pacing !== true) {
+    out.advice = true
   }
 
   return out
@@ -515,7 +534,8 @@ const PARSE_SYSTEM = [
   '  "limit":         integer 1-50,',
   '  "forecast":      true ONLY when the question asks about the FUTURE (a projection); omit otherwise,',
   '  "horizon":       integer 1-26 — weeks ahead to project (only when forecast is true),',
-  '  "pacing":        true ONLY when the question asks whether a monthly GOAL/target will be hit; omit otherwise',
+  '  "pacing":        true ONLY when the question asks whether a monthly GOAL/target will be hit; omit otherwise,',
+  '  "advice":        true ONLY when the question asks what to DO / what to focus on / what needs attention; omit otherwise',
   '}',
   '',
   'Mapping rules:',
@@ -543,6 +563,14 @@ const PARSE_SYSTEM = [
   '  jobs — pick that metric, with group_by "none" and time_range "this_month". A plain',
   '  projection with NO goal mentioned is a forecast, NOT pacing. NEVER set both pacing',
   '  and forecast on one spec.',
+  '- advice: set true ONLY when the question asks for a course of action rather than a',
+  '  number — "what should I do", "what do I do about X", "what should I focus on",',
+  '  "what needs my attention", "what are my next steps", "where should I spend my time",',
+  '  "what would you recommend". This surfaces the system\'s recommended actions, so it',
+  '  needs no metric/timeframe — leave metric at its best guess (or "revenue"), group_by',
+  '  "none". advice is mutually exclusive with forecast AND pacing: NEVER set advice',
+  '  alongside either; a request to DO something defers to neither a projection nor a',
+  '  goal check.',
   'Output JSON only — no code fences, no commentary.',
 ].join('\n')
 
@@ -888,6 +916,144 @@ function pacingEnvelope(question, spec, scope, metricDef, parts) {
   }
 }
 
+// ── GROUNDED PRESCRIBE ANSWER (intel-v6 (9): "what should I do about it?") ─────
+// The verb that ties the others together. answerForecast/answerPacing answer "what WILL
+// it be" / "do we hit the goal"; this answers the question an owner actually opens the
+// dashboard to ask — "so what should I DO?". Every piece already exists: the engine raises
+// ranked findings, derives a grounded recommended_action for each on read, annotates the
+// advice with its learned track record (attachEfficacyNotes) and — once a play proves
+// ineffective — REVISES the advice and bumps its urgency (attachEscalations). This pulls
+// that already-decorated, already-ranked feed for ONE client and hands it to adviceAnswer
+// for a focused to-do list — the SAME grounded actions the recommendation cards render,
+// never re-prioritized and never re-worded (no LLM arithmetic anywhere).
+//
+// Decoration is byte-identical to the GET /api/insights/:clientId route —
+// attachEscalations(attachEfficacyNotes(feed, table), table) — so the Ask answer agrees
+// with the cards to the word. Scoped to ONE client's own feed (getInsightFeed is per-
+// client), so the answer names no other tenant: leak-safe on BOTH the agency Intelligence
+// page and a client /my-dashboard, exactly like the per-client cards both already render.
+// The only audience difference is escalated wording — agency reads the raw revised text,
+// client reads the softened escalation.client_text — which adviceAnswer handles internally.
+async function answerAdvice(question, spec, ctx) {
+  const { scope } = ctx
+
+  // (a) AUDIENCE + the one client whose feed we prescribe from. A scoped (/my-dashboard)
+  // caller is already pinned to its own client and reads client-toned wording; an unscoped
+  // agency caller must NAME a client (advice is per-client), so a portfolio-wide "what
+  // should I do?" asks which client rather than guessing — grounded, never fabricated.
+  let clientId = scope
+  let audience = 'client'
+  if (clientId == null) {
+    audience = 'agency'
+    if (!spec.client_filter) {
+      return adviceEnvelope(question, spec, scope, {
+        answer:  `Tell me which client to look at — I prescribe actions from one client's open findings.`,
+        verdict: null,
+        audience,
+      })
+    }
+    const { rows } = await query('SELECT id FROM clients WHERE LOWER(name) = LOWER($1) LIMIT 1', [spec.client_filter])
+    if (!rows.length) {
+      return adviceEnvelope(question, spec, scope, {
+        answer:  `I couldn't find a client named "${spec.client_filter}" to recommend actions for.`,
+        verdict: null,
+        audience,
+      })
+    }
+    clientId = rows[0].id
+  }
+
+  // (b) THE FEED — one client's ranked open findings, decorated byte-identically to the
+  // recommendation cards: attachEscalations(attachEfficacyNotes(feed, table), table). The
+  // efficacy table is portfolio-wide (a play's pooled track record) but carries no tenant
+  // name, so it is leak-safe to fold in. getInsightFeed binds client_id first, so the feed
+  // can never read another client's findings.
+  const [feed, table] = await Promise.all([
+    getInsightFeed(clientId, { limit: 50 }),
+    getEfficacyTable(),
+  ])
+  const decorated = attachEscalations(attachEfficacyNotes(feed, table), table)
+
+  // (c) THE VERDICT — pure selection + audience-correct wording (adviceAnswer), then ONE
+  // grounded sentence counting the to-do list straight off the verdict (narrateAdvice).
+  const verdict = adviceAnswer(decorated, { audience, limit: ADVICE_DEFAULT_LIMIT })
+  return adviceEnvelope(question, spec, scope, {
+    answer:  narrateAdvice(verdict, { audience }),
+    verdict,
+    audience,
+  })
+}
+
+// Assemble the standard runAsk envelope for an advice answer — ONE shape for both the
+// "has actions" and the grounded "nothing to prescribe / which client?" paths, so the
+// route/FE never special-case advice. When a real verdict exists we surface one legible
+// row per surfaced action (each carries the `action` text plus its urgency / title /
+// severity / escalated flag / efficacy note), and the full verdict rides in meta.advice
+// for the FE to render a to-do panel. The unique `action` column is the FE's detector
+// token (columns.includes('action')) — mirroring pacing's ['label','value'] and forecast's
+// ['step','value','lo','hi']. Follow-up chips are built from the spec with `advice`
+// STRIPPED, so every chip is a normal question runAsk can re-answer. Advice has no period-
+// over-period, so hasComparison:false and meta.explainable:false (no "Why?" chip); the
+// cross-client pivot is offered only to an unscoped agency caller.
+function adviceEnvelope(question, spec, scope, parts) {
+  const { answer, verdict, audience } = parts
+
+  const baseSpec = { ...spec }
+  delete baseSpec.advice
+  const followups = require('./followups').suggestFollowups(baseSpec, {
+    hasComparison:        false,
+    allowClientBreakdown: scope == null,
+  })
+
+  // actions are "shown" (one row each + a meta.advice block) only for an ACTIONABLE
+  // verdict; an all_clear / none / which-client path surfaces no rows and the sentence
+  // already explains why (the empty-state copy is audience-toned upstream). Every field is
+  // COPIED from the verdict (grounded) — this envelope computes no advice text of its own.
+  const shown = verdict != null && verdict.status === 'actionable'
+  const rows = shown
+    ? verdict.actions.map((a) => ({
+        action:        a.action,          // the grounded advice text, verbatim
+        display:       a.action,          // generic table renderers show the action column
+        urgency:       a.urgency,
+        title:         a.title,
+        severity:      a.severity,
+        escalated:     a.escalated,
+        efficacy_note: a.efficacy_note,
+      }))
+    : []
+
+  return {
+    question,
+    spec,
+    answer,
+    narrated: false,                 // deterministic grounded narration, never free LLM prose
+    template: answer,                // the deterministic advice sentence IS the template
+    columns: ['action'],             // unique token the FE keys the AdvicePanel off of
+    rows,
+    followups,
+    meta: {
+      metric:      'Recommended actions',  // advice spans findings — no single metric
+      unit:        null,
+      group_by:    'none',
+      time_label:  'open findings',
+      row_count:   rows.length,
+      comparison:  null,
+      explainable: false,            // advice has no period-over-period "why"
+      // intel-v6 (9): the verdict itself, for the FE to render a to-do list with urgency
+      // badges, escalation markers and efficacy notes. null on every non-actionable path
+      // (all_clear / none / which-client); the audience-toned headline already covers those.
+      // Every action string is COPIED from the verdict (grounded), never recomputed here.
+      advice: shown ? {
+        status:   verdict.status,
+        audience: verdict.audience,
+        count:    verdict.count,
+        total:    verdict.total,
+        actions:  verdict.actions,
+      } : null,
+    },
+  }
+}
+
 /**
  * Answer a natural-language portfolio question.
  * @param {string} question
@@ -913,6 +1079,13 @@ async function runAsk(question, opts = {}) {
   const scope = opts.scopeClientId != null ? opts.scopeClientId : null
 
   const spec = await parseSpec(q)
+
+  // intel-v6 (9): a prescriptive question ("what should I do about it?") branches to the
+  // grounded advice answer — the SAME envelope shape. validateSpec makes advice mutually
+  // exclusive with BOTH pacing and forecast, so at most one of these three branches fires.
+  // Placed first because advice is the most "meta" question — it surfaces actions, not a
+  // metric — and never needs the compile path below.
+  if (spec.advice) return await answerAdvice(q, spec, { now, isPg, scope })
 
   // intel-v6 (8): a goal/target question ("are we on track to hit our number?")
   // branches to the grounded pacing answer — the SAME envelope shape. validateSpec makes
@@ -1273,7 +1446,7 @@ async function runSuggestions(opts = {}) {
 }
 
 module.exports = {
-  runAsk, runSuggestions, runExplain, answerForecast, answerPacing, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  runAsk, runSuggestions, runExplain, answerForecast, answerPacing, answerAdvice, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,

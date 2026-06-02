@@ -57,7 +57,7 @@ const reply = (text) => ({ data: { content: [{ type: 'text', text }] } })
 const db = require('../db')
 const { AGG, derive } = require('../lib/metricsCore')
 const {
-  runAsk, runExplain, answerForecast, answerPacing, validateSpec, compileQuery, resolveTimeRange, SpecError,
+  runAsk, runExplain, answerForecast, answerPacing, answerAdvice, validateSpec, compileQuery, resolveTimeRange, SpecError,
 } = require('../lib/ask')
 // The PURE follow-up core is exhaustively proven in test/followups.test.js; here we
 // only assert runAsk WIRES it correctly — the right spec + the right scope/comparison
@@ -1150,5 +1150,138 @@ test('runAsk routes a goal/target question into the pacing branch (no narrate ho
   assert.equal(res.meta.pacing.target, 100)
   assert.ok(res.answer.includes('behind pace'), res.answer)
   assert.equal(res.meta.explainable, false)
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+// ── 11. ADVICE — grounded "what should I do?" (intel-v6 (9)) ───────────────────
+// These prove the WIRE end-to-end: answerAdvice pulls a real client's ranked feed
+// (getInsightFeed), runs the SAME decoration pipeline the route uses
+// (attachEscalations(attachEfficacyNotes(feed, table), table)) and reshapes it into the
+// standard Ask envelope. The audience split (agency raw text vs client softened
+// client_text) is proven exhaustively in adviceAnswer.test.js — here a fresh client has
+// an EMPTY efficacy table, so no play escalates and client wording == agency wording;
+// what we assert is that the grounded advice text, urgency, counts and follow-ups all
+// survive the round-trip from the insights table to the envelope, verbatim.
+let advSeq = 0
+async function seedFinding(clientId, { metric = 'leads', severity = 'warning', weeks = 3, kind = 'trend', direction = 'down', score = 1 } = {}) {
+  await db.query(
+    `INSERT INTO insights (client_id, scope, kind, metric, severity, direction, score, title, evidence, fingerprint, status)
+     VALUES ($1,'client',$2,$3,$4,$5,$6,$7,$8,$9,'open')`,
+    [clientId, kind, metric, severity, direction, score,
+     `${metric} ${kind}`, JSON.stringify({ weeks }), `adv-${process.pid}-${++advSeq}`],
+  )
+}
+const advise = (question, spec, scope) =>
+  answerAdvice(question, spec, { now: NOW, isPg: false, scope })
+const baseOfAdvice = (spec) => { const s = { ...spec }; delete s.advice; return s }
+
+test('advice: a scoped client with open findings → grounded to-do envelope (client-toned)', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('AdviceActionable')
+  await seedFinding(id, { metric: 'leads', severity: 'critical', weeks: 5 })
+  await seedFinding(id, { metric: 'leads', severity: 'warning',  weeks: 3 })
+  const spec = validateSpec({ metric: 'leads', advice: true })
+  const env  = await advise('what should I do?', spec, id)
+  assert.equal(env.narrated, false)
+  assert.deepEqual(env.columns, ['action'])
+  assert.equal(env.rows.length, 2)
+  assert.equal(env.rows[0].urgency, 'act_now')                       // critical sorts first
+  assert.equal(env.rows[1].urgency, 'plan')                          // warning second
+  assert.match(env.rows[0].action, /raise budget or broaden targeting/)  // grounded lever, copied through
+  assert.equal(env.rows[0].display, env.rows[0].action)             // generic renderers show the action
+  assert.equal(env.rows[0].escalated, false)                        // fresh client → empty efficacy → no escalation
+  assert.equal(env.meta.metric, 'Recommended actions')
+  assert.equal(env.meta.unit, null)
+  assert.equal(env.meta.group_by, 'none')
+  assert.equal(env.meta.time_label, 'open findings')
+  assert.equal(env.meta.row_count, 2)
+  assert.equal(env.meta.comparison, null)
+  assert.equal(env.meta.explainable, false)                         // advice has no period-over-period "why"
+  const a = env.meta.advice
+  assert.equal(a.status, 'actionable')
+  assert.equal(a.audience, 'client')
+  assert.equal(a.count, 2)
+  assert.equal(a.total, 2)
+  assert.equal(a.actions.length, 2)
+  assert.equal(env.answer, '2 recommended actions to focus on — 1 needs immediate attention.')
+  assert.deepEqual(env.followups,                                   // built from the spec with advice STRIPPED
+    suggestFollowups(baseOfAdvice(spec), { hasComparison: false, allowClientBreakdown: false }))
+})
+
+test('advice: a scoped client with nothing actionable → honest all-clear, no rows', async () => {
+  await ensurePortfolio()
+  const id   = await freshClient('AdviceAllClear')
+  const spec = validateSpec({ metric: 'revenue', advice: true })
+  const env  = await advise('what should I do?', spec, id)
+  assert.deepEqual(env.columns, ['action'])
+  assert.deepEqual(env.rows, [])
+  assert.equal(env.meta.advice, null)                               // no verdict block on a non-actionable path
+  assert.equal(env.meta.row_count, 0)
+  assert.equal(env.meta.explainable, false)
+  assert.equal(env.answer, "You're all caught up — no open issues need your attention right now.")
+})
+
+test('advice: unscoped with no client named → asks which client (advice is per-client)', async () => {
+  await ensurePortfolio()
+  const env = await advise('what should I do?',
+    validateSpec({ metric: 'revenue', advice: true }), null)
+  assert.equal(env.answer,
+    "Tell me which client to look at — I prescribe actions from one client's open findings.")
+  assert.equal(env.meta.advice, null)
+  assert.deepEqual(env.rows, [])
+})
+
+test('advice: unscoped naming an unknown client → honest not-found', async () => {
+  await ensurePortfolio()
+  const env = await advise('what should Nope do?',
+    validateSpec({ metric: 'revenue', advice: true, client_filter: 'Nope' }), null)
+  assert.equal(env.answer, 'I couldn\'t find a client named "Nope" to recommend actions for.')
+  assert.equal(env.meta.advice, null)
+})
+
+test('advice: unscoped naming a known client resolves it and prescribes for that one client', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('AdviceByName')
+  await seedFinding(id, { metric: 'leads', severity: 'critical', weeks: 4 })
+  const spec = validateSpec({ metric: 'leads', advice: true, client_filter: 'AdviceByName' })
+  const env  = await advise('what should AdviceByName do?', spec, null)
+  assert.equal(env.meta.advice.status, 'actionable')
+  assert.equal(env.meta.advice.audience, 'agency')                  // unscoped caller → agency wording
+  assert.equal(env.meta.advice.count, 1)
+  assert.equal(env.rows.length, 1)
+  assert.equal(env.rows[0].urgency, 'act_now')
+  assert.equal(env.answer, '1 recommended action to focus on — 1 needs immediate attention.')
+  assert.deepEqual(env.followups,                                   // unscoped → cross-client pivot offered
+    suggestFollowups(baseOfAdvice(spec), { hasComparison: false, allowClientBreakdown: true }))
+})
+
+test('validateSpec: advice flag survives on a normal spec; forecast and pacing both beat it', () => {
+  assert.equal(validateSpec({ metric: 'revenue', advice: true }).advice, true)
+  assert.equal(validateSpec({ metric: 'revenue' }).advice, undefined)
+  const vsForecast = validateSpec({ metric: 'revenue', advice: true, forecast: true })
+  assert.equal(vsForecast.forecast, true)
+  assert.equal(vsForecast.advice, undefined)
+  const vsPacing = validateSpec({ metric: 'revenue', advice: true, pacing: true })
+  assert.equal(vsPacing.pacing, true)
+  assert.equal(vsPacing.advice, undefined)
+})
+
+test('runAsk routes a "what should I do" question into the advice branch (no narrate hop)', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('AdviceRoute')
+  await seedFinding(id, { metric: 'leads', severity: 'critical', weeks: 6 })
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({
+    metric: 'leads', group_by: 'none', time_range: 'this_month', advice: true,
+  })
+  onNarrate = () => { throw new Error('advice must not call the narrate hop') }
+  const res = await runAsk('what should I do about this client?',
+    { now: NOW, scopeClientId: id })
+  assert.equal(res.spec.advice, true)
+  assert.equal(res.meta.advice.status, 'actionable')
+  assert.equal(res.meta.advice.audience, 'client')
+  assert.equal(res.meta.advice.count, 1)
+  assert.equal(res.meta.explainable, false)
+  assert.ok(res.answer.includes('1 recommended action'), res.answer)
   delete process.env.ANTHROPIC_API_KEY
 })
