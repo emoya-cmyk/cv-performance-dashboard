@@ -90,6 +90,14 @@ const { detectCoverageGaps } = require('./coverage')
 // the scalar evidence chips, and the grounding verifier are untouched. See correlate.js.
 const { linkCoverageToImpact } = require('./correlate')
 
+// Recovery classification (PURE): at expiry time, decide whether an about-to-close
+// finding cleared because the problem RECOVERED (metric back to baseline, channel
+// reconnected) vs merely LAPSED (aged out, no proof). markRecoveries() below carves
+// the genuine wins out of the expiry stream and stamps status='recovered' so the
+// precision loop credits them instead of slandering the detectors that worked. See
+// lib/outcomes.js — finding + in-memory probe in, a verdict out; no DB, never throws.
+const { classifyRecovery } = require('./outcomes')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -863,11 +871,116 @@ async function upsertInsight(clientId, f, o) {
   )
 }
 
+// ── recovery probes (built in-memory from THIS sweep, then read per finding) ──
+// expireStale flips every un-refreshed finding to 'expired'. But before it does,
+// markRecoveries asks lib/outcomes for each one: did this clear because the problem
+// RECOVERED, or did it just LAPSE? The answer needs a `probe` — the current-sweep
+// snapshot of the finding's subject — which we assemble ONCE here from the same
+// `summary` + `findings` the sweep already computed (no extra DB reads):
+//   • metric symptom (anomaly/trend) → { current, baseline } of that metric now
+//   • coverage_gap                   → { fresh } — is the channel reporting again?
+//
+// CRITICAL FAIL-SAFE — we must never FABRICATE a reconnect. A coverage_gap counts as
+// recovered ONLY when its channel BOTH delivered data in this sweep's window (it is in
+// `seenChannels`, the live coverage scan) AND is no longer flagged dark. "Absent from
+// the dark set" is NOT sufficient, because two very different channels are absent:
+//   • the one that reconnected (present in the scan, last_date now recent) — a real win
+//   • the one that VANISHED — its last fact aged past the 90-day window, so it dropped
+//     out of loadChannelCoverage entirely. That channel is MORE dark than ever, yet a
+//     naive !dark check would score it "fresh." Requiring presence in `seenChannels`
+//     excludes it: no data this sweep ⇒ no reconnect.
+// And if coverage detection was SKIPPED outright (no atomic grain → the orchestrator's
+// try/catch swallowed it), `coverageRan` is false and every coverage probe returns null
+// → the finding simply expires, exactly as before. Likewise a symptom whose metric is
+// absent from `summary` (or a degenerate no_data entry) returns null/undefined readings
+// → unmeasurable → expires. Absence of proof is never read as recovery.
+function evidenceOf(row) {
+  if (!row) return {}
+  const e = row.evidence
+  return typeof e === 'string' ? safeParse(e) : (e || {})
+}
+// coverage: { ran, channels } — the live coverage scan this sweep (loadChannelCoverage
+// output), or null when detection was skipped. We derive BOTH the still-dark set (from
+// the emitted coverage_gap findings) and the delivered-this-sweep set (from the scan).
+function buildRecoveryProbes(summary, findings, coverage) {
+  // metric → its current vs baseline reading this sweep (the symptom probe)
+  const symptomByMetric = new Map()
+  for (const e of (Array.isArray(summary) ? summary : [])) {
+    if (e && e.metric) symptomByMetric.set(e.metric, { current: e.latest, baseline: e.baseline })
+  }
+  // channels STILL dark this sweep (each emitted a coverage_gap finding)
+  const darkChannels = new Set()
+  for (const f of (Array.isArray(findings) ? findings : [])) {
+    if (f && f.kind === 'coverage_gap') {
+      const ch = evidenceOf(f).channel
+      if (ch != null) darkChannels.add(String(ch))
+    }
+  }
+  // channels that DELIVERED data in this sweep's window — the positive reconnect proof
+  const coverageRan = !!(coverage && coverage.ran === true)
+  const seenChannels = new Set()
+  if (coverageRan) {
+    for (const c of (Array.isArray(coverage.channels) ? coverage.channels : [])) {
+      if (c && c.key != null) seenChannels.add(String(c.key))
+    }
+  }
+  return { symptomByMetric, darkChannels, seenChannels, coverageRan }
+}
+// finding → the probe classifyRecovery expects, or null when we have no clean read
+// (→ outcomes returns a safe 'lapsed' and the finding expires as it does today).
+function probeFor(finding, probes) {
+  if (!finding || !probes) return null
+  const kind = finding.kind
+  if (kind === 'coverage_gap') {
+    if (!probes.coverageRan) return null            // detection skipped → never assert "fresh"
+    const ch = evidenceOf(finding).channel
+    if (ch == null) return null
+    const key = String(ch)
+    // reconnected ⇔ delivered data this sweep AND not flagged dark. A vanished
+    // (aged-out) channel is absent from seenChannels → fresh:false → it stays dark.
+    return { fresh: probes.seenChannels.has(key) && !probes.darkChannels.has(key) }
+  }
+  if ((kind === 'anomaly' || kind === 'trend') && finding.metric) {
+    return probes.symptomByMetric.get(finding.metric) || null
+  }
+  return null
+}
+
+// Carve the genuine WINS out of the about-to-expire stream. For each active finding
+// this sweep did NOT refresh, classify recovery from its in-memory probe; a recovered
+// finding gets a terminal status='recovered' + the reason/timestamp stamp (so 3c can
+// surface "here's what we fixed"), and is thereby EXCLUDED from the expireStale UPDATE
+// below (which only touches 'open'/'acknowledged'). Everything else is left for
+// expireStale to close as 'expired'. Idempotent: a re-run finds nothing in the
+// open/acknowledged set with last_seen < stamp that it didn't already move. Fail-safe:
+// any finding with no probe / unmeasurable reading stays put → expires as before.
+async function markRecoveries(clientId, stampIso, probes) {
+  const { rows } = await query(
+    `SELECT id, kind, metric, evidence FROM insights
+      WHERE client_id = $1 AND scope = 'client'
+        AND status IN ('open', 'acknowledged') AND last_seen < $2`,
+    [clientId, stampIso]
+  )
+  const recovered = []
+  for (const row of rows) {
+    const verdict = classifyRecovery(row, probeFor(row, probes))
+    if (!verdict.recovered) continue
+    await query(
+      `UPDATE insights SET status = 'recovered', recovery_reason = $2, recovered_at = $3
+        WHERE id = $1`,
+      [row.id, verdict.reason, stampIso]
+    )
+    recovered.push({ id: row.id, kind: row.kind, metric: row.metric, reason: verdict.reason })
+  }
+  return recovered
+}
+
 // Close out active findings that this sweep did NOT refresh: their condition has
 // cleared (e.g. data is fresh again, the spike normalised). Sweeps BOTH 'open' and
 // 'acknowledged' — an "someone's on it" finding the world has since fixed should
 // still leave the feed — but never 'resolved' (a terminal user decision the engine
-// must not resurrect). Portable — a simple timestamp compare, no PG-only params.
+// must not resurrect) and never 'recovered' (markRecoveries already gave the wins a
+// terminal status just before this runs). Portable — a simple timestamp compare.
 async function expireStale(clientId, stampIso) {
   await query(
     `UPDATE insights SET status = 'expired'
@@ -1069,7 +1182,7 @@ async function deriveAndPersistPrecision(clientId, stampIso) {
     `SELECT kind, metric, status
        FROM insights
       WHERE client_id = $1 AND scope = 'client'
-        AND status IN ('resolved', 'acknowledged', 'expired')`,
+        AND status IN ('resolved', 'acknowledged', 'expired', 'recovered')`,
     [clientId]
   )
 
@@ -1297,9 +1410,11 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
   // client, or a DB that predates migration 010) the read returns [] / throws and we
   // simply skip it, never blocking the rest of the sweep. detectCoverageGaps is pure
   // and returns [] on empty input, so no facts ⇒ no coverage findings.
+  let coverageScan = null
   try {
     const channels = await loadChannelCoverage(clientId, { asOf: day, windowDays: 90 })
     findings.push(...detectCoverageGaps(channels, day, { windowDays: 90 }))
+    coverageScan = { ran: true, channels }   // live scan → reconnect proof for markRecoveries
   } catch { /* atomic grain unavailable → skip coverage, keep the rest of the sweep */ }
 
   // Root-cause linking, off the same atomic grain: connect a fallen metric (an anomaly
@@ -1333,6 +1448,17 @@ async function runInsightsForClient(clientId, { asOf, weeks = 26 } = {}) {
       await snapshotForecast(clientId, { ...p, projectedTotal: published }, day)
     }
   }
+
+  // Before the blunt expiry, carve out the genuine WINS: classify each about-to-expire
+  // finding against this sweep's in-memory probes (metric back to baseline? channel
+  // delivering again?) and give the proven recoveries a terminal status='recovered'
+  // stamp, so they leave expireStale's net AND get credited (not punished) by the
+  // precision loop. Best-effort and strictly additive: any failure is swallowed so it
+  // can never block expiry — a finding we don't mark recovered just expires as before.
+  try {
+    const probes = buildRecoveryProbes(summary, findings, coverageScan)
+    await markRecoveries(clientId, stampIso, probes)
+  } catch { /* recovery classification is best-effort; never block the sweep/expiry */ }
 
   await expireStale(clientId, stampIso)
 
@@ -1654,6 +1780,8 @@ module.exports = {
   deriveAndPersistCalibration, loadCalibration,
   // precision loop (learn which finding kinds a client engages with)
   deriveAndPersistPrecision, loadPrecision, loadPrecisionAll, attachPrecision, feedSort,
+  // recovery classification at expiry (carve wins out of the expiry stream)
+  markRecoveries, buildRecoveryProbes, probeFor,
   // connection-health watchdog (per-channel coverage gaps off the atomic fact grain)
   loadChannelCoverage,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep

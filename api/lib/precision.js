@@ -65,13 +65,21 @@ function countOf(v) {
 // A finding becomes a learning SAMPLE only once its lifecycle reaches a verdict:
 //   • resolved      → ENGAGED  — a human took a terminal "handled" decision on it.
 //   • acknowledged  → ENGAGED  — a human said "I see it, we're on it."
-//   • expired       → IGNORED  — it auto-closed; in the common case nobody acted.
+//   • recovered     → ENGAGED  — the engine PROVED the problem cleared (the metric
+//       returned to baseline, the channel reconnected; see lib/outcomes.js). This is
+//       the strongest true-positive signal there is: a finding so accurate the
+//       underlying condition actually got fixed. It must lift the kind's confidence,
+//       NEVER sink it — the old "every expiry is ignored" rule scored these wins
+//       backwards, slandering the detectors that work. markRecoveries() carves the
+//       genuine wins out of the expiry stream so we can credit them here.
+//   • expired       → IGNORED  — it auto-closed with no proof of recovery; in the
+//       common case nobody acted.
 //   • open / other  → PENDING  — still live, no verdict yet → NOT a sample.
 // Treating `acknowledged` as engaged (though still active) is deliberate: the human
 // ATTENTION is the signal we score, not the eventual resolution. PENDING rows are
 // excluded entirely so an open backlog never looks like either success or noise.
 function classifyOutcome(status) {
-  if (status === 'resolved' || status === 'acknowledged') return 'engaged'
+  if (status === 'resolved' || status === 'acknowledged' || status === 'recovered') return 'engaged'
   if (status === 'expired') return 'ignored'
   return 'pending'
 }

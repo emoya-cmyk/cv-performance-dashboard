@@ -42,6 +42,33 @@ test('classifyOutcome: auto-closed (expired) → ignored; still-live → pending
   assert.equal(classifyOutcome(null), 'pending')
 })
 
+test('classifyOutcome: an engine-proven recovery (recovered) → engaged, NOT ignored', () => {
+  // intel-v4 (3b)'s central fix. A finding so accurate the underlying problem actually
+  // got FIXED (metric back to baseline, channel reconnected — see lib/outcomes.js) is
+  // the strongest true positive there is. The old rule read EVERY expiry as ignored and
+  // so scored these wins backwards, sinking the kinds that work. 'recovered' must land in
+  // the SAME engaged bucket as a human acknowledgement.
+  assert.equal(classifyOutcome('recovered'), 'engaged')
+})
+
+test('precision math: a recovery lifts a kind while an unacted expiry sinks it', () => {
+  // Two signatures, identical but for the terminal outcome of their one decided sample.
+  // Before 3b BOTH counted as 'ignored' and scored identically low; now the proven
+  // recovery is engaged. With each signature's lone sample shrunk toward the pooled base
+  // rate (1 engaged / 2 decided = 0.5), the win lands above that neutral point and the
+  // expiry below it — so the recovery both out-confidences AND out-weights the lapse.
+  const table = confidenceTable([
+    { kind: 'anomaly', metric: 'leads',   status: 'recovered' },
+    { kind: 'anomaly', metric: 'revenue', status: 'expired'   },
+  ])
+  const win  = table.get('anomaly::leads')
+  const lose = table.get('anomaly::revenue')
+  assert.equal(win.engaged, 1);  assert.equal(win.ignored, 0)
+  assert.equal(lose.engaged, 0); assert.equal(lose.ignored, 1)
+  assert.ok(win.confidence > lose.confidence, 'a proven recovery must outrank an unacted expiry')
+  assert.ok(win.weight > lose.weight, 'and carry a higher feed weight')
+})
+
 // ---- signatureKey ----------------------------------------------------------
 
 test('signatureKey: kind::metric is the unit a client taste is learned at', () => {

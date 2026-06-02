@@ -39,6 +39,9 @@ const {
   detectFindings, fingerprintOf, titleFor, templateDetailFor,
   recommendedAction, isAdverse,
   runInsightsForClient, upsertInsight, getOpenInsights, normalizeInsightRow,
+  // recovery classification at expiry: carve the genuine WINS out of the expiry
+  // stream (metric back to baseline / channel reconnected) + the pure probe builders.
+  markRecoveries, buildRecoveryProbes, probeFor,
   // self-tuning loop: lock in a projection → grade it once the month closes →
   // roll the graded history into this client's learned forecast calibration.
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
@@ -85,6 +88,14 @@ async function allInsights(clientId) {
 async function baselineRows(clientId) {
   const { rows } = await db.query(`SELECT * FROM metric_baselines WHERE client_id = $1`, [clientId])
   return rows
+}
+// The self-improving precision ledger, read straight from the table. Keyed by
+// signature (`kind::metric`) so a test can pin a single kind's engaged/ignored tally.
+async function precisionBySignature(clientId) {
+  const { rows } = await db.query(`SELECT * FROM insight_precision WHERE client_id = $1`, [clientId])
+  const out = {}
+  for (const r of rows) out[r.signature] = r
+  return out
 }
 
 // A month's goal row (loadGoal reads client_goals keyed by month = 'YYYY-MM-01').
@@ -1106,6 +1117,176 @@ test('sweep: runInsightsForAll covers every client and reports a clean summary',
     assert.ok(feed.some(f => f.kind === 'forecast' && f.metric === 'revenue'),
       'the portfolio sweep persisted each client’s forecast')
   }
+})
+
+// ============================================================
+// 4. RECOVERY CLASSIFICATION — carve the WINS out of the expiry stream
+// ============================================================
+// intel-v4 (3b). Before expireStale() blindly closes every cleared finding as
+// 'expired', markRecoveries() classifies each about-to-expire finding against THIS
+// sweep's in-memory probes and stamps the genuine recoveries terminal:
+//   • a metric anomaly whose value returned to baseline → status='recovered',
+//     recovery_reason='metric_returned_to_baseline'
+//   • a coverage_gap whose channel is delivering data again → 'channel_reconnected'
+// and — the backwards-accounting fix — deriveAndPersistPrecision then counts
+// 'recovered' as ENGAGED (a win), never 'ignored'. A finding that merely aged out
+// with no proof of improvement still expires and still counts ignored. The pure probe
+// builders are unit-tested directly for the full fail-safe matrix (no clean read →
+// stays on the expiry path). Mirrors lib/outcomes.js's own unit tests at the I/O seam.
+
+test('recovery: a symptom that returns to baseline is marked recovered (a win), not expired', async () => {
+  await ready()
+  const c = await freshClient('Rebound Roofing Co')
+
+  // Run 1 — the persist-test recipe: a calm revenue baseline (~800) then a 5000 spike
+  // over MONDAYS.slice(2) → one open critical anomaly as of just after the last week.
+  const weeks = MONDAYS.slice(2)
+  const rev1  = [780, 820, 790, 810, 800, 5000]
+  for (let i = 0; i < weeks.length; i++) await seedWeek(c, weeks[i], { projected_revenue: rev1[i] })
+  await runInsightsForClient(c, { asOf: '2026-05-06' })
+  let anomaly = (await allInsights(c)).find(r => r.kind === 'anomaly' && r.metric === 'revenue')
+  assert.ok(anomaly, 'run 1 opens a revenue anomaly')
+  assert.equal(anomaly.status, 'open')
+
+  // Run 2 — one more week lands BACK at ~800. summarizeSeries is leave-one-out, so the
+  // baseline is median([780,820,790,810,800,5000]) = 805 and latest = 800 → within 10%
+  // → the anomaly clears (NOT re-emitted) AND the in-memory probe proves it returned to
+  // baseline. markRecoveries must beat expireStale to it.
+  await seedWeek(c, '2026-05-11', { projected_revenue: 800 })
+  await runInsightsForClient(c, { asOf: '2026-05-13' })
+
+  anomaly = (await allInsights(c)).find(r => r.kind === 'anomaly' && r.metric === 'revenue')
+  assert.equal(anomaly.status, 'recovered', 'the cleared anomaly is a recovery, not an expiry')
+  assert.equal(anomaly.recovery_reason, 'metric_returned_to_baseline')
+  assert.ok(anomaly.recovered_at, 'the recovery is timestamped for the "what we fixed" feed')
+  // and it has left the open feed (assert on THE anomaly row, not the whole feed — an
+  // incidental run-2 trend/forecast must not make this brittle).
+  assert.equal((await getOpenInsights(c)).some(r => r.kind === 'anomaly' && r.metric === 'revenue'),
+    false, 'the recovered anomaly is no longer open')
+
+  // The precision loop credits the win: anomaly::revenue is ENGAGED, never ignored.
+  const sig = (await precisionBySignature(c))['anomaly::revenue']
+  assert.ok(sig, 'the recovered anomaly produced a decided precision sample')
+  assert.equal(Number(sig.engaged), 1)
+  assert.equal(Number(sig.ignored), 0)
+})
+
+test('recovery: a symptom still off baseline simply expires, and is counted ignored', async () => {
+  await ready()
+  const c = await freshClient('Stillsick Roofing Co')
+
+  // Run 1 — a VOLATILE revenue history (1000/1500 swings) then a 6000 spike → one open
+  // critical anomaly, same as the recovered case but with a wide baseline.
+  const weeks = MONDAYS.slice(2)
+  const rev1  = [1000, 1500, 1000, 1500, 1000, 6000]
+  for (let i = 0; i < weeks.length; i++) await seedWeek(c, weeks[i], { projected_revenue: rev1[i] })
+  await runInsightsForClient(c, { asOf: '2026-05-06' })
+  let anomaly = (await allInsights(c)).find(r => r.kind === 'anomaly' && r.metric === 'revenue')
+  assert.ok(anomaly, 'run 1 opens a revenue anomaly')
+  assert.equal(anomaly.status, 'open')
+
+  // Run 2 — a week at 1600. The volatile history's wide spread clears the z-score (the
+  // anomaly is not re-emitted) BUT 1600 vs baseline 1250 is 28% off → NOT recovered. It
+  // must take the ordinary expiry path, no recovery stamp.
+  await seedWeek(c, '2026-05-11', { projected_revenue: 1600 })
+  await runInsightsForClient(c, { asOf: '2026-05-13' })
+
+  anomaly = (await allInsights(c)).find(r => r.kind === 'anomaly' && r.metric === 'revenue')
+  assert.equal(anomaly.status, 'expired', 'no proof of recovery → ordinary expiry')
+  assert.equal(anomaly.recovery_reason ?? null, null, 'no recovery reason stamp')
+  assert.equal(anomaly.recovered_at ?? null, null, 'no recovery timestamp')
+
+  // The precision loop counts the unacted expiry as IGNORED — the backwards-accounting
+  // fix only credits PROVEN recoveries, never a blind aging-out.
+  const sig = (await precisionBySignature(c))['anomaly::revenue']
+  assert.ok(sig, 'the expired anomaly produced a decided precision sample')
+  assert.equal(Number(sig.engaged), 0)
+  assert.equal(Number(sig.ignored), 1)
+})
+
+test('recovery: a dark channel that delivers data again is marked recovered (channel_reconnected)', async () => {
+  await ready()
+  const c = await freshClient('Reconnect Roofing Co')
+  const ASOF = '2026-06-01'
+
+  const isoMinus = (n) =>
+    new Date(Date.parse(ASOF + 'T00:00:00Z') - n * 86400000).toISOString().slice(0, 10)
+  async function seedDaily(channelId, metricKey, fromDaysAgo, toDaysAgo) {
+    for (let n = fromDaysAgo; n >= toDaysAgo; n--) {
+      await db.query(
+        `INSERT INTO fact_metric (client_id, date, channel_id, entity_id, metric_key, metric_value)
+         VALUES ($1,$2,$3,NULL,$4,$5)`,
+        [c, isoMinus(n), channelId, metricKey, 100]
+      )
+    }
+  }
+
+  // Run 1 — google_ads (id 1) healthy; meta (id 2) went dark 30 days ago → one open
+  // critical coverage_gap (the exact silently-dead-channel recipe).
+  await seedDaily(1, 'spend', 40, 1)
+  await seedDaily(2, 'spend', 60, 30)
+  await runInsightsForClient(c, { asOf: ASOF })
+  let gap = (await allInsights(c)).find(r => r.kind === 'coverage_gap' && r.evidence.channel === 'meta')
+  assert.ok(gap, 'run 1 flags meta dark')
+  assert.equal(gap.status, 'open')
+
+  // Run 2 — meta back-fills the missing 29 days right up to yesterday. It is no longer
+  // flagged dark AND it appears in this sweep's delivered-channels set → probe fresh:true
+  // → recovered as 'channel_reconnected' (not a blind expiry).
+  await seedDaily(2, 'spend', 29, 1)
+  await runInsightsForClient(c, { asOf: ASOF })
+
+  gap = (await allInsights(c)).find(r => r.kind === 'coverage_gap' && r.evidence.channel === 'meta')
+  assert.equal(gap.status, 'recovered', 'the reconnected channel is a recovery')
+  assert.equal(gap.recovery_reason, 'channel_reconnected')
+  assert.ok(gap.recovered_at)
+  assert.equal((await getOpenInsights(c)).some(r => r.kind === 'coverage_gap'), false,
+    'the reconnected channel has left the open feed')
+})
+
+// ── the pure probe builders: the full fail-safe matrix without a DB ───────────
+// buildRecoveryProbes(summary, findings, coverage) + probeFor(finding, probes) decide
+// exactly what classifyRecovery sees. The golden rule: only a POSITIVE read may assert
+// recovery; every ambiguous or missing read returns a probe that keeps the finding on
+// the expiry path. These pin the branches the DB can't easily force (coverage skipped,
+// a channel that vanished from the window entirely).
+
+test('probeFor: a metric symptom reads {current,baseline}; an absent metric reads null', () => {
+  const summary = [{ metric: 'revenue', latest: 800, baseline: 805 }]
+  const probes  = buildRecoveryProbes(summary, [], { ran: true, channels: [] })
+  assert.deepEqual(probeFor({ kind: 'anomaly', metric: 'revenue' }, probes), { current: 800, baseline: 805 })
+  assert.deepEqual(probeFor({ kind: 'trend',   metric: 'revenue' }, probes), { current: 800, baseline: 805 })
+  assert.equal(probeFor({ kind: 'anomaly', metric: 'leads' }, probes), null)   // not in this sweep
+})
+
+test('probeFor: coverage_gap reconnect needs POSITIVE delivery; still-dark and vanished both read not-fresh', () => {
+  const gapMeta = { kind: 'coverage_gap', evidence: { channel: 'meta' } }
+
+  // reconnected: meta delivered data AND is not flagged dark → fresh:true.
+  const reconnected = buildRecoveryProbes([], [], { ran: true, channels: [{ key: 'meta' }, { key: 'google_ads' }] })
+  assert.deepEqual(probeFor(gapMeta, reconnected), { fresh: true })
+
+  // still-dark: meta delivered SOME data but is STILL flagged a coverage_gap → fresh:false.
+  const stillDark = buildRecoveryProbes(
+    [], [{ kind: 'coverage_gap', evidence: { channel: 'meta' } }],
+    { ran: true, channels: [{ key: 'meta' }] })
+  assert.deepEqual(probeFor(gapMeta, stillDark), { fresh: false })
+
+  // vanished/aged-out: meta delivered NOTHING this window (absent from channels) and so is
+  // no longer even flagged → fresh:false → it stays dark and expires, never a false win.
+  const vanished = buildRecoveryProbes([], [], { ran: true, channels: [{ key: 'google_ads' }] })
+  assert.deepEqual(probeFor(gapMeta, vanished), { fresh: false })
+})
+
+test('probeFor: when the coverage scan did not run, a coverage_gap gets NO probe (fail-safe → expires)', () => {
+  const gapMeta = { kind: 'coverage_gap', evidence: { channel: 'meta' } }
+  // coverage skipped this sweep (atomic grain unavailable) → coverageRan false → null
+  // probe, which is exactly what makes classifyRecovery keep the finding on the expiry path.
+  assert.equal(probeFor(gapMeta, buildRecoveryProbes([], [], null)), null)
+  assert.equal(probeFor(gapMeta, buildRecoveryProbes([], [], { ran: false })), null)
+  // null/garbage inputs never throw — degenerate probes are a safe no-op.
+  assert.equal(probeFor(null, null), null)
+  assert.equal(probeFor(gapMeta, null), null)
 })
 
 // ============================================================

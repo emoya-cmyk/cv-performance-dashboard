@@ -31,10 +31,20 @@ function getDb() {
   return db
 }
 
-// Translate $1..$N positional params → ? and return params array unchanged
-// (order is already correct)
-function pgToSqlite(sql) {
-  return sql.replace(/\$(\d+)/g, '?')
+// Translate $1..$N positional params → ? honoring the placeholder NUMBER (not its
+// order of appearance) and supporting reuse of the same $N. Postgres indexes $N
+// into the params array regardless of WHERE each placeholder sits in the SQL; a
+// naive appearance-order replace silently mis-binds any out-of-order or repeated
+// placeholder — e.g. `UPDATE t SET a=$2, b=$3 WHERE id=$1` would bind id from the
+// 3rd param, matching zero rows. Returns the rewritten SQL plus a params array
+// reordered to line up 1:1 with the emitted `?` sequence (undefined → null).
+function pgToSqlite(sql, params = []) {
+  const mapped = []
+  const out = sql.replace(/\$(\d+)/g, (_, n) => {
+    mapped.push(params[Number(n) - 1] ?? null)
+    return '?'
+  })
+  return { sql: out, params: mapped }
 }
 
 // Strip RETURNING clause — we re-fetch manually
@@ -51,10 +61,13 @@ function stripReturning(sql) {
 // Main query function — pg-compatible: returns { rows, rowCount }
 async function query(text, params = []) {
   const conn = getDb()
-  let sql = pgToSqlite(text)
 
-  // Normalise undefined → null in params
-  const args = (params || []).map(p => (p === undefined ? null : p))
+  // Normalise undefined → null, then translate $N → ? honoring the placeholder
+  // NUMBER (see pgToSqlite) so out-of-order / reused placeholders bind correctly.
+  const rawArgs = (params || []).map(p => (p === undefined ? null : p))
+  const translated = pgToSqlite(text, rawArgs)
+  let sql = translated.sql
+  const args = translated.params
 
   // Handle RETURNING
   const { stripped, returningCols } = stripReturning(sql)
