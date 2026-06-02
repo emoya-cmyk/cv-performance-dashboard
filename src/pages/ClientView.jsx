@@ -5,7 +5,7 @@ import {
   TrendingUp, ChevronDown, LogOut, ArrowUp, ArrowDown,
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
-  Award, Minus, ArrowUpRight, RefreshCw,
+  Award, Minus, ArrowUpRight, RefreshCw, ShieldCheck,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -952,6 +952,18 @@ function ClientPulseRow({ s }) {
           {/* The "why", in the client's own numbers — present only on a clean composite
               decomposition (revenue ≡ spend × roas, jobs ≡ leads × close_rate). */}
           <DriverBreakdown message={s.diagnosis_client_message} diagnosis={s.diagnosis} tone={tone} audience="client" />
+          {/* A gentle, client-safe trust footnote. The engine attaches reliability_client_note
+              ONLY when it graded THIS client's own firing history on THIS metric as reliable —
+              narratePulseReliability's client branch returns '' for mixed/noisy/un-graded, so a
+              shaky signal stays silent here and the client is never shown doubt about their own
+              numbers. Neutral slate text with an emerald shield reads as a calm "you can trust
+              this read" note on a Heads-up or a Tailwind alike, never competing with the accent. */}
+          {s.reliability_client_note && (
+            <p className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 mt-1.5">
+              <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
+              {s.reliability_client_note}
+            </p>
+          )}
         </div>
         {deltaStr != null && (
           <div className="shrink-0 text-right">
