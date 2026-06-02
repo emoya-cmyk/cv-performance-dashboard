@@ -865,6 +865,101 @@ function GoalPaceRow({ m }) {
   )
 }
 
+// ── This Week So Far — the intra-week daily pulse, client-framed ───────────────
+// The weekly recap above tells the client how LAST week CLOSED; this is the live read
+// on the week IN PROGRESS. The autonomous engine (lib/insights.js) only speaks once an
+// ISO week ends — structurally blind between Mondays — so lib/dayPulse watches each flow
+// metric's TRAILING-7-DAY total every day and fires the moment it slides out of this
+// client's OWN recent band: a dip days before the next recap, or a stretch running ahead.
+// This is the consumer cut of the same sensor behind the agency's "Daily pulse" roster,
+// reduced to THIS account: every figure comes from the server-computed `client_message`
+// (own numbers, names no peer — never a book share or another client), so it's accurate
+// by construction and safe on a client screen. Worst-first; tailwinds shown too, framed
+// as the encouragement they are. A quiet / in-band / data-thin week renders nothing.
+function pulseClientTone(s) {
+  // Non-adverse = a GOOD move (a revenue/leads/jobs surge, or spend running light) → emerald.
+  // Adverse splits by the engine's own severity, mirroring paceClientTier's rose/amber.
+  if (!s?.adverse)
+    return { chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', accent: '#10b981', label: 'Tailwind' }
+  return s.severity === 'critical'
+    ? { chip: 'bg-rose-50 text-rose-600 border-rose-200',    text: 'text-rose-600',  accent: '#f43f5e', label: 'Heads up'     }
+    : { chip: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-600', accent: '#f59e0b', label: 'Keep an eye' }
+}
+
+function ClientPulse({ pulse }) {
+  const signals = Array.isArray(pulse?.signals) ? pulse.signals : []
+  if (signals.length === 0) return null                 // nothing out of band this week → hide
+  const adverse = signals.filter(s => s?.adverse).length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.08s' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">This Week So Far</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
+        {adverse > 0
+          ? <>An early read on the week in progress — {adverse === 1 ? 'one number is' : `${adverse} numbers are`} moving outside your usual range, days before your Monday recap.</>
+          : <>An early read on the week in progress — everything below is running <span className="font-bold text-emerald-600">ahead of your usual week</span>.</>}
+      </p>
+
+      <div className="space-y-3">
+        {signals.map(s => <ClientPulseRow key={s.metric} s={s} />)}
+      </div>
+
+      <p className="text-[10px] text-slate-400 mt-3.5 pt-3 border-t border-slate-50 leading-relaxed">
+        Watched live off your daily numbers and refreshed every day — it compares your last 7 days to your own
+        recent weeks, so a change shows up here days before the week officially closes. An early signal from
+        this week&rsquo;s pace, not a final number.
+      </p>
+    </div>
+  )
+}
+
+// One pulse signal in the client's own words. The grounded sentence is the engine's
+// client_message (own numbers, names no peer); the chip + left accent + delta carry the
+// tone. Direction arrow: a DROP points down, a SPIKE up — matched to the metric, so a
+// good move (revenue up, spend down) and a bad one (revenue down, spend up) read correctly.
+function ClientPulseRow({ s }) {
+  const tone     = pulseClientTone(s)
+  const DirIcon  = s.direction === 'down' ? ArrowDown : s.direction === 'up' ? ArrowUp : Minus
+  const d        = Number(s.delta_pct)
+  const deltaStr = Number.isFinite(d) ? `${d >= 0 ? '+' : '−'}${Math.abs(Math.round(d))}%` : null
+  return (
+    <div
+      className="rounded-xl border border-slate-100 bg-slate-50/40 p-3.5"
+      style={{ borderLeftWidth: 3, borderLeftColor: tone.accent }}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border ${tone.chip}`}>
+          <DirIcon className="w-3.5 h-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-black text-slate-800">{s.label || metricLabel(s.metric)}</span>
+            <span className={`inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${tone.chip}`}>
+              {tone.label}
+            </span>
+          </div>
+          {/* The engine's grounded, own-numbers sentence — the single source of the figures,
+              so the prose can never disagree with the chip beside it. */}
+          {s.client_message && (
+            <p className="text-xs text-slate-600 leading-relaxed font-medium mt-1">{s.client_message}</p>
+          )}
+        </div>
+        {deltaStr != null && (
+          <div className="shrink-0 text-right">
+            <div className={`text-lg font-black tabular-nums leading-none ${tone.text}`}>{deltaStr}</div>
+            <div className="text-[10px] font-semibold text-slate-400 mt-0.5">vs usual week</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 function Sparkline({ data }) {
   if (!data?.length) return null
@@ -935,6 +1030,7 @@ export default function ClientView({ store }) {
   const [standing,     setStanding]    = useState(null)   // { period, cohort_size, standing } — anonymized peer benchmark
   const [recoveries,   setRecoveries]  = useState([])     // recently RECOVERED findings — the "what we fixed" win list
   const [pacing,       setPacing]      = useState(null)   // { metrics[] } — this client's OWN pace to each monthly goal (own numbers only)
+  const [pulse,        setPulse]       = useState(null)   // { signals[], as_of, window, lookback_days } — this client's OWN intra-week daily pulse (own numbers, names no peer)
   const [recap,        setRecap]       = useState(null)   // grounded weekly recap row — the same narration that opens this client's Monday email
 
   const {
@@ -974,8 +1070,12 @@ export default function ClientView({ store }) {
         setStanding(d?.benchmark || null)
         setRecoveries(Array.isArray(d?.recoveries) ? d.recoveries : [])
         setPacing(d?.pacing && Array.isArray(d.pacing.metrics) ? d.pacing : null)
+        // This client's OWN intra-week pulse (lib/dayPulse via getClientPulse), folded into the same
+        // payload. Each signal carries a client_message — own numbers, names no peer — so it's safe to
+        // surface here exactly as pacing/standing are. Empty/in-band/data-thin → no signals → panel hides.
+        setPulse(d?.pulse && Array.isArray(d.pulse.signals) ? d.pulse : null)
       })
-      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null) })
+      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null); setPulse(null) })
     // Weekly recap — the grounded, plain-English narration of the most recently completed
     // week (lib/recap.js), the very same text that opens this client's Monday email. The
     // recap layer degrades to a deterministic template even with no API key, so this is
@@ -1186,6 +1286,16 @@ export default function ClientView({ store }) {
               or another client). Same activity gate as the health badge; self-hides when
               there's no recap text yet. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <WeeklyRecap recap={recap} />}
+
+          {/* ── This Week So Far — the intra-week daily pulse, client-framed ──
+              The recap above tells how LAST week CLOSED; this is the live read on the week
+              IN PROGRESS. The weekly engine is structurally silent between Mondays, so
+              lib/dayPulse (via getClientPulse, folded into this same payload) watches each
+              flow metric's trailing-7-day total every day and flags the moment it slides out
+              of this client's OWN usual range — a dip days before the next recap, or a stretch
+              running ahead. Own numbers only (server-computed client_message, names no peer);
+              self-hides when nothing's out of band. Same activity gate as the cards above. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <ClientPulse pulse={pulse} />}
 
           {/* ── Ask about your results — the grounded "ask your data" box, client-scoped ──
               The same plain-English query surface the agency gets on its dashboard, but
