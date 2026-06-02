@@ -101,6 +101,17 @@ const { dayPulse, narrateDayPulse, DEFAULT_WINDOW } = require('./dayPulse')
 // the signal byte-identical to before. See lib/pulseDiagnose.js.
 const { diagnoseComposite, narratePulseDiagnosis } = require('./pulseDiagnose')
 
+// The CONFIDENCE behind a pulse (PURE): pulseReliability grades the sensor's OWN
+// past firings for this metric against this client's history — replaying dayPulse
+// over the SAME series and scoring how often a firing persisted a horizon later —
+// into one learned trust score (reliable / mixed / noisy). Attached IN PLACE to the
+// firing signal so the surface can weight "act on this" vs "read it with care";
+// narratePulseReliability turns the grade into one grounded sentence (the client
+// audience only REINFORCES a reliable signal, never volunteers doubt). Null / '' when
+// the record is too thin to grade, leaving the signal byte-identical. Both pulse reads
+// inherit these via the `...s` spread — no route change. See lib/pulseReliability.js.
+const { pulseReliability, narratePulseReliability } = require('./pulseReliability')
+
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
 // channel that materially fed it. Stamps a `caused_by` pointer on the symptom and an
@@ -2406,6 +2417,18 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       sig.diagnosis                = diag
       sig.diagnosis_message        = narratePulseDiagnosis(diag, { labels: PULSE_DRIVER_LABELS, audience: 'agency' })
       sig.diagnosis_client_message = narratePulseDiagnosis(diag, { labels: PULSE_DRIVER_LABELS, audience: 'client' })
+    }
+    // The "how much to trust it": grade THIS metric's own firing history for THIS
+    // client by replaying dayPulse over the same `series` (zero extra DB work, same
+    // polarity), and attach the learned score only when there's a real track record.
+    // A brand-new or flickery client that can't be graded yet carries nothing extra
+    // and stays byte-identical — confidence is claimed only when earned.
+    const rel = pulseReliability(series[m], { window, adverseWhen })
+    if (rel.status === 'graded') {
+      sig.reliability             = rel.reliability
+      sig.reliability_label       = rel.label
+      sig.reliability_note        = narratePulseReliability(rel, { label: meta.label, audience: 'agency' })
+      sig.reliability_client_note = narratePulseReliability(rel, { label: meta.label, audience: 'client' })
     }
     signals.push(sig)
   }
