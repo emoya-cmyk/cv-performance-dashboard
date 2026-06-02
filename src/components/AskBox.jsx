@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Sparkles, Lightbulb, CornerDownLeft, CornerDownRight, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus, LineChart, Users, CalendarRange, Sigma, ArrowLeftRight } from 'lucide-react'
+import { Sparkles, Lightbulb, CornerDownLeft, CornerDownRight, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus, LineChart, Users, CalendarRange, Sigma, ArrowLeftRight, Clock, Eye, ArrowUpCircle, Activity } from 'lucide-react'
 import { api } from '@/lib/api'
 import { weekLabel } from '@/lib/utils'
 
@@ -471,6 +471,86 @@ function PacingPanel({ pacing }) {
   )
 }
 
+// intel-v6 (9c/9d): the grounded PRESCRIBE answer — "so what should I DO about it?". This is the
+// question that ties the whole Ask box together: the past, the who, the why, the future and the
+// goal all exist to inform the next action. It renders ONLY the already-decorated, already-ranked
+// client feed the server hands back (lib/adviceAnswer over getInsightFeed) — each card's urgency,
+// title, action text and efficacy note are copied verbatim from the verdict, recomputed nowhere
+// here, so it carries no "AI-written" chip: there is no model in this path to hallucinate a step.
+// HONEST BY CONSTRUCTION: an all-clear, a "which client?", or a not-found verdict carries its
+// sentence in the answer line above with meta.advice:null — nothing to list, so this panel returns
+// null then (exactly like Forecast/Pacing opt out on no-data). LEAK-SAFE on both surfaces: the feed
+// is one client's own findings, so the to-do list names no other tenant and is equally safe on the
+// agency Intelligence page and a client's /my-dashboard — the only audience difference (escalated
+// wording) was already resolved server-side, so this component is byte-identical for both.
+const ADVICE_URGENCY = {
+  act_now: { tone: 'rose',  Icon: AlertTriangle, label: 'Act now' },
+  plan:    { tone: 'amber', Icon: Clock,         label: 'Plan' },
+  monitor: { tone: 'slate', Icon: Eye,           label: 'Monitor' },
+}
+const ADVICE_TONE = {
+  rose:  { badge: 'text-rose-700 bg-rose-50 border-rose-100',     accent: 'border-l-rose-300' },
+  amber: { badge: 'text-amber-700 bg-amber-50 border-amber-200',  accent: 'border-l-amber-300' },
+  slate: { badge: 'text-slate-600 bg-slate-100 border-slate-200', accent: 'border-l-slate-200' },
+}
+const ADVICE_EFF_BAND = { high: 'text-emerald-600', medium: 'text-slate-500', low: 'text-amber-600' }
+
+// The "what should I do?" to-do list. Renders the server's ranked, decorated feed verbatim:
+// one card per recommended action, urgency-coded by a left rail + chip, with the play's own
+// learned track-record note when present. Computes nothing — every word and figure is the
+// server's (mirrors how WhyPanel/ForecastPanel/PacingPanel render only what was grounded).
+function AdvicePanel({ advice }) {
+  // grounded-null paths (all-clear / "which client?" / not-found) carry their honest sentence in
+  // the answer line above with meta.advice:null — nothing to list, so opt out exactly like the
+  // forecast/pacing panels do on no-data (avoids an empty, misleading card).
+  if (!advice || !Array.isArray(advice.actions) || advice.actions.length === 0) return null
+  // An escalated play reads differently by audience and the server already picked the wording; the
+  // badge just LABELS that a play changed tack — "New approach" for a client (no failure framing),
+  // "Escalated" for the agency. Either way the action text below is the server's verbatim choice.
+  const escalatedLabel = advice.audience === 'client' ? 'New approach' : 'Escalated'
+  return (
+    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+      <div className="flex flex-col gap-2">
+        {advice.actions.map((a) => {
+          const band = ADVICE_URGENCY[a.urgency] || ADVICE_URGENCY.monitor
+          const tone = ADVICE_TONE[band.tone]
+          const Icon = band.Icon
+          const note = a.efficacy_note
+          return (
+            <div key={a.id} className={`rounded-lg bg-white border border-slate-100 border-l-4 ${tone.accent} p-3`}>
+              <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${tone.badge}`}>
+                  <Icon className="w-3 h-3" /> {band.label}
+                </span>
+                {a.escalated && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-600">
+                    <ArrowUpCircle className="w-3 h-3" /> {escalatedLabel}
+                  </span>
+                )}
+                {a.title && <span className="text-[11px] font-semibold text-slate-400 truncate">{a.title}</span>}
+              </div>
+              <p className="text-sm font-semibold text-slate-800 leading-relaxed">{a.action}</p>
+              {note && note.text && (
+                <p className={`mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium ${ADVICE_EFF_BAND[note.band] || 'text-slate-500'}`}>
+                  <Activity className="w-3 h-3 shrink-0" /> {note.text}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {advice.total > advice.count && (
+        <p className="mt-2.5 text-[11px] text-slate-400">
+          Showing the {advice.count} sharpest of {advice.total} open {advice.total === 1 ? 'item' : 'items'}.
+        </p>
+      )}
+      <p className="mt-2 text-[10px] text-slate-400">
+        Pulled straight from this client’s open findings, sharpest first — each step and its track record come from the system’s own results, not AI guesswork.
+      </p>
+    </div>
+  )
+}
+
 function AskResult({ result, clientId, onClear, onPick }) {
   const { answer, narrated, meta, columns, rows, followups } = result
   const hasBucket    = columns.includes('bucket')
@@ -489,6 +569,15 @@ function AskResult({ result, clientId, onClear, onPick }) {
   // number) and out of the empty state (a grounded-null verdict already says its piece in the
   // answer line), then rendered as the PacingPanel below.
   const isPacing     = columns.includes('label')
+  // intel-v6 (9c/9d): a PRESCRIBE answer ("what should I do?") rides the standard envelope but
+  // carries a ranked to-do list (columns ['action'], meta.advice set when actionable, null on the
+  // honest all-clear / "which client?" / not-found paths). 'action' is unique to advice — single
+  // -figure is ['value'], bucket ['bucket',…], forecast ['step',…], pacing ['label',…] — so this is
+  // the clean parallel detector. Like forecast/pacing it must be carved OUT of the single-figure
+  // branch (advice rows carry a `display`, which would misread as one big number) and out of the
+  // empty state (a grounded-null verdict already says its piece in the answer line), then rendered
+  // as the AdvicePanel below.
+  const isAdvice     = columns.includes('action')
 
   // intel-v6 (5): the on-demand "why did it change?" sub-flow — its own little state
   // machine (idle → loading → done | error) so the breakdown loads inline under the
@@ -568,7 +657,7 @@ function AskResult({ result, clientId, onClear, onPick }) {
           the projection fan below — otherwise it would misread as one big step-1 number. A
           pacing verdict is likewise no-bucket but 3-row, so it's excluded (!isPacing) and
           drawn as the pace bar below rather than collapsing to its first row's $figure. */}
-      {rows.length > 0 && !hasBucket && !isForecast && !isPacing && (
+      {rows.length > 0 && !hasBucket && !isForecast && !isPacing && !isAdvice && (
         <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
@@ -588,6 +677,14 @@ function AskResult({ result, clientId, onClear, onPick }) {
           Shared, so it's identical on the agency Intelligence page and a client /my-dashboard
           — a single client's actual-vs-goal names no other tenant, so it's leak-safe on both. */}
       {isPacing && <PacingPanel pacing={meta.pacing} />}
+
+      {/* PRESCRIBE — "what should I do?": the grounded, ranked to-do list. meta.advice is null on
+          the honest all-clear / "which client?" / not-found paths (the answer line above carries
+          that sentence), so AdvicePanel renders nothing then. Shared, so it's identical on the
+          agency Intelligence page and a client /my-dashboard — one client's own feed names no other
+          tenant, and the only audience difference (escalated wording) was resolved server-side, so
+          it's leak-safe on both. */}
+      {isAdvice && <AdvicePanel advice={meta.advice} />}
 
       {/* intel-v6 (5)+(6): grounded "why did it change?" — offered ONLY when the server
           flagged this exact figure decomposable (meta.explainable: a single figure that
@@ -626,7 +723,7 @@ function AskResult({ result, clientId, onClear, onPick }) {
       {/* Honest empty state — a no-history forecast, and a "no goal to pace against" pacing
           verdict, each carry their own grounded message in the answer line above, so both opt
           out here (!isForecast && !isPacing) to avoid double-rendering "no data". */}
-      {rows.length === 0 && !isForecast && !isPacing && (
+      {rows.length === 0 && !isForecast && !isPacing && !isAdvice && (
         <p className="mt-2 text-xs text-slate-400">No matching data for that question and timeframe.</p>
       )}
 
