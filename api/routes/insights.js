@@ -77,7 +77,7 @@ const {
   getPortfolioBenchmarks, getClientStanding,
   getRecentRecoveries, getPortfolioRecoveries,
   getPortfolioSystemic,
-  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
   ackInsight, resolveInsight,
@@ -179,8 +179,19 @@ function tallyByBand(roster) {
 // Portfolio-wide active feed, severity-ranked, with per-client names.
 router.get('/', async (req, res) => {
   try {
-    const insights = await getPortfolioInsights({ limit: parseLimit(req.query.limit, 100) })
-    res.json({ insights, count: insights.length, by_severity: tallyBySeverity(insights) })
+    const [insights, effTable] = await Promise.all([
+      getPortfolioInsights({ limit: parseLimit(req.query.limit, 100) }),
+      // pooled, ANONYMOUS efficacy ledger (Map play→record): used only to ESCALATE the advice on
+      // adverse findings whose play this book has PROVEN ineffective (band-low, n≥5). Names no client.
+      getEfficacyTable(),
+    ])
+    // ACT half on the agency read path: where the learned record says the usual play keeps failing,
+    // reviseAction bumps the urgency and rewrites the action in place (+ a structured `escalation` for
+    // the chip). Pure read-time decorator off that table — a play that hasn't earned the override is an
+    // untouched pass-through. by_severity is tallied on the decorated set (escalation changes the action's
+    // urgency, not the finding's severity, so the tally is unchanged — but it never drifts from the feed).
+    const escalated = attachEscalations(insights, effTable)
+    res.json({ insights: escalated, count: escalated.length, by_severity: tallyBySeverity(escalated) })
   } catch (err) {
     console.error('[insights] GET portfolio error', err.message)
     res.status(500).json({ error: 'Failed to load insights' })
@@ -428,10 +439,13 @@ router.get('/:clientId', async (req, res) => {
       // already carry advice. Names no peer; quotes only the play's own track record.
       getEfficacyTable(),
     ])
-    // self-improving join: attach efficacy_note to each adverse finding whose recommended
-    // play is PROVEN (n≥4 decided outcomes). Pure decorator — count/severity/health are
-    // computed on the SAME annotated set so the feed and its roll-ups never drift.
-    const annotated = attachEfficacyNotes(insights, effTable)
+    // self-improving join: first ANNOTATE each adverse, advised finding with its play's proven
+    // track record (efficacy_note, n≥4 decided), then ESCALATE — where that record proves the play
+    // INEFFECTIVE (band-low, n≥5) reviseAction bumps the urgency and rewrites the advice in place,
+    // hoisting a structured `escalation` for the surfaces. Both are pure read-time decorators off the
+    // SAME pooled table; count/severity/health are computed on the fully-decorated set so the feed and
+    // its roll-ups never drift. (The two write disjoint fields, so the order is purely for readability.)
+    const annotated = attachEscalations(attachEfficacyNotes(insights, effTable), effTable)
     res.json({
       client_id: clientId,
       insights: annotated,

@@ -58,7 +58,9 @@ const {
   // action→recovery efficacy (pooled, anonymous): does the recommended play actually fix it.
   // getEfficacyTable hands back the play→record Map; attachEfficacyNotes stamps a client-safe
   // "this play has worked X% of the time" line onto adverse findings that already carry advice.
-  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
+  // attachEscalations is the ACT half: where that record PROVES the play ineffective it rewrites
+  // the recommendation in place (bumps urgency, hoists a structured `escalation`).
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   // predictive early-warning (agency-only): persist the per-sweep health series, read it forward.
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + a client's OWN per-metric
@@ -1682,6 +1684,110 @@ test('efficacy (note): attachEfficacyNotes annotates only adverse, advised, PROV
   assert.deepEqual(attachEfficacyNotes([advisedAdverse], null), [advisedAdverse],
     'no table → the feed passes straight through (note layer is additive)')
   assert.deepEqual(attachEfficacyNotes('nope', table), [], 'a non-array feed degrades to []')
+})
+
+// ── escalation (2b wiring): attachEscalations REWRITES the advice on a proven-ineffective play ──
+// 1d ANNOTATES; this is the ACT half of the SAME join — getEfficacyTable (live DB → play→record
+// Map) feeding attachEscalations (the read-time decorator both routes run over their feed). Where the
+// pooled record PROVES the play ineffective (band 'low' on n ≥ ESCALATE_MIN_N) it bumps urgency one
+// lane and rewrites the text in place, hoisting a structured `escalation` to the finding top-level
+// (parallel to efficacy_note); EVERY other record is a pure pass-through that returns the finding by
+// the SAME reference — the conservatism that makes wiring it onto the live feed safe. The gates, each
+// a way the surface could mis-fire if the join were sloppy:
+//   (a) ADVERSE + ADVISED + PROVEN-INEFFECTIVE → escalate: a NEW action, urgency bumped, every number
+//       in the appended clause + the hoisted escalation taken straight from THIS play's pooled record;
+//   (b) PROVEN-EFFECTIVE (band high) → no-op, never escalate a play the data says is working;
+//   (c) THIN low play (n < ESCALATE_MIN_N) → no-op, a bad streak too short to trust isn't yet proof;
+//   (d) no recommended_action → no-op, there's no directive to revise — even on a proven-bad play;
+//   (e) FAVORABLE → no-op, isolated by holding a real play low and flipping ONLY direction.
+// Rate-sensitive plays use a synthetic metric (counts are ours alone, immune to sibling-test pooling);
+// the favorable case needs a real good-direction metric (a synthetic key is always adverse), asserted
+// so whatever base rate flows around it can't flake the gate.
+test('escalation (wiring): attachEscalations escalates only adverse, advised, PROVEN-INEFFECTIVE findings — pooled, read-time', async () => {
+  await ready()
+  const c = await freshClient('Escalation Wiring Co')
+  const INEFF = 'zz_esc_ineff', EFFECTIVE = 'zz_esc_eff', THIN = 'zz_esc_thin'
+
+  const ins = (fp, kind, metric, status, first, recovered) => db.query(
+    `INSERT INTO insights (client_id, scope, kind, metric, severity, title, fingerprint, status, first_seen, recovered_at)
+     VALUES ($1, 'client', $2, $3, 'warning', $4, $5, $6, $7, $8)`,
+    [c, kind, metric, `esc ${fp}`, fp, status, first, recovered])
+
+  // (a) PROVEN-INEFFECTIVE: 1 win / 6 losses → n=7 (≥ ESCALATE_MIN_N=5), raw rate 1/7 ≈ 0.143 → band low.
+  await ins('ei-w', 'coverage_gap', INEFF, 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+  for (const k of [1, 2, 3, 4, 5, 6])
+    await ins(`ei-l-${k}`, 'coverage_gap', INEFF, 'expired', '2026-05-01 00:00:00', null)
+  // (b) PROVEN-EFFECTIVE control: 6 wins / 1 loss → raw rate 0.857 → band high, must never escalate.
+  for (const k of [1, 2, 3, 4, 5, 6])
+    await ins(`ee-w-${k}`, 'coverage_gap', EFFECTIVE, 'recovered', '2026-05-01 00:00:00', '2026-05-03 00:00:00')
+  await ins('ee-l', 'coverage_gap', EFFECTIVE, 'expired', '2026-05-01 00:00:00', null)
+  // (c) THIN low play: 1 win / 3 losses → n=4 < ESCALATE_MIN_N, rate 0.25 is low but too shallow to act on.
+  await ins('et-w', 'coverage_gap', THIN, 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+  for (const k of [1, 2, 3])
+    await ins(`et-l-${k}`, 'coverage_gap', THIN, 'expired', '2026-05-01 00:00:00', null)
+  // (e) real 'anomaly::roas' held low (ours alone: 1 win / 8 losses ≈ 0.11) — lets us flip direction to
+  // isolate the adverse gate (a synthetic metric is always adverse, so the favorable twin needs a real one).
+  await ins('er-w', 'anomaly', 'roas', 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+  for (const k of [1, 2, 3, 4, 5, 6, 7, 8])
+    await ins(`er-l-${k}`, 'anomaly', 'roas', 'expired', '2026-05-01 00:00:00', null)
+
+  // priorWeight 0 → efficacy = raw rate, so band + the printed pct are exact (1/7 → 14%, not a shrunk value).
+  const table = await getEfficacyTable({ priorWeight: 0 })
+
+  const action = { text: 'Reconnect the source.', urgency: 'plan' }
+  const ineff     = { kind: 'coverage_gap', metric: INEFF,     recommended_action: action }                  // (a)
+  const effective = { kind: 'coverage_gap', metric: EFFECTIVE, recommended_action: action }                  // (b)
+  const thin      = { kind: 'coverage_gap', metric: THIN,      recommended_action: action }                  // (c)
+  const noAdvice  = { kind: 'coverage_gap', metric: INEFF }                                                   // (d) proven-bad but unadvised
+  const roasDown  = { kind: 'anomaly', metric: 'roas', direction: 'down', recommended_action: action }       // (e) adverse
+  const roasUp    = { kind: 'anomaly', metric: 'roas', direction: 'up',   recommended_action: action }       // (e) favorable
+
+  const [oIneff, oEff, oThin, oNoAdvice, oDown, oUp] =
+    attachEscalations([ineff, effective, thin, noAdvice, roasDown, roasUp], table)
+
+  // (a) the escalation fires: a NEW action, urgency bumped one lane, clause grounded in the record.
+  assert.notEqual(oIneff.recommended_action, action, 'a proven-ineffective play gets a NEW action object')
+  assert.equal(oIneff.recommended_action.escalated, true)
+  assert.equal(oIneff.recommended_action.urgency, 'act_now', 'plan → act_now (one lane up)')
+  assert.ok(oIneff.recommended_action.text.startsWith('Reconnect the source.'), 'base advice preserved')
+  assert.match(oIneff.recommended_action.text, /only 14% of the time \(1 of 7\)/, 'clause numbers are the record’s own')
+  assert.match(oIneff.recommended_action.text, /escalate and try a different lever/i)
+  // the structured escalation is HOISTED to the finding (same object the action carries, by reference).
+  assert.equal(oIneff.escalation, oIneff.recommended_action.escalation, 'escalation is hoisted by reference')
+  assert.deepEqual(oIneff.escalation, {
+    reason: 'play_ineffective',
+    pct: 14, successes: 1, n: 7,
+    band: 'low',
+    from_urgency: 'plan', to_urgency: 'act_now',
+    client_text: 'We’re changing our approach here — the usual fix hasn’t been moving the needle, so your team is taking a different angle.',
+  })
+
+  // (b) proven-effective → pure no-op: the finding AND its action come back by the SAME reference.
+  assert.equal(oEff, effective, 'a working play is returned untouched (same finding ref)')
+  assert.equal(oEff.recommended_action, action)
+  assert.equal(oEff.escalation, undefined)
+  // (c) thin low play → no-op: below the evidence bar is not yet proof, however low the rate.
+  assert.equal(oThin, thin, 'n < ESCALATE_MIN_N never escalates')
+  assert.equal(oThin.escalation, undefined)
+  // (d) the advice gate → nothing to revise, even on a play proven ineffective.
+  assert.equal(oNoAdvice, noAdvice, 'no recommended_action → untouched')
+  assert.equal(oNoAdvice.escalation, undefined)
+  // (e) the adverse gate: the favorable twin is NEVER escalated (the gate short-circuits before the
+  // record lookup) — asserted unconditionally; and when the adverse twin DID fire on the same low play,
+  // confirmed they diverge on direction alone (guarded so the real metric's base rate can't flake it).
+  assert.equal(oUp.recommended_action, action, 'favorable finding is never escalated')
+  assert.equal(oUp.escalation, undefined)
+  if (oDown.recommended_action !== action) {
+    assert.equal(oDown.recommended_action.escalated, true, 'the adverse twin DID escalate on the same low play')
+    assert.equal(oDown.escalation.reason, 'play_ineffective')
+  }
+
+  // total + non-mutating: the source feed is never touched; degenerate inputs degrade cleanly.
+  assert.equal(ineff.recommended_action, action, 'the input finding is not mutated')
+  assert.equal(ineff.escalation, undefined)
+  assert.deepEqual(attachEscalations([ineff], null), [ineff],
+    'no table → the feed passes straight through (escalation layer is additive)')
+  assert.deepEqual(attachEscalations('nope', table), [], 'a non-array feed degrades to []')
 })
 
 // ============================================================

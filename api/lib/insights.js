@@ -136,7 +136,11 @@ const { classifyPacing, rankPacing } = require('./pacing')
 // a lucky 1/1 — plus the median days-to-recovery. Pooled + ANONYMOUS (a rate names no client) →
 // both an agency "which plays earn their place" board AND a client-safe note a recommendation
 // can carry ("this play has cleared it 73% of the time, usually within 2 days"). See lib/efficacy.
-const { efficacyTable, efficacyNote } = require('./efficacy')
+const { efficacyTable, efficacyNote, playKey } = require('./efficacy')
+// The ACT half of the efficacy loop: given a finding's recommendation and that play's measured
+// record, reviseAction ESCALATES (bumps urgency + rewrites the advice) only on a play PROVEN
+// ineffective — otherwise it's a pure no-op that returns the same action. See lib/escalation.
+const { reviseAction } = require('./escalation')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -1843,6 +1847,33 @@ function attachEfficacyNotes(findings, table) {
   })
 }
 
+// CLOSED LOOP — the ACT half on the read path (pure). attachEfficacyNotes ANNOTATES advice with its
+// track record; this REVISES the advice itself once that record proves the play doesn't work. Given one
+// client's feed and the pooled efficacy table, for each adverse + advised finding it looks up the play's
+// record (the same defensive table-shape lookup efficacyNote uses) and runs lib/escalation's reviseAction.
+// reviseAction is conservative by construction — only a band-low play on n ≥ ESCALATE_MIN_N decided
+// outcomes escalates; everything else returns the SAME action reference, so this is a clean no-op for any
+// play that hasn't EARNED the override. On escalation it REPLACES recommended_action with the revised
+// action (bumped urgency + rewritten text, so every surface that already renders the action auto-reflects
+// it) and HOISTS the structured `escalation` object to the finding top-level (parallel to efficacy_note)
+// for the chip/banner surfaces. Derived on READ, never stored — like recommended_action and efficacy_note
+// it stays in lock-step with the LATEST learned efficacy: a play escalates the moment it crosses the
+// proven-ineffective bar and self-de-escalates if later outcomes recover, with no migration and no stale
+// rows. Total + non-mutating: unmatched findings, a null table, and a non-array all pass through to the
+// feed's prior shape.
+function attachEscalations(findings, table) {
+  if (!Array.isArray(findings)) return []
+  if (!table) return findings
+  const lookup = table instanceof Map ? table : (table.table instanceof Map ? table.table : null)
+  if (!lookup) return findings
+  return findings.map(f => {
+    if (!f || !f.recommended_action || !isAdverse(f)) return f
+    const revised = reviseAction(f.recommended_action, lookup.get(playKey(f)))
+    if (revised === f.recommended_action) return f
+    return { ...f, recommended_action: revised, escalation: revised.escalation }
+  })
+}
+
 // Portfolio TRIAGE ROSTER: every client rolled into one health score, ranked
 // worst-first. Where the feed above is a flat stream of individual findings (the
 // grain for "what is wrong"), this is the grain for the question asked first every
@@ -2293,9 +2324,10 @@ module.exports = {
   // cross-client common-cause detection (agency-only — names other clients + book share)
   getPortfolioSystemic,
   // action→recovery efficacy (does the recommended play actually fix it; pooled, anonymous):
-  // the agency ledger read, the shared table builder (Map + ranked), and the CLIENT-SAFE
-  // per-finding note decorator that rides one play's pooled record onto a client's own feed.
-  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
+  // the agency ledger read, the shared table builder (Map + ranked), the CLIENT-SAFE per-finding
+  // note decorator that rides one play's pooled record onto a client's own feed, and the ACT-half
+  // decorator that REVISES the recommendation itself when that record proves the play ineffective.
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   // predictive early-warning (agency-only): per-sweep health snapshot + forward-looking roster
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)
