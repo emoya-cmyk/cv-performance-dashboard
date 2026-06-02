@@ -118,6 +118,18 @@ const { pulseReliability, narratePulseReliability } = require('./pulseReliabilit
 // priority_rank. getClientPulse adds the intrinsic fields per signal; getPortfolioPulse
 // adds the ranked "Act today" feed. See lib/pulseTriage.js.
 const { rankPulseSignals } = require('./pulseTriage')
+// The PREDICTIVE-PRECISION self-audit on top of the confidence grade: pulseAccuracy
+// asks "how often has THIS metric's firing been followed by a real adverse week?" by
+// replaying dayPulse over the SAME own-history series and scoring early-warning →
+// weekly-outcome as a confusion matrix (precision / recall / f1 / avg lead days). It's
+// the engine learning whether its own early calls have proven out — the figure that
+// turns "we flagged it" into "we flagged it, and N of the last M calls were right, ~D
+// days before the week closed". narratePulseAccuracy turns that into one grounded
+// sentence per audience (client audience only REINFORCES a proven track record, never
+// volunteers a poor one). Null / '' until there's a real, gradeable record, leaving the
+// signal byte-identical. Both pulse reads inherit these via the `...s` spread — no route
+// change. See lib/pulseAccuracy.js.
+const { pulseAccuracy, narratePulseAccuracy } = require('./pulseAccuracy')
 
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
@@ -2436,6 +2448,36 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       sig.reliability_label       = rel.label
       sig.reliability_note        = narratePulseReliability(rel, { label: meta.label, audience: 'agency' })
       sig.reliability_client_note = narratePulseReliability(rel, { label: meta.label, audience: 'client' })
+    }
+    // The "has it actually proven out": grade THIS metric's OWN early-warning track
+    // record by replaying dayPulse at a lead day inside each prior week and scoring it
+    // against that week's realized outcome (pulseAccuracy, same `series`, same polarity,
+    // zero extra DB work). Attach the precision figures + one grounded sentence per
+    // audience ONLY when the record is gradeable; a brand-new or too-quiet client can't
+    // be scored yet and carries nothing extra, staying byte-identical. This is distinct
+    // from reliability (consistency of the signal) — accuracy is whether the early call
+    // beat the weekly close, the number that makes the tool credible to an operator.
+    const acc = pulseAccuracy(series[m], { window, adverseWhen })
+    if (acc.status === 'graded') {
+      sig.accuracy = {
+        status:        acc.status,
+        precision:     acc.precision,
+        recall:        acc.recall,
+        f1:            acc.f1,
+        avg_lead_days: acc.avg_lead_days,
+        label:         acc.label,
+        lead_day:      acc.lead_day,
+        weeks_graded:  acc.weeks_graded,
+        fires:         acc.fires,
+        adverse_weeks: acc.adverse_weeks,
+        tp:            acc.tp,
+        fp:            acc.fp,
+        fn:            acc.fn,
+        tn:            acc.tn,
+      }
+      sig.accuracy_label       = acc.label
+      sig.accuracy_note        = narratePulseAccuracy(acc, { label: meta.label, audience: 'agency' })
+      sig.accuracy_client_note = narratePulseAccuracy(acc, { label: meta.label, audience: 'client' })
     }
     signals.push(sig)
   }

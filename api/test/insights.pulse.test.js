@@ -45,6 +45,12 @@ const { getClientPulse, getPortfolioPulse, loadDailySeries } = require('../lib/i
 // exhaustively in pulseTriage.test.js. Here we only assert the ENGINE emits exactly
 // what these produce for its own signals — i.e. the wiring is faithful, not a re-impl.
 const { triagePriority, triageLane, narrateTriage } = require('../lib/pulseTriage')
+// The predictive-precision self-audit (intel-v7 5a), unit-tested in full in
+// pulseAccuracy.test.js. Here we only assert the ENGINE replays it over the SAME loaded
+// series and stamps the firing signal with exactly what the pure module returns — the
+// wiring is faithful, not a re-impl — and that it attaches NOTHING when the record is
+// too thin to grade. loadDailySeries gives us the very series the engine grades.
+const { pulseAccuracy, narratePulseAccuracy } = require('../lib/pulseAccuracy')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -85,6 +91,24 @@ async function seedWeekly(clientId, factKey, sums) {
       `INSERT INTO fact_metric (client_id, date, channel_id, entity_id, metric_key, metric_value)
        VALUES ($1,$2,1,NULL,$3,$4)`,
       [clientId, isoMinus(7 * k), factKey, v]
+    )
+  }
+}
+
+// seedDaily(clientId, factKey, dailyOldestFirst): place a value on EVERY day of the
+// 64-day spine, oldest-first (dailyOldestFirst[0] = days-ago 63, …[63] = ASOF). Unlike
+// seedWeekly (one lump per week), this gives the within-week daily STRUCTURE pulseAccuracy
+// needs: a sustained drop reads low at the lead-day early call too, so the early warning
+// fires in lockstep with each low week's close — a gradeable, proven track record (the
+// case that exercises the 5b accuracy wiring). Zero values are skipped (dense-zero spine).
+async function seedDaily(clientId, factKey, dailyOldestFirst) {
+  for (let i = 0; i < dailyOldestFirst.length; i++) {
+    const v = dailyOldestFirst[i]
+    if (!v) continue
+    await db.query(
+      `INSERT INTO fact_metric (client_id, date, channel_id, entity_id, metric_key, metric_value)
+       VALUES ($1,$2,1,NULL,$3,$4)`,
+      [clientId, isoMinus(dailyOldestFirst.length - 1 - i), factKey, v]
     )
   }
 }
@@ -459,4 +483,85 @@ test('getPortfolioPulse: emits a ranked, adverse-only "Act today" feed; the rost
     assert.ok(adv <= 0, 'roster: adverse rows still sort ahead of non-adverse')
     if (adv === 0) assert.ok(Math.abs(a.z) >= Math.abs(b.z) - 1e-9, 'roster: ties still broken by |z| desc')
   }
+})
+
+// ── getClientPulse: the predictive-precision self-audit (intel-v7 5b wiring) ─────
+test('getClientPulse: a firing signal over a PROVEN own-history carries a graded accuracy block, faithful to pulseAccuracy + narratePulseAccuracy for both audiences', async () => {
+  await ready()
+  const c = await freshClient('Proven Track Co')
+  // A sustained DAILY-level drop: ~5 weeks at 100/day, then ~4 weeks at 20/day, spread
+  // across every day (not lumped per week). That intra-week structure is what makes the
+  // record gradeable: the lead-day early call sees the low level in lockstep with each
+  // low week's close, so prior firings line up with prior adverse weeks → a real, PROVEN
+  // track record. seedWeekly's single-day lumps can't express this (the lead day reads
+  // zero on every non-lump day) — hence seedDaily.
+  await seedDaily(c, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  const sig = out.signals.find(s => s.metric === 'leads')
+  assert.ok(sig, 'the sustained leads drop still fires a signal')
+
+  // Recompute the audit from the VERY series the engine loaded (same default 64-day
+  // spine, same polarity) — proving the attached block is forwarded faithfully, not a
+  // stale or parallel computation.
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  const expected = pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' })
+
+  // the fixture must actually exercise a graded, PROVEN record — else the test is vacuous.
+  assert.equal(expected.status, 'graded')
+  assert.equal(expected.label, 'proven')
+
+  // the engine attached EXACTLY the audit's figures — the curated projection, nothing more.
+  assert.deepEqual(sig.accuracy, {
+    status:        expected.status,
+    precision:     expected.precision,
+    recall:        expected.recall,
+    f1:            expected.f1,
+    avg_lead_days: expected.avg_lead_days,
+    label:         expected.label,
+    lead_day:      expected.lead_day,
+    weeks_graded:  expected.weeks_graded,
+    fires:         expected.fires,
+    adverse_weeks: expected.adverse_weeks,
+    tp:            expected.tp,
+    fp:            expected.fp,
+    fn:            expected.fn,
+    tn:            expected.tn,
+  })
+  assert.equal(sig.accuracy_label, expected.label)
+
+  // … and one grounded sentence per audience, byte-identical to the pure narrator.
+  assert.equal(sig.accuracy_note,        narratePulseAccuracy(expected, { label: 'Leads', audience: 'agency' }))
+  assert.equal(sig.accuracy_client_note, narratePulseAccuracy(expected, { label: 'Leads', audience: 'client' }))
+
+  // the strings are substantive and audience-shaped: the agency line quantifies the hit
+  // rate and lands the verdict; the client line reassures without volunteering a figure.
+  assert.match(sig.accuracy_note, /called the week right \d+ of \d+/)
+  assert.match(sig.accuracy_note, /proven lead\.$/)
+  assert.match(sig.accuracy_client_note, /spotting shifts like this early/)
+  assert.ok(!/\d/.test(sig.accuracy_client_note), 'client note carries no raw hit-rate number')
+})
+
+test('getClientPulse: a too-thin own-history fires but attaches NO accuracy surface — byte-identical', async () => {
+  await ready()
+  const c = await freshClient('Thin Record Co')
+  // The single-collapse anchor: one sharp latest-week drop over an otherwise flat history.
+  // It FIRES hard (critical z), but at the lead day only 1–2 prior weeks ever cross the
+  // fire threshold — short of minFires — so the audit is NOT gradeable.
+  await seedWeekly(c, 'leads', [20, 90, 100, 110, 95, 105, 100, 98, 102])
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  const sig = out.signals.find(s => s.metric === 'leads')
+  assert.ok(sig, 'the collapse still fires a signal')
+
+  // it is genuinely ungradeable on this history …
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  assert.notEqual(pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' }).status, 'graded')
+
+  // … so the engine attaches no accuracy surface AT ALL — truly absent, not a zeroed
+  // block — preserving byte-identity for clients without a provable record.
+  assert.equal(sig.accuracy, undefined)
+  assert.equal(sig.accuracy_label, undefined)
+  assert.equal(sig.accuracy_note, undefined)
+  assert.equal(sig.accuracy_client_note, undefined)
 })
