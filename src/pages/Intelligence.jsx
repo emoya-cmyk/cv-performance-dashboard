@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
-  Crosshair, BarChart3, Scale, Award, TrendingDown,
+  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -33,6 +33,7 @@ export default function Intelligence() {
   const [health, setHealth]   = useState(null)         // { roster, count, by_band } — triage synthesis
   const [benchmarks, setBenchmarks] = useState(null)   // { period, cohort_size, metrics } — cross-client peer benchmarks
   const [recoveries, setRecoveries] = useState([])     // [{ client_name, recovery_reason, recovered_at, … }] — the win stream
+  const [systemic, setSystemic] = useState(null)       // { portfolio_size, signals[] } — cross-client common-cause scan (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -46,19 +47,21 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Four independent reads: the per-finding feed, the synthesized triage roster, the
-      // cross-client peer benchmarks, and the "what we fixed" recovery stream. allSettled —
-      // not Promise.all — so a synthesis hiccup never blanks the feed. If any of the three
-      // synthesis reads stumbles its panel simply hides and the page degrades to exactly
-      // what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(),
+      // Five independent reads: the per-finding feed, the synthesized triage roster, the
+      // cross-client peer benchmarks, the "what we fixed" recovery stream, and the systemic
+      // common-cause scan. allSettled — not Promise.all — so a synthesis hiccup never blanks
+      // the feed. If any of the four synthesis reads stumbles its panel simply hides and the
+      // page degrades to exactly what it showed before that layer existed; only a feed
+      // failure is fatal.
+      const [feed, roster, bench, recov, sys] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
       setHealth(roster.status === 'fulfilled' && Array.isArray(roster.value?.roster) ? roster.value : null)
       setBenchmarks(bench.status === 'fulfilled' && bench.value?.metrics ? bench.value : null)
       setRecoveries(recov.status === 'fulfilled' && Array.isArray(recov.value?.recoveries) ? recov.value.recoveries : [])
+      setSystemic(sys.status === 'fulfilled' && Array.isArray(sys.value?.signals) ? sys.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -155,6 +158,13 @@ export default function Intelligence() {
           onPick={(id) => { if (id) setClientFilter(c => (c === id ? 'all' : id)) }}
         />
       )}
+
+      {/* systemic signals — the cross-client common-cause scan: the SAME adverse channel /
+          metric / direction independently hitting ≥ minClients clients, collapsed into one
+          row apiece ("leads down across 14 clients, 38% of the book"). Answers "is it us, or
+          the platform?" — sits beside triage because it reframes WHO is worst as WHETHER it's
+          shared. Agency-only (names peers + book share); hidden until a cluster clears the floor. */}
+      {systemic?.signals?.length > 0 && <SystemicPanel data={systemic} />}
 
       {/* peer benchmarks — the cross-client lens: how each client ranks against the
           live portfolio per KPI. Hidden until at least one metric has a publishable
@@ -941,6 +951,167 @@ function RecoveryRow({ r }) {
         {r.title && (
           <p className="text-xs text-slate-500 mt-1 leading-snug line-through decoration-slate-300">{r.title}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+/* ── systemic signals — the cross-client common-cause scan ─────────────────────
+   The agency's "is it us, or the platform?" panel. GET /api/insights/systemic
+   collapses the per-client feed into clusters where the SAME adverse channel /
+   metric / direction independently hits ≥ minClients clients — "leads down across
+   14 clients, 38% of the book" as one row, not fourteen. Where the triage roster
+   ranks WHO is worst and the benchmark ranks the PORTFOLIO per metric, this names a
+   shared root cause across accounts — the tell that a problem is systemic (channel
+   outage, platform shift, tracking break) rather than any one client's own doing.
+
+   Strictly AGENCY-ONLY: every row names other clients and a book-wide share, so —
+   exactly like the named peer benchmark — it must never ride a per-client or shared-
+   link payload. It lives here and only here. Self-calibrating and operator-free: the
+   share denominator IS the live connected book, the floor is a share of it, and the
+   scan re-runs every sweep — connect or resolve an account and every cluster re-shapes
+   on its own, no thresholds touched by hand. Hides whole when nothing clears the floor. */
+const SYSTEMIC_SHOWN         = 6   // cap the cluster rows so a noisy book stays a glance
+const SYSTEMIC_CLIENTS_SHOWN = 8   // names per row before collapsing to a "+N more" tail
+
+function SystemicPanel({ data }) {
+  const signals = Array.isArray(data?.signals) ? data.signals : []
+  if (signals.length === 0) return null            // nothing systemic → degrade to no panel
+  const portfolioSize = Number(data?.portfolio_size) || 0
+  const shown  = signals.slice(0, SYSTEMIC_SHOWN)
+  const hidden = signals.length - shown.length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-violet-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Is it us, or the platform?</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {signals.length} systemic signal{signals.length === 1 ? '' : 's'}
+        </span>
+        {portfolioSize > 0 && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+            <Users className="w-3 h-3" /> {portfolioSize} client{portfolioSize === 1 ? '' : 's'} in book
+          </span>
+        )}
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((s) => <SystemicRow key={s.key} s={s} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more systemic signal{hidden === 1 ? '' : 's'}</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-violet-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A signal fires when the same adverse pattern hits multiple clients independently — a strong hint the cause is the
+          <span className="font-bold text-violet-600"> channel or platform, not any one account</span>. The scan is automatic and
+          self-calibrating: the share is of your live book, so connecting or resolving an account re-shapes it on the next sweep.
+          Agency-only — clients never see cross-account signals.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One systemic cluster: what's moving, which way, how much of the book it spans, and
+   how sure the engine is it's a single cause. The left rail, the share and the meter all
+   read in the cluster's severity (critical when any member is critical, else warning).
+   `subject` is the metric when there is one, else the dark channel's label (a channel-only
+   cluster is a coverage gap gone systemic). The kind chips say HOW it shows up (anomaly /
+   trend / connection); the named roster — capped, with a "+N more" tail — is the blast
+   radius the operator can act on. `share_pct` is the headline ("of the book"); confidence
+   is the engine's blended share×count×severity score, drawn as a meter so it reads at a glance. */
+function SystemicRow({ s }) {
+  const sev      = severityMeta(s.severity)
+  const Dir      = directionIcon(s.direction)
+  const dirWord  = s.direction === 'up' ? 'up' : s.direction === 'down' ? 'down' : 'shifting'
+  const subject  = s.metric ? metricLabel(s.metric) : (s.channel_label || 'Signal')
+  const conf     = Math.max(0, Math.min(100, Math.round((Number(s.confidence) || 0) * 100)))
+  const sharePct = Number.isFinite(Number(s.share_pct)) ? Math.round(Number(s.share_pct)) : null
+  const count    = Number(s.affected_count) || 0
+  const kinds    = Array.isArray(s.kinds) ? s.kinds : []
+  const clients  = Array.isArray(s.affected_clients) ? s.affected_clients : []
+  const roster   = clients.slice(0, SYSTEMIC_CLIENTS_SHOWN)
+  const moreCli  = clients.length - roster.length
+  // a channel chip only when the cluster keys on BOTH a metric and a channel — otherwise
+  // the channel already IS the subject and the chip would merely echo it.
+  const showChannelChip = !!(s.metric && s.channel_label)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5', sev.chipBg)}>
+          <Dir className={cn('w-4 h-4', sev.chipText)} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800">{subject}</span>
+            <span className={cn('inline-flex items-center gap-0.5 text-[11px] font-bold', sev.text)}>
+              <Dir className="w-3 h-3" /> {dirWord}
+            </span>
+            <span className="text-[11px] font-semibold text-slate-400">
+              across {count} client{count === 1 ? '' : 's'}
+            </span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', sev.chipBg, sev.chipText, sev.border)}>
+              {sev.label}
+            </span>
+          </div>
+
+          {(kinds.length > 0 || showChannelChip) && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
+              {kinds.map((k) => {
+                const m = kindMeta(k); const KIcon = m.icon
+                return (
+                  <span key={k} className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+                    <KIcon className="w-3 h-3" /> {m.label}
+                  </span>
+                )
+              })}
+              {showChannelChip && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold rounded-full px-2 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+                  <Plug className="w-3 h-3" /> {s.channel_label}
+                </span>
+              )}
+            </div>
+          )}
+
+          {roster.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap mt-2">
+              <Users className="w-3 h-3 text-slate-300 shrink-0" />
+              {roster.map((c) => (
+                <span key={c.id} className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-100 rounded-full px-2 py-0.5 truncate max-w-[10rem]">
+                  {c.name || 'Unknown'}
+                </span>
+              ))}
+              {moreCli > 0 && (
+                <span className="text-[11px] font-semibold text-slate-400">+{moreCli} more</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {sharePct != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', sev.text)}>{sharePct}%</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">of the book</div>
+            </>
+          )}
+          <div className="mt-2">
+            <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+              <div className={cn('h-full rounded-full', sev.dot)} style={{ width: `${conf}%` }} />
+            </div>
+            <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
+          </div>
+        </div>
       </div>
     </div>
   )
