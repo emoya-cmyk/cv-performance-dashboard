@@ -239,10 +239,129 @@ function WhyPanel({ explain }) {
   )
 }
 
+// intel-v6 (7): the grounded FORWARD answer — "what WILL it be?". The Ask box now
+// answers the question a sharp operator actually leads with, off the SAME self-tuning
+// forecast.js the health layer already trusts (lib/forecastAnswer). This panel renders
+// ONLY what the server projected — the 80% fan, the per-step figures, the trust gate —
+// and never recomputes a number, so it carries the "Verified" mark, never "AI-written".
+// HONEST BY CONSTRUCTION: a clean trend shows a confident headline + a solid fan; too
+// little history, or a model that can't fit its own recent past, shows a muted, dashed
+// "directional only" fan with the caveat — never a false-precision number. LEAK-SAFE on
+// both surfaces: a single metric's weekly series is single-tenant, so one forecast answer
+// is equally safe on the agency Intelligence page and on a client's /my-dashboard.
+function ForecastPanel({ forecast, rows, timeLabel }) {
+  // No model (no finite history) → the grounded one-line answer above already says so;
+  // nothing to draw, and we don't want a misleading empty chart.
+  if (!forecast || rows.length === 0) return null
+
+  const { trustworthy, direction, confidence, current, caveat } = forecast
+  const DirIcon = direction === 'down' ? TrendingDown : direction === 'up' ? TrendingUp : Minus
+  const dirText = direction === 'up' ? 'Trending up' : direction === 'down' ? 'Trending down' : 'Holding steady'
+
+  // Accent reads the trust gate FIRST, then polarity: untrustworthy → slate + a dashed
+  // line, so "directional only" reads at a glance and is never dressed up as precision.
+  const accent  = !trustworthy ? 'slate' : direction === 'down' ? 'rose' : direction === 'up' ? 'emerald' : 'slate'
+  const HEX     = { emerald: '#10b981', rose: '#f43f5e', slate: '#94a3b8' }
+  const stroke  = HEX[accent]
+  const dirTone =
+    accent === 'emerald' ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
+    : accent === 'rose'  ? 'text-rose-700 bg-rose-50 border-rose-100'
+    :                      'text-slate-600 bg-slate-100 border-slate-200'
+
+  // ── Fan geometry. COSMETIC ONLY: every figure shown as text comes from the server's
+  // display strings; only the pixel coordinates are derived here, from the raw
+  // value/lo/hi the server already grounded. Anchored at step 0 = current, so the fan
+  // visibly departs from "now". vector-effect keeps strokes crisp under the x/y stretch.
+  const W = 320, H = 84, padX = 4, padT = 8, padB = 8
+  const n   = rows.length
+  const val = [current, ...rows.map((r) => r.value)]
+  const lo  = [current, ...rows.map((r) => r.lo)]
+  const hi  = [current, ...rows.map((r) => r.hi)]
+  const yLo  = Math.min(...lo)
+  const yHi  = Math.max(...hi)
+  const span = (yHi - yLo) || 1
+  const X = (i) => padX + (i * (W - 2 * padX)) / Math.max(1, n)
+  const Y = (v) => padT + (1 - (v - yLo) / span) * (H - padT - padB)
+  const lineD = val.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('')
+  const bandD =
+    hi.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join('') +
+    lo.map((_, i) => `L${X(n - i).toFixed(1)},${Y(lo[n - i]).toFixed(1)}`).join('') + 'Z'
+
+  return (
+    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+      {/* Trust + direction chips — scannable honesty before the picture */}
+      <div className="flex items-center gap-2 flex-wrap mb-2.5">
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${dirTone}`}>
+          <DirIcon className="w-3.5 h-3.5" /> {dirText}
+        </span>
+        {trustworthy && confidence != null ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-brand-100 bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-600">
+            <ShieldCheck className="w-3.5 h-3.5" /> {Math.round(confidence * 100)}% model fit
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {caveat === 'poor_fit' ? 'Too volatile — directional only' : 'Thin history — directional only'}
+          </span>
+        )}
+      </div>
+
+      {/* The 80% fan: shaded band + projected line, anchored at today (hollow dot) and
+          ending at the headline week (filled dot). Geometry is cosmetic; the numbers
+          live in the receipts table below. */}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-24" preserveAspectRatio="none" role="img" aria-label={`Projected ${timeLabel}`}>
+        <path d={bandD} fill={stroke} fillOpacity="0.13" stroke="none" />
+        <path d={lineD} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+              strokeDasharray={trustworthy ? '0' : '5 3'} vectorEffect="non-scaling-stroke" />
+        <circle cx={X(0)} cy={Y(current)} r="3" fill="white" stroke={stroke} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        <circle cx={X(n)} cy={Y(rows[n - 1].value)} r="3.5" fill={stroke} />
+      </svg>
+      <div className="flex justify-between text-[10px] font-semibold text-slate-400 mt-1">
+        <span>now</span>
+        <span>{timeLabel.replace(/^the /, '')}</span>
+      </div>
+
+      {/* Per-step receipts — every figure copied verbatim from the server's verified display. */}
+      <div className="mt-2.5 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              <th className="text-left py-1">Ahead</th>
+              <th className="text-right py-1">Projected</th>
+              <th className="text-right py-1">80% range</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const last = r.step === n
+              return (
+                <tr key={r.step} className="border-t border-slate-100">
+                  <td className={`py-1 ${last ? 'font-extrabold text-slate-800' : 'font-semibold text-slate-500'}`}>+{r.step} wk</td>
+                  <td className={`py-1 text-right tabular-nums ${last ? 'font-extrabold text-slate-900' : 'font-bold text-slate-700'}`}>{r.display}</td>
+                  <td className="py-1 text-right tabular-nums text-slate-400">{r.lo_display} – {r.hi_display}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="mt-2 text-[10px] text-slate-400">
+        Self-tuning projection — the shaded band is the 80% range, and it sharpens as each forecast is checked against what actually happens.
+      </p>
+    </div>
+  )
+}
+
 function AskResult({ result, clientId, onClear, onPick }) {
   const { answer, narrated, meta, columns, rows, followups } = result
   const hasBucket    = columns.includes('bucket')
   const bucketHeader = BUCKET_HEADER[meta.group_by] || 'Item'
+  // intel-v6 (7): a forward FORECAST answer rides the standard envelope but carries a
+  // step→value projection (columns ['step','value','lo','hi'], meta.forecast set) instead
+  // of a bucket breakdown or a single past figure. Detect it so it renders as a fan + band
+  // (ForecastPanel) instead of falling through to the single-overall-figure branch below.
+  const isForecast   = columns.includes('step')
 
   // intel-v6 (5): the on-demand "why did it change?" sub-flow — its own little state
   // machine (idle → loading → done | error) so the breakdown loads inline under the
@@ -317,8 +436,10 @@ function AskResult({ result, clientId, onClear, onPick }) {
         </div>
       )}
 
-      {/* Single overall figure (group_by none), with an optional period-over-period delta */}
-      {rows.length > 0 && !hasBucket && (
+      {/* Single overall figure (group_by none), with an optional period-over-period delta.
+          A forecast also has no bucket, so it's excluded here (!isForecast) and rendered as
+          the projection fan below — otherwise it would misread as one big step-1 number. */}
+      {rows.length > 0 && !hasBucket && !isForecast && (
         <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
           <div className="flex items-center gap-2.5">
             <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
@@ -327,6 +448,10 @@ function AskResult({ result, clientId, onClear, onPick }) {
           <span className="text-xs text-slate-400">{meta.metric} · {meta.time_label}</span>
         </div>
       )}
+
+      {/* Forward FORECAST — the projection fan + per-step receipts + honest trust gate.
+          Same envelope, same shared component on agency Intelligence and client /my-dashboard. */}
+      {isForecast && <ForecastPanel forecast={meta.forecast} rows={rows} timeLabel={meta.time_label} />}
 
       {/* intel-v6 (5)+(6): grounded "why did it change?" — offered ONLY when the server
           flagged this exact figure decomposable (meta.explainable: a single figure that
@@ -362,8 +487,9 @@ function AskResult({ result, clientId, onClear, onPick }) {
         </div>
       )}
 
-      {/* Honest empty state */}
-      {rows.length === 0 && (
+      {/* Honest empty state — a no-history forecast carries its own grounded message in the
+          answer line above, so it opts out here to avoid double-rendering "no data". */}
+      {rows.length === 0 && !isForecast && (
         <p className="mt-2 text-xs text-slate-400">No matching data for that question and timeframe.</p>
       )}
 
