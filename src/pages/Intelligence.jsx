@@ -3,6 +3,7 @@ import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
+  Gauge, ShieldAlert,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -1430,6 +1431,20 @@ function pulseTone(r) {
   return r.severity === 'critical' ? PULSE_TONE.critical : PULSE_TONE.warning
 }
 
+/* The CONFIDENCE chip that rides alongside the SEVERITY chip — the pulse's own
+   learned track record for this client × metric (lib/pulseReliability, attached by
+   getClientPulse). It answers a different question than severity: not "how bad" but
+   "how often has this alarm actually held up for THIS client" — so a Critical+Reliable
+   row means act now, a Critical+Noisy row means watch without over-reacting. Given its
+   own shield-family treatment (reliable = trust green, mixed/noisy = muted slate) so it
+   never competes with the rose/amber severity fill. Keyed by the engine's reliability
+   label; absent (un-graded, too thin a record) → no chip at all. */
+const RELIABILITY_TONE = {
+  reliable: { chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', Icon: ShieldCheck, label: 'Reliable' },
+  mixed:    { chip: 'bg-slate-50 text-slate-500 border-slate-200',       Icon: Gauge,       label: 'Mixed'    },
+  noisy:    { chip: 'bg-slate-100 text-slate-400 border-slate-200',      Icon: ShieldAlert, label: 'Noisy'    },
+}
+
 function PulsePanel({ data }) {
   const roster = Array.isArray(data?.roster) ? data.roster : []
   if (roster.length === 0) return null              // nobody moving → degrade to no panel
@@ -1490,6 +1505,9 @@ function PulseRow({ r }) {
   const delta = Math.round(Number(r.delta_pct))
   const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%` : null
   const baseN = Number(r.baseline?.n)
+  // The pulse's own learned confidence for this client × metric (lib/pulseReliability,
+  // attached by getClientPulse). null when the record was too thin to grade → no chip.
+  const rel   = RELIABILITY_TONE[r.reliability_label] || null
 
   return (
     <div className="px-4 py-3">
@@ -1507,6 +1525,18 @@ function PulseRow({ r }) {
             <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', tone.chip)}>
               {tone.label}
             </span>
+            {/* CONFIDENCE rides beside SEVERITY: how often this client's pulse on this
+                metric has actually held up — the "act now" vs "watch, don't over-react"
+                read. Hover for the grounded count. Silent until there's a track record. */}
+            {rel && (
+              <span
+                title={r.reliability_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', rel.chip)}
+              >
+                <rel.Icon className="w-2.5 h-2.5" />
+                {rel.label}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
