@@ -136,7 +136,7 @@ const { classifyPacing, rankPacing } = require('./pacing')
 // a lucky 1/1 — plus the median days-to-recovery. Pooled + ANONYMOUS (a rate names no client) →
 // both an agency "which plays earn their place" board AND a client-safe note a recommendation
 // can carry ("this play has cleared it 73% of the time, usually within 2 days"). See lib/efficacy.
-const { efficacyTable } = require('./efficacy')
+const { efficacyTable, efficacyNote } = require('./efficacy')
 
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
@@ -1795,7 +1795,12 @@ function daysToRecovery(firstSeen, recoveredAt) {
 // AGENCY-SAFE because a rate names no client: the full ranked table is cross-tenant-clean, and
 // so is any single play's note — which is exactly what lets 1c reuse one play's efficacy on a
 // client-facing surface. Empty/thin book → efficacyTable still returns a coherent base + [].
-async function getPortfolioEfficacy(opts = {}) {
+// Build the efficacy table ONCE from the whole book's decided, recoverable findings and return
+// the FULL lib/efficacy output — { table (Map playKey→record), ranked, base } — so callers can
+// either rank it (the agency board, getPortfolioEfficacy) or look up ONE play's track record for a
+// finding (the client note, attachEfficacyNotes). The Map is what the per-finding lookup needs; the
+// ranked array is what the board needs. Same WHERE discipline argued above; cross-tenant-clean.
+async function getEfficacyTable(opts = {}) {
   const { rows } = await query(
     `SELECT kind, metric, status, first_seen, recovered_at
        FROM insights
@@ -1809,8 +1814,33 @@ async function getPortfolioEfficacy(opts = {}) {
     status:           r.status,
     days_to_recovery: r.status === 'recovered' ? daysToRecovery(r.first_seen, r.recovered_at) : null,
   }))
-  const { ranked, base } = efficacyTable(samples, opts)
+  return efficacyTable(samples, opts)
+}
+
+// Agency EFFICACY LEDGER read: rank the whole book's plays and drop the lookup Map (the board
+// consumes the ranked array; a play names no client, so this is agency-safe as argued above).
+async function getPortfolioEfficacy(opts = {}) {
+  const { ranked, base } = await getEfficacyTable(opts)
   return { base, plays: ranked }
+}
+
+// CLIENT-SAFE per-finding efficacy note (pure). Given one client's feed and the pooled efficacy
+// table, attach `efficacy_note` to exactly the findings where a track record is both MEANINGFUL and
+// EARNED: an ADVERSE problem (the note speaks of "clearing the problem" — nonsense on a win), that
+// carries a recommended action (the note annotates that advice), whose play archetype lib/efficacy
+// judges proven (it returns null below NOTE_MIN_N, so an unproven play passes through silent rather
+// than boast off a hunch). Every number in the note is the play's OWN pooled rate — it names no
+// client and exposes no peer — which is the whole reason a cross-tenant ledger can ride a client
+// surface: a client reads the credibility of the very advice they're given, nothing else. Total and
+// non-mutating: unmatched findings are returned untouched, so the feed degrades to its prior shape.
+function attachEfficacyNotes(findings, table) {
+  if (!Array.isArray(findings)) return []
+  if (!table) return findings
+  return findings.map(f => {
+    if (!f || !f.recommended_action || !isAdverse(f)) return f
+    const note = efficacyNote(f, table)
+    return note ? { ...f, efficacy_note: note } : f
+  })
 }
 
 // Portfolio TRIAGE ROSTER: every client rolled into one health score, ranked
@@ -2262,8 +2292,10 @@ module.exports = {
   getPortfolioBenchmarks, getClientStanding,
   // cross-client common-cause detection (agency-only — names other clients + book share)
   getPortfolioSystemic,
-  // action→recovery efficacy (does the recommended play actually fix it; pooled, anonymous)
-  getPortfolioEfficacy,
+  // action→recovery efficacy (does the recommended play actually fix it; pooled, anonymous):
+  // the agency ledger read, the shared table builder (Map + ranked), and the CLIENT-SAFE
+  // per-finding note decorator that rides one play's pooled record onto a client's own feed.
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
   // predictive early-warning (agency-only): per-sweep health snapshot + forward-looking roster
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)

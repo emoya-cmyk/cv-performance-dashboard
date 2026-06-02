@@ -56,7 +56,9 @@ const {
   // cross-client common-cause (agency-only): the systemic scan over the active book.
   getPortfolioSystemic,
   // action→recovery efficacy (pooled, anonymous): does the recommended play actually fix it.
-  getPortfolioEfficacy,
+  // getEfficacyTable hands back the play→record Map; attachEfficacyNotes stamps a client-safe
+  // "this play has worked X% of the time" line onto adverse findings that already carry advice.
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
   // predictive early-warning (agency-only): persist the per-sweep health series, read it forward.
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + a client's OWN per-metric
@@ -1606,6 +1608,80 @@ test('efficacy (read): getPortfolioEfficacy samples only recoverable decided fin
   assert.equal(shrunk.recovery_rate, 0.667, 'raw rate is prior-independent')
   assert.ok(Number.isFinite(shrunk.efficacy) && shrunk.efficacy >= 0 && shrunk.efficacy <= 1,
     'shrunk efficacy is a valid probability')
+})
+
+// ── efficacy note (1d wiring): attachEfficacyNotes stamps the client-safe sentence ──
+// 1a proves efficacyNote's text math; this is the JOIN wiring — getEfficacyTable (the live
+// DB read → play→record Map) feeding attachEfficacyNotes (the decorator the client route
+// runs over its feed). It pins the four gates that decide whether a finding earns the note,
+// because every one of them is a way the client surface could leak nonsense or noise:
+//   (a) ADVERSE + ADVISED + PROVEN → the full sentence, every number straight from the record;
+//   (b) THIN (n < NOTE_MIN_N) → silent, never boast a recovery rate off a hunch;
+//   (c) no recommended_action → silent, the note annotates ADVICE and there's none to annotate;
+//   (d) FAVORABLE → silent, "cleared the problem" is nonsense on a win — isolated by holding the
+//       play PROVEN and flipping only direction, so the suppression is the adverse gate alone.
+// Plays are isolated by a synthetic metric (counts are ours); the favorable case must use a real
+// metric, since a known good-direction is what makes a finding favorable at all (synthetic = adverse).
+test('efficacy (note): attachEfficacyNotes annotates only adverse, advised, PROVEN findings — pooled, client-safe', async () => {
+  await ready()
+  const c = await freshClient('Efficacy Notes Co')
+  const PROVEN = 'zz_eff_note_proven', THIN = 'zz_eff_note_thin'
+
+  const ins = (fp, kind, metric, status, first, recovered) => db.query(
+    `INSERT INTO insights (client_id, scope, kind, metric, severity, title, fingerprint, status, first_seen, recovered_at)
+     VALUES ($1, 'client', $2, $3, 'warning', $4, $5, $6, $7, $8)`,
+    [c, kind, metric, `note ${fp}`, fp, status, first, recovered])
+
+  // PROVEN play: 4 wins, days {2,2,4,4} → n=4 (= NOTE_MIN_N), median 3. Synthetic metric = ours alone.
+  await ins('nt-pv-1', 'coverage_gap', PROVEN, 'recovered', '2026-05-01 00:00:00', '2026-05-03 00:00:00') // +2
+  await ins('nt-pv-2', 'coverage_gap', PROVEN, 'recovered', '2026-05-01 00:00:00', '2026-05-03 00:00:00') // +2
+  await ins('nt-pv-3', 'coverage_gap', PROVEN, 'recovered', '2026-05-01 00:00:00', '2026-05-05 00:00:00') // +4
+  await ins('nt-pv-4', 'coverage_gap', PROVEN, 'recovered', '2026-05-01 00:00:00', '2026-05-05 00:00:00') // +4
+  // THIN play: only 2 wins → below the proof floor, must stay silent.
+  await ins('nt-th-1', 'coverage_gap', THIN, 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+  await ins('nt-th-2', 'coverage_gap', THIN, 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+  // REAL 'anomaly::leads' forced proven (4 wins, additive) — lets us flip direction to test the adverse gate.
+  for (const n of [1, 2, 3, 4])
+    await ins(`nt-ld-${n}`, 'anomaly', 'leads', 'recovered', '2026-05-01 00:00:00', '2026-05-02 00:00:00')
+
+  // priorWeight 0 → efficacy = raw rate, so the PROVEN play reads a clean 100% (4/4) for an exact text.
+  const table = await getEfficacyTable({ priorWeight: 0 })
+
+  const action = { play: 'reconnect', text: 'Reconnect the source.' }
+  const advisedAdverse = { kind: 'coverage_gap', metric: PROVEN, recommended_action: action }       // (a)
+  const advisedThin    = { kind: 'coverage_gap', metric: THIN,   recommended_action: action }       // (b)
+  const noAdvice       = { kind: 'coverage_gap', metric: PROVEN }                                    // (c)
+  const leadsDown      = { kind: 'anomaly', metric: 'leads', direction: 'down', recommended_action: action } // (d) adverse
+  const leadsUp        = { kind: 'anomaly', metric: 'leads', direction: 'up',   recommended_action: action } // (d) favorable
+
+  const [oAdverse, oThin, oNoAdvice, oDown, oUp] =
+    attachEfficacyNotes([advisedAdverse, advisedThin, noAdvice, leadsDown, leadsUp], table)
+
+  // (a) the full client-safe note — every number quoted is the play's OWN pooled record.
+  assert.ok(oAdverse.efficacy_note, 'proven adverse advised finding gets a note')
+  assert.equal(oAdverse.efficacy_note.successes, 4)
+  assert.equal(oAdverse.efficacy_note.n, 4, 'denominator is the decided count, not inflated')
+  assert.equal(oAdverse.efficacy_note.pct, 100, 'priorWeight 0 → raw 4/4 = 100%')
+  approx(oAdverse.efficacy_note.median_days, 3, 1e-9)
+  assert.equal(oAdverse.efficacy_note.text,
+    'This play has cleared the problem 100% of the time (4 of 4), usually within 3 days.',
+    'grounded sentence: rate, raw counts, and median days — no invented numbers')
+
+  // (b) below the proof floor → silent.
+  assert.equal(oThin.efficacy_note, undefined, 'a thin (n<4) play attaches no note')
+  // (c) the advice gate → a proven play with nothing to annotate stays bare.
+  assert.equal(oNoAdvice.efficacy_note, undefined, 'no recommended_action → no note')
+  // (d) the adverse gate in isolation: SAME proven play, only direction differs.
+  assert.ok(oDown.efficacy_note, 'adverse (leads down) gets the note')
+  assert.ok(typeof oDown.efficacy_note.text === 'string' && oDown.efficacy_note.n >= 4,
+    'the adverse note is a real, proven sentence')
+  assert.equal(oUp.efficacy_note, undefined, 'favorable (leads up) never gets a clear-the-problem note')
+
+  // total + non-mutating: source untouched, degenerate inputs degrade cleanly.
+  assert.equal(advisedAdverse.efficacy_note, undefined, 'the input finding is not mutated')
+  assert.deepEqual(attachEfficacyNotes([advisedAdverse], null), [advisedAdverse],
+    'no table → the feed passes straight through (note layer is additive)')
+  assert.deepEqual(attachEfficacyNotes('nope', table), [], 'a non-array feed degrades to []')
 })
 
 // ============================================================

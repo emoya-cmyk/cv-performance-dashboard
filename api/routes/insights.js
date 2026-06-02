@@ -77,7 +77,7 @@ const {
   getPortfolioBenchmarks, getClientStanding,
   getRecentRecoveries, getPortfolioRecoveries,
   getPortfolioSystemic,
-  getPortfolioEfficacy,
+  getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
   ackInsight, resolveInsight,
@@ -414,7 +414,7 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const [insights, standing, recoveries, pacing] = await Promise.all([
+    const [insights, standing, recoveries, pacing, effTable] = await Promise.all([
       getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
       getClientStanding(clientId),
       // recent WINS for this client — problems the engine flagged that then cleared.
@@ -423,15 +423,23 @@ router.get('/:clientId', async (req, res) => {
       // this client's OWN pace-to-goal this month (per metric with a target) — computed
       // from its own MTD actual vs. target alone, NO peers, so it's safe in the client view.
       getClientPacing(clientId),
+      // the pooled, ANONYMOUS efficacy ledger (Map play→record) — used only to stamp a
+      // client-safe "this play has worked X% of the time" note onto adverse findings that
+      // already carry advice. Names no peer; quotes only the play's own track record.
+      getEfficacyTable(),
     ])
+    // self-improving join: attach efficacy_note to each adverse finding whose recommended
+    // play is PROVEN (n≥4 decided outcomes). Pure decorator — count/severity/health are
+    // computed on the SAME annotated set so the feed and its roll-ups never drift.
+    const annotated = attachEfficacyNotes(insights, effTable)
     res.json({
       client_id: clientId,
-      insights,
-      count: insights.length,
-      by_severity: tallyBySeverity(insights),
+      insights: annotated,
+      count: annotated.length,
+      by_severity: tallyBySeverity(annotated),
       // the one-number verdict for this client's badge, from the same pure synthesis
       // the portfolio roster uses — score, band, counts, and the headline driver
-      health: scoreClient(insights),
+      health: scoreClient(annotated),
       // privacy-safe peer standing: this client's OWN percentile vs the anonymous
       // portfolio distribution (never a peer's identity). Empty `standing` under a
       // thin cohort — the surface shows nothing, never a half-built comparison.

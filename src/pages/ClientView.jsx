@@ -301,6 +301,14 @@ function ClientInsights({ insights }) {
           // calm "we're restoring a reporting source" note — the channel is the agency's to
           // reconnect, and naming it would read as a defect the client can't act on. Null → no note.
           const cause = correlateView(item)
+          // The recommendation's earned track record (lib/efficacy.js), already client-safe by
+          // construction: the engine only stamps efficacy_note onto an adverse, advised finding
+          // whose play archetype has a PROVEN pooled recovery rate (n≥4 decided outcomes), and the
+          // text quotes only that play's OWN rate — it names no peer and exposes no other client.
+          // Turns "here's what we'll do" into "here's what we'll do, and here's how often it has
+          // worked for problems like this" — the self-improving loop made visible as honest
+          // credibility. Null → no line, exactly as before.
+          const efficacy = item.efficacy_note
           return (
             <div
               key={item.id}
@@ -388,6 +396,16 @@ function ClientInsights({ insights }) {
                     <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Our Recommendation</span>
                   </div>
                   <p className="text-xs text-slate-600 leading-relaxed font-medium">{action.text}</p>
+                  {/* Earned-credibility line — the recommendation's own proven success rate, in
+                      plain English (efficacy_note.text). Sits UNDER the advice, divided off, as a
+                      quiet "and it tends to work" — never a claim the client must act on. The text
+                      is the engine's, peer-free; null → nothing renders, exactly as before. */}
+                  {efficacy?.text && (
+                    <div className="mt-2 pt-2 border-t border-slate-50 flex items-start gap-1.5">
+                      <Award className="w-3.5 h-3.5 text-brand-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-500 leading-relaxed font-medium">{efficacy.text}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
