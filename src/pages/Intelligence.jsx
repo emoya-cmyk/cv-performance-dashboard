@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
-  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users,
+  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -36,6 +36,7 @@ export default function Intelligence() {
   const [systemic, setSystemic] = useState(null)       // { portfolio_size, signals[] } — cross-client common-cause scan (agency-only)
   const [trajectory, setTrajectory] = useState(null)   // { warnings[], count } — predictive early-warning roster (agency-only)
   const [pacing, setPacing]   = useState(null)         // { roster[], month, days_elapsed, days_in_month } — goal-pacing roster (agency-only)
+  const [efficacy, setEfficacy] = useState(null)       // { base, plays[], count } — action→recovery efficacy ledger (pooled, anonymous)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -49,14 +50,15 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Seven independent reads: the per-finding feed, the synthesized triage roster, the
+      // Eight independent reads: the per-finding feed, the synthesized triage roster, the
       // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
-      // common-cause scan, the predictive early-warning roster, and the goal-pacing roster.
+      // common-cause scan, the predictive early-warning roster, the goal-pacing roster, and
+      // the action→recovery efficacy ledger (which of our OWN plays actually fix it).
       // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
-      // of the six synthesis reads stumbles its panel simply hides and the page degrades to
+      // of the seven synthesis reads stumbles its panel simply hides and the page degrades to
       // exactly what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj, pace] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(),
+      const [feed, roster, bench, recov, sys, traj, pace, eff] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -66,6 +68,7 @@ export default function Intelligence() {
       setSystemic(sys.status === 'fulfilled' && Array.isArray(sys.value?.signals) ? sys.value : null)
       setTrajectory(traj.status === 'fulfilled' && Array.isArray(traj.value?.warnings) ? traj.value : null)
       setPacing(pace.status === 'fulfilled' && Array.isArray(pace.value?.roster) ? pace.value : null)
+      setEfficacy(eff.status === 'fulfilled' && Array.isArray(eff.value?.plays) ? eff.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -195,6 +198,15 @@ export default function Intelligence() {
           fix first, each tagged with its client. The "what we fixed lately" proof the work
           lands. Hidden until at least one win exists; degrades silently to nothing. */}
       {recoveries.length > 0 && <RecoveriesPanel recoveries={recoveries} />}
+
+      {/* playbook efficacy — the self-improving grain, and the natural next read after recoveries:
+          recoveries are the INSTANCES we fixed, this is the PATTERN learned across them. Per play
+          archetype (the recommendation we attach to a kind of problem) it pools every decided,
+          recoverable finding the book over and asks "did this play actually clear it?" — the
+          measured rate shrunk toward the pooled base rate, ranked by a Wilson lower bound so a
+          deep 9/10 outranks a lucky 1/1, plus the median days it took. Pooled + anonymous (a
+          rate names no client). Hidden until a play earns enough evidence to rank. */}
+      {efficacy?.plays?.length > 0 && <EfficacyPanel data={efficacy} />}
 
       {/* severity stat band — doubles as the severity filter */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1422,6 +1434,154 @@ function PacingRow({ r }) {
                 <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${conf}%` }} />
               </div>
               <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">month {conf}% in</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Playbook efficacy (agency, pooled + anonymous) ──────────────────────────
+   The self-improving grain made visible: does the action the engine RECOMMENDS for a kind of
+   problem actually fix it? efficacyTable pools every decided, recoverable finding across the
+   whole book per play archetype (kind::metric) and reports the measured recovery rate — shrunk
+   toward the pooled base rate so a thin sample can't boast — ranked by a Wilson 95% lower bound
+   (a deep 9/10 beats a lucky 1/1), plus the median days to recover. Best-first: a leaderboard of
+   the system's OWN advice — the row that earns its place on top, the play to reconsider at the
+   bottom. Pooled + anonymous — a rate names no client — so it's agency-only without exposing any
+   account; the loop that turns "we recommend this" into "this is what works." */
+const EFF_SHOWN = 8   // cap so a mature playbook stays a glance; the rest collapse into a footer count
+
+// band → chip + accent. high = the play reliably clears the problem (emerald); medium = works
+// often enough to keep (amber); low = rarely clears it, a candidate to rethink (rose). Mirrors
+// efficacy.bandOf (EFF_HIGH .66 / EFF_LOW .40); total map so an odd value still renders neutral.
+const EFF_BAND_META = {
+  high:   { label: 'Reliable', chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+  medium: { label: 'Mixed',    chip: 'bg-amber-50 text-amber-600 border-amber-200',       text: 'text-amber-600',   dot: 'bg-amber-500' },
+  low:    { label: 'Weak',     chip: 'bg-rose-50 text-rose-600 border-rose-200',          text: 'text-rose-600',    dot: 'bg-rose-500' },
+}
+const effBandMeta = (b) => EFF_BAND_META[b] || EFF_BAND_META.medium
+
+// median recovery days → "usually within 2 days" / "within a day". null (no successes timed) →
+// caller drops the clause rather than print a hollow "within null days". round3 applied server-side.
+function fmtRecoverDays(d) {
+  const v = Number(d)
+  if (!Number.isFinite(v) || v < 0) return null
+  if (v < 1) return 'within a day'
+  const r = Math.round(v * 10) / 10
+  return `within ${Number.isInteger(r) ? r : r.toFixed(1)} day${r === 1 ? '' : 's'}`
+}
+
+function EfficacyPanel({ data }) {
+  const plays = Array.isArray(data?.plays) ? data.plays : []
+  if (plays.length === 0) return null               // no play has earned enough evidence → no panel
+  const shown    = plays.slice(0, EFF_SHOWN)
+  const hidden   = plays.length - shown.length
+  const baseN    = Number(data?.base?.n)
+  const baseRate = data?.base?.rate == null ? null : Math.round(Number(data.base.rate) * 100)
+  const sub = Number.isFinite(baseN) && baseN > 0
+    ? `${plays.length} play${plays.length === 1 ? '' : 's'} learned from ${baseN} decided outcome${baseN === 1 ? '' : 's'}${baseRate != null ? ` · ${baseRate}% clear overall` : ''}`
+    : `${plays.length} play${plays.length === 1 ? '' : 's'}`
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+          <Sparkles className="w-4 h-4 text-violet-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Playbook efficacy</h2>
+        <span className="text-[11px] font-semibold text-slate-400">{sub}</span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((p) => <EfficacyRow key={p.play} p={p} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more play{hidden === 1 ? '' : 's'}</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-violet-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Each row is a recommended action measured against what happened next: the share of decided,
+          recoverable findings it <span className="font-bold text-violet-600">actually cleared</span>, shrunk toward the
+          book-wide base rate so a thin sample can't boast, and ranked by a 95% lower bound — a deep record
+          outranks a lucky streak. The meter shows how much the estimate has earned over the prior. Pooled and
+          anonymous — the system grading its own advice so the next recommendation is the one that works.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One play archetype: the problem it answers (kind + metric), how reliably it has cleared that
+   problem, and how fast. Left rail in the band color (the verdict); the middle reads "cleared X
+   of N · usually within Md · ≥ F% floor"; the right rail is the headline clear-rate % over a
+   credibility meter that fills with how much the estimate has earned over the prior (more
+   evidence = surer call). Mirrors PacingRow so the agency boards read as one family. */
+function EfficacyRow({ p }) {
+  const meta  = effBandMeta(p.band)
+  const km    = kindMeta(p.kind); const KIcon = km.icon || Sparkles
+  const pct   = Number.isFinite(Number(p.efficacy)) ? Math.round(Number(p.efficacy) * 100) : null
+  const floor = Number.isFinite(Number(p.lower)) ? Math.round(Number(p.lower) * 100) : null
+  const cred  = p.credibility == null ? null : Math.max(0, Math.min(100, Math.round(Number(p.credibility) * 100)))
+  const days  = fmtRecoverDays(p.median_days)
+  const hasMetric = p.metric != null && p.metric !== '*'
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border', meta.chip)}>
+          <KIcon className="w-4 h-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800">{km.label}</span>
+            {hasMetric && (
+              <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+                {metricLabel(p.metric)}
+              </span>
+            )}
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', meta.chip)}>
+              {meta.label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span>cleared</span>
+            <span className={cn('tabular-nums font-bold', meta.text)}>{p.successes} of {p.n}</span>
+            {days && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>usually <span className="font-bold text-slate-600">{days}</span></span>
+              </>
+            )}
+            {floor != null && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span title="95% lower confidence bound — the proven floor the ranking trusts">≥ <span className="tabular-nums font-bold text-slate-600">{floor}%</span> floor</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {pct != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', meta.text)}>{pct}%</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">clear rate</div>
+            </>
+          )}
+          {cred != null && (
+            <div className="mt-2" title={`Credibility — how much this estimate has earned over the prior (n=${p.n})`}>
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${cred}%` }} />
+              </div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{cred}% earned</div>
             </div>
           )}
         </div>
