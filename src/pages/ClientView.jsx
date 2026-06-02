@@ -18,6 +18,7 @@ import TeamUpdate from '@/components/TeamUpdate'
 import CampaignList from '@/components/CampaignList'
 import MonthlyTrend from '@/components/MonthlyTrend'
 import AskBox from '@/components/AskBox'
+import DriverBreakdown from '@/components/DriverBreakdown'
 import { useAgency } from '@/lib/agencySettings'
 
 const PERIOD_OPTS = [
@@ -948,6 +949,9 @@ function ClientPulseRow({ s }) {
           {s.client_message && (
             <p className="text-xs text-slate-600 leading-relaxed font-medium mt-1">{s.client_message}</p>
           )}
+          {/* The "why", in the client's own numbers — present only on a clean composite
+              decomposition (revenue ≡ spend × roas, jobs ≡ leads × close_rate). */}
+          <DriverBreakdown message={s.diagnosis_client_message} diagnosis={s.diagnosis} tone={tone} audience="client" />
         </div>
         {deltaStr != null && (
           <div className="shrink-0 text-right">

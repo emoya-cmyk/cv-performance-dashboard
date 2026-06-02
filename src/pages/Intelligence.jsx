@@ -13,6 +13,7 @@ import {
   correlateView, impactsView, escalationView,
   healthBandMeta, recoveryMeta, timeAgo, recapPosture,
 } from '@/lib/insightMeta'
+import DriverBreakdown from '@/components/DriverBreakdown'
 
 /**
  * Intelligence — the agency-wide window into the autonomous analyst.
@@ -1420,9 +1421,9 @@ const PULSE_SHOWN = 6   // cap the rows so a moving book stays a glance
 // (emerald) — surfaced too, because "lean into what's suddenly working" is as actionable
 // intra-week as "catch what's breaking," just ranked last by the engine's adverse-first order.
 const PULSE_TONE = {
-  critical: { chip: 'bg-rose-50 text-rose-600 border-rose-200',         text: 'text-rose-600',    dot: 'bg-rose-500',    label: 'Critical' },
-  warning:  { chip: 'bg-amber-50 text-amber-600 border-amber-200',      text: 'text-amber-600',   dot: 'bg-amber-500',   label: 'Warning'  },
-  good:     { chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', label: 'Tailwind' },
+  critical: { chip: 'bg-rose-50 text-rose-600 border-rose-200',         text: 'text-rose-600',    dot: 'bg-rose-500',    accent: '#f43f5e', label: 'Critical' },
+  warning:  { chip: 'bg-amber-50 text-amber-600 border-amber-200',      text: 'text-amber-600',   dot: 'bg-amber-500',   accent: '#f59e0b', label: 'Warning'  },
+  good:     { chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', accent: '#10b981', label: 'Tailwind' },
 }
 function pulseTone(r) {
   if (!r?.adverse) return PULSE_TONE.good
@@ -1519,6 +1520,10 @@ function PulseRow({ r }) {
               </>
             )}
           </div>
+
+          {/* The "why" — only present when the engine decomposed a composite move
+              (revenue ≡ spend × roas, jobs ≡ leads × close_rate); inert otherwise. */}
+          <DriverBreakdown message={r.diagnosis_message} diagnosis={r.diagnosis} tone={tone} audience="agency" />
         </div>
 
         <div className="shrink-0 text-right w-24">
