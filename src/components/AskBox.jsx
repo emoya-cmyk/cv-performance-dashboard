@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Sparkles, CornerDownLeft, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { api } from '@/lib/api'
 import { weekLabel } from '@/lib/utils'
@@ -99,6 +99,33 @@ function DeltaChip({ comparison }) {
   )
 }
 
+// A single DYNAMIC opening suggestion: the headline of a metric that actually
+// moved for this caller's scope (e.g. "Revenue up 23.1%"), rendered as a
+// click-to-run question. It carries the SAME polarity tone as DeltaChip —
+// emerald when the move is an improvement, rose on a regression, slate when the
+// metric has no inherent good/bad direction (spend) — so the colour reads the
+// same here as on the answer it produces. Clicking asks the canonical question
+// behind the chip, which re-derives the very figure shown on it. The headline,
+// %/delta and tone are all computed and grounded server-side (lib/suggest over
+// the same scope-safe path as the answer) — this only renders them.
+function MoverChip({ mover, onPick }) {
+  const Icon = mover.direction === 'down' ? TrendingDown : mover.direction === 'up' ? TrendingUp : Minus
+  const tone =
+    mover.improved === true  ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100'
+    : mover.improved === false ? 'text-rose-700 bg-rose-50 border-rose-100 hover:bg-rose-100'
+    :                            'text-slate-600 bg-slate-50 border-slate-200 hover:bg-slate-100'
+  return (
+    <button
+      onClick={() => onPick(mover.question)}
+      title={`${mover.headline} ${mover.subtext} — click to ask`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-bold tabular-nums transition ${tone}`}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" />
+      {mover.headline}
+    </button>
+  )
+}
+
 function AskResult({ result, onClear }) {
   const { answer, narrated, meta, columns, rows } = result
   const hasBucket    = columns.includes('bucket')
@@ -192,7 +219,21 @@ export default function AskBox({
   const [status, setStatus]     = useState('idle')   // idle | loading | done | error
   const [result, setResult]     = useState(null)
   const [error, setError]       = useState(null)
+  const [movers, setMovers]     = useState(null)   // null = loading/unknown · [] = none · [chips]
   const inputRef = useRef(null)
+
+  // Dynamic opening chips: the biggest period-over-period movers for this
+  // caller's scope. Fetched once per clientId — pure DB aggregation, no LLM, so
+  // it works even without an Anthropic key, and the route soft-degrades to an
+  // empty list on any fault. While null (loading) or empty (none/degraded) the
+  // box falls back to its static suggestions, so first paint is never blank.
+  useEffect(() => {
+    let alive = true
+    api.askSuggestions(clientId)
+      .then((r) => { if (alive) setMovers(Array.isArray(r?.suggestions) ? r.suggestions : []) })
+      .catch(()  => { if (alive) setMovers([]) })
+    return () => { alive = false }
+  }, [clientId])
 
   async function run(q) {
     const text = (q ?? question).trim()
@@ -254,19 +295,36 @@ export default function AskBox({
         </button>
       </form>
 
-      {/* Suggestion chips — discoverability, only before the first answer */}
+      {/* Opening suggestions — discoverability, only before the first answer.
+          When we have live MOVERS for this scope, show those (each titled by
+          what actually changed and click-to-run); otherwise fall back to the
+          static prompts while they load, or if there are none / it degraded. */}
       {status === 'idle' && (
-        <div className="flex flex-wrap gap-1.5 mt-3">
-          {suggestions.map((s) => (
-            <button
-              key={s}
-              onClick={() => run(s)}
-              className="text-[11px] font-medium text-slate-500 bg-slate-50 hover:bg-brand-50 hover:text-brand-600 border border-slate-100 rounded-full px-3 py-1 transition"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        movers && movers.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
+              Worth asking right now
+              {movers[0]?.subtext && (
+                <span className="font-semibold text-slate-300 normal-case tracking-normal"> · {movers[0].subtext}</span>
+              )}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {movers.map((m) => <MoverChip key={m.metric} mover={m} onPick={run} />)}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-1.5 mt-3">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                onClick={() => run(s)}
+                className="text-[11px] font-medium text-slate-500 bg-slate-50 hover:bg-brand-50 hover:text-brand-600 border border-slate-100 rounded-full px-3 py-1 transition"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )
       )}
 
       {/* Loading echo */}
