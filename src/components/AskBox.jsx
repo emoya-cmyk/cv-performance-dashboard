@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Sparkles, CornerDownLeft, Loader2, AlertTriangle, ShieldCheck, X } from 'lucide-react'
+import { Sparkles, CornerDownLeft, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { api } from '@/lib/api'
 import { weekLabel } from '@/lib/utils'
 
@@ -72,6 +72,33 @@ function Chip({ children }) {
   )
 }
 
+// Period-over-period delta pill rendered beside a single overall figure. Reads
+// ONLY meta.comparison — every number here was computed and grounded server-side
+// (the baseline comes from the DB, never the model), so it can never disagree
+// with the figure it sits next to. Green when the change is an improvement for
+// this metric's polarity, red on a regression, neutral when flat or polarity-free
+// (e.g. spend). Magnitude prefers the %; on a zero baseline (% undefined) it
+// shows the absolute change instead. Tooltip names the period it's measured against.
+function DeltaChip({ comparison }) {
+  const { direction, improved, pct_display, delta_display, label, baseline_display } = comparison
+  const flat = direction === 'flat'
+  const Icon = flat ? Minus : direction === 'down' ? TrendingDown : TrendingUp
+  const tone =
+    improved === true  ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
+    : improved === false ? 'text-rose-700 bg-rose-50 border-rose-100'
+    :                      'text-slate-500 bg-slate-100 border-slate-200'
+  const magnitude = flat ? 'unchanged' : (pct_display || delta_display)
+  return (
+    <span
+      title={`vs ${label} (${baseline_display})`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold tabular-nums ${tone}`}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" />
+      {magnitude}
+    </span>
+  )
+}
+
 function AskResult({ result, onClear }) {
   const { answer, narrated, meta, columns, rows } = result
   const hasBucket    = columns.includes('bucket')
@@ -126,10 +153,13 @@ function AskResult({ result, onClear }) {
         </div>
       )}
 
-      {/* Single overall figure (group_by none) */}
+      {/* Single overall figure (group_by none), with an optional period-over-period delta */}
       {rows.length > 0 && !hasBucket && (
-        <div className="mt-3 inline-flex items-baseline gap-2 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-          <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
+        <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
+            {meta.comparison && <DeltaChip comparison={meta.comparison} />}
+          </div>
           <span className="text-xs text-slate-400">{meta.metric} · {meta.time_label}</span>
         </div>
       )}
