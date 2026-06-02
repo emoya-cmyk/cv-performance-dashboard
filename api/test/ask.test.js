@@ -746,3 +746,59 @@ test('a client-scoped single figure is never flagged explainable', async () => {
 
   delete process.env.ANTHROPIC_API_KEY
 })
+
+// intel-v6 (6d): the scoped exception. A ratio of ONE client's sums is still a ratio,
+// so its "why" — the numerator-vs-denominator lever split — is valid for a single
+// client just as for the whole book (both levers are that client's own sums). So a
+// client-scoped RATIO IS explainable, even though a client-scoped ADDITIVE (above) is
+// not. This is the decisive scope-threading proof: Acme's OWN roas rose 20%, the exact
+// OPPOSITE of the whole-book roas that fell 4.8% (asserted in the unscoped ratio e2e).
+test('a client-scoped RATIO still explains — by its own numerator-vs-denominator levers', async () => {
+  const { acme } = await ensurePortfolio()
+
+  // Acme roas: WEEK_A 10,000/2,000 = 5.0× → WEEK_B 12,000/2,000 = 6.0× (revenue rose
+  // 20%, spend flat). These are Acme's sums ALONE — proof `scope` is threaded through
+  // both the authoritative totals AND the two driver recomputes.
+  const r = await runExplain(
+    { metric: 'roas', group_by: 'none', time_range: 'last_week' },
+    { now: NOW2, scopeClientId: acme },
+  )
+
+  assert.ok(r, 'a scoped ratio that moved is explainable (by driver)')
+  assert.equal(r.basis, 'driver')                            // ratio → DRIVER basis, never 'client'
+  assert.equal(r.moved, true)
+  assert.equal(r.metric, 'roas')
+  assert.equal(r.label, 'ROAS')
+  assert.equal(r.unit, 'ratio')
+  assert.equal(r.direction, 'up')                            // Acme's OWN roas ROSE (book FELL)
+  assert.ok(Math.abs(r.total_from - 5) < 1e-9)               // 10,000 / 2,000 — Acme only
+  assert.ok(Math.abs(r.total_to - 6) < 1e-9)                 // 12,000 / 2,000 — Acme only
+  assert.ok(Math.abs(r.total_delta - 1) < 1e-9)
+  assert.equal(r.total_delta_display, '+1×')                 // ratio unit strips trailing zeros, signed +
+  assert.equal(r.pct, 20)
+
+  // numerator (revenue) carried the whole move; the denominator (spend) held flat.
+  assert.deepEqual(r.contributors.map((c) => c.key), ['revenue', 'spend'])
+  assert.deepEqual(r.contributors.map((c) => c.role), ['numerator', 'denominator'])
+  assert.deepEqual(r.contributors.map((c) => c.delta_display), ['+20%', '+0%'])
+  const rev = r.contributors.find((c) => c.key === 'revenue')
+  const sp  = r.contributors.find((c) => c.key === 'spend')
+  assert.ok(Math.abs(rev.share - 1) < 1e-9, 'revenue is the entire move → share 1')
+  assert.ok(Math.abs(sp.share) < 1e-9, 'flat spend contributes nothing → share 0 (−0 normalised)')
+  assert.equal(r.lead.key, 'revenue')                        // the dominant aligned lever
+  assert.equal(r.others, null)
+  assert.equal(r.unattributed, null)
+
+  // grounded one-liner — Acme's OWN numbers copied verbatim, no LLM.
+  assert.equal(r.narration, 'ROAS rose 20% — revenue rose 20% and ad spend held flat.')
+
+  // and the UI predicate agrees: runAsk flags meta.explainable for the SAME scoped shape,
+  // so the "Why?" chip now lights up on /my-dashboard for a client's own ratio.
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'roas', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'ok'
+  const asked = await runAsk('roas last week', { now: NOW2, scopeClientId: acme })
+  assert.ok(asked.meta.comparison, 'a scoped ratio single figure still carries a comparison')
+  assert.equal(asked.meta.explainable, true)
+  delete process.env.ANTHROPIC_API_KEY
+})

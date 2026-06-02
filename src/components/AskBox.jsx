@@ -328,13 +328,16 @@ function AskResult({ result, clientId, onClear, onPick }) {
         </div>
       )}
 
-      {/* intel-v6 (5): grounded "why did it change?" — offered ONLY when the server
-          flagged this exact figure decomposable (meta.explainable: an UNSCOPED,
-          additive single figure that moved vs its prior period). Clicking re-runs the
-          SAME spec through contribution.js for an EXACT per-client breakdown — no LLM,
-          so the receipts can never disagree with the figure above. A client-scoped
-          ask is never flagged (there is no cross-client "who" to show), so this chip
-          only appears on the agency whole-book view. */}
+      {/* intel-v6 (5)+(6): grounded "why did it change?" — offered ONLY when the server
+          flagged this exact figure decomposable (meta.explainable: a single figure that
+          moved vs its prior period AND is decomposable). Clicking re-runs the SAME spec
+          server-side for an EXACT breakdown — no LLM, so the receipts can never disagree
+          with the figure above. Two shapes qualify: a WHOLE-BOOK additive figure → the
+          by-client "who" split (contribution.js); OR a RATIO (roas/cpl/close_rate) on
+          ANY view incl. a single client → the numerator-vs-denominator "which lever"
+          split (ratioAttribution.js), valid for one client via its own levers. So this
+          chip now lights up on /my-dashboard too — but only ever for a ratio there (a
+          client-scoped additive has no cross-client "who", so it stays unflagged). */}
       {meta.explainable && (
         <div className="mt-3">
           {(whyStatus === 'idle' || whyStatus === 'loading') && (

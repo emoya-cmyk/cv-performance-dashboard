@@ -656,13 +656,15 @@ async function runAsk(question, opts = {}) {
       row_count:  formatted.length,
       comparison: meta.comparison || null,   // period-over-period for a single figure (2c chip)
       // intel-v6 (5)+(6): is there a grounded "why did it change?" the caller can ask?
-      // True only for the exact shape runExplain can decompose — an UNSCOPED (whole-
-      // book) single figure of an ADDITIVE metric (→ the by-client "who" split) or a
-      // RATIO metric (→ the numerator-vs-denominator "which lever" split) that actually
-      // moved vs its prior period. We compute the predicate HERE so the UI never
-      // re-derives the rules: it shows the "Why?" affordance iff this is true.
-      explainable: scope == null && compiled.grouping === 'none'
+      // True only for the exact shape runExplain can decompose — a single figure that
+      // moved vs its prior period, AND either: an ADDITIVE metric on the UNSCOPED
+      // (whole-book) view (→ the by-client "who" split, meaningless once pinned to one
+      // client), OR a RATIO metric on ANY view incl. a single client (→ the numerator-
+      // vs-denominator "which lever" split, valid for one client too). We compute the
+      // predicate HERE so the UI never re-derives the rules: it shows "Why?" iff true.
+      explainable: compiled.grouping === 'none'
         && (isAdditiveMetric(spec.metric) || isRatioMetric(spec.metric))
+        && (scope == null || isRatioMetric(spec.metric))
         && !!meta.comparison && meta.comparison.direction !== 'flat',
     },
   }
@@ -686,11 +688,13 @@ async function runAsk(question, opts = {}) {
 //
 // ELIGIBILITY (returns null → the route 422s; the UI only offers the chip when
 // meta.explainable was true, so a null here is the rare race, not the norm):
-//   • UNSCOPED only — a per-client/per-lever "why" is a whole-book question, not one
-//     for a single client already pinned to itself (scope != null → null).
-//   • group_by:'none' — a single agency figure, not an already-broken-down ranking.
+//   • group_by:'none' — a single figure, not an already-broken-down ranking.
 //   • an ADDITIVE *or* RATIO metric — the two bases above; nothing else decomposes.
 //   • a COMPARABLE range — there must be an honest equal-length prior window.
+//   • SCOPE: the whole book explains EITHER basis; a single CLIENT explains only a
+//     RATIO (its numerator-vs-denominator lever split is valid for one client), never
+//     an ADDITIVE metric (whose only "why" is the by-client split — meaningless once
+//     pinned to one client). So scope != null && !ratio → null.
 //
 // EXACTNESS: both paths pass the authoritative single-figure totals (the very numbers
 // the answer showed). The entity path reconciles any beyond-LIMIT gap into an explicit
@@ -705,8 +709,9 @@ async function runAsk(question, opts = {}) {
 // @param {object}  [opts]
 // @param {Date}    [opts.now]            inject "now" (tests / fixed clock)
 // @param {boolean} [opts.isPg]           override backend detection
-// @param {string}  [opts.scopeClientId]  a non-null scope → null (per-client view
-//                                         has no cross-client "who"); null = whole book
+// @param {string}  [opts.scopeClientId]  pins the decomposition to one client; a
+//                                         scoped RATIO still explains (its own levers),
+//                                         a scoped ADDITIVE → null; null = whole book
 // @returns {Promise<object|null>}        null when not decomposable; else the breakdown
 async function runExplain(rawSpec, opts = {}) {
   let spec
@@ -721,18 +726,25 @@ async function runExplain(rawSpec, opts = {}) {
   // Same eligibility predicate the UI saw as meta.explainable — re-checked server-
   // side so the route is safe even if called directly with an off-shape spec. Either
   // an additive metric (entity/by-client basis) or a ratio metric (driver basis) qualifies.
-  if (scope != null || spec.group_by !== 'none' || !cmp) return null
+  if (spec.group_by !== 'none' || !cmp) return null
   if (!isAdditiveMetric(spec.metric) && !isRatioMetric(spec.metric)) return null
+  // A scoped (single-client) caller can still explain a RATIO: its numerator-vs-
+  // denominator lever split is valid for one client just as for the whole book (both
+  // drivers are that client's OWN sums). An ADDITIVE metric's only "why" is the by-
+  // CLIENT split, meaningless once pinned to one client, so a scoped additive → null.
+  if (scope != null && !isRatioMetric(spec.metric)) return null
 
   const metricDef = METRICS[spec.metric]
   // Grounded, unit-aware display helpers — used by BOTH bases below.
   const fmt    = (v) => formatValue(v, metricDef)
   const signed = (d) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d))
 
-  // Authoritative agency totals — the single-figure numbers, both windows, via the
-  // SAME group_by:'none' compile the answer used (current + the 5th-arg baseline seam).
-  const noneCur  = compileQuery(spec, now, isPg, null)
-  const noneBase = compileQuery(spec, now, isPg, null, () => cmp)
+  // Authoritative totals — the single-figure numbers, both windows, via the SAME
+  // group_by:'none' compile the answer used (current + the 5th-arg baseline seam),
+  // PINNED TO `scope` so a scoped ratio's headline is the client's own ratio, not the
+  // book's (scope is null for the additive path — the gate guarantees it).
+  const noneCur  = compileQuery(spec, now, isPg, scope)
+  const noneBase = compileQuery(spec, now, isPg, scope, () => cmp)
   const [curTotRes, baseTotRes] = await Promise.all([
     query(noneCur.sql,  noneCur.params),
     query(noneBase.sql, noneBase.params),
@@ -744,14 +756,15 @@ async function runExplain(rawSpec, opts = {}) {
   // A ratio of sums has no per-client decomposition, so its "why" is which LEVER
   // moved the quotient — numerator vs denominator. roas=revenue/spend,
   // cpl=spend/leads, close_rate=jobs/leads; each driver is itself an additive metric,
-  // so recompute its two-window totals through the SAME group_by:'none' compile and
+  // so recompute its two-window totals through the SAME group_by:'none' compile —
+  // PINNED TO `scope`, so a single client explains a ratio via its OWN levers — and
   // hand the four numbers to ratioAttribution for the exact signed log-share split.
   if (isRatioMetric(spec.metric)) {
     const ident = RATIO_IDENTITIES[spec.metric]
     const driverTotals = async (driverKey) => {
       const dSpec = { ...spec, metric: driverKey }
-      const cur  = compileQuery(dSpec, now, isPg, null)
-      const base = compileQuery(dSpec, now, isPg, null, () => cmp)
+      const cur  = compileQuery(dSpec, now, isPg, scope)
+      const base = compileQuery(dSpec, now, isPg, scope, () => cmp)
       const [c, b] = await Promise.all([query(cur.sql, cur.params), query(base.sql, base.params)])
       return { to: Number(c.rows[0] && c.rows[0].value) || 0, from: Number(b.rows[0] && b.rows[0].value) || 0 }
     }
@@ -806,6 +819,8 @@ async function runExplain(rawSpec, opts = {}) {
   // ── ENTITY basis (intel-v6 (5)): ADDITIVE metrics ─────────────────────────────
   // Per-client splits, both windows — the same compile, grouped by client, ranked,
   // capped at 50 (the LIMIT; the unattributed remainder reconciles anything beyond).
+  // Only reached UNSCOPED (a scoped additive returned null at the gate), so scope is
+  // null here by construction; the explicit null keeps this split whole-book.
   const clientSpec = { ...spec, group_by: 'client', order: 'desc', limit: 50 }
   const curC  = compileQuery(clientSpec, now, isPg, null)
   const baseC = compileQuery(clientSpec, now, isPg, null, () => cmp)
