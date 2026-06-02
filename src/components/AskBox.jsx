@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Sparkles, CornerDownLeft, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Sparkles, CornerDownLeft, CornerDownRight, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus, LineChart, Users, CalendarRange, Sigma, ArrowLeftRight } from 'lucide-react'
 import { api } from '@/lib/api'
 import { weekLabel } from '@/lib/utils'
 
@@ -126,8 +126,40 @@ function MoverChip({ mover, onPick }) {
   )
 }
 
-function AskResult({ result, onClear }) {
-  const { answer, narrated, meta, columns, rows } = result
+// Map each follow-up's pivot dimension to a leading icon — purely navigational
+// (which axis the next question moves along), never a number or a polarity. An
+// unrecognised kind falls back to the same "ask" affordance as the submit button,
+// mirrored to point forward.
+const FOLLOWUP_ICON = {
+  trend:   LineChart,       // by week / by month
+  clients: Users,           // cross-client ranking
+  time:    CalendarRange,   // widen the window
+  total:   Sigma,           // collapse a ranking to one overall figure
+  metric:  ArrowLeftRight,  // pivot to a neighbouring metric
+}
+
+// A single "Ask next" chip: one of the 2-4 parser-stable follow-up questions the
+// server proposed for the answer just shown (lib/followups). The full question is
+// a real spec runAsk can re-derive, so clicking simply asks it — every chip lands
+// back on the SAME grounded path, so its answer will be as verified as this one.
+// We show the short scannable label ("By week", "By client", "Leads") and carry
+// the exact question in the tooltip; kind drives only the icon. Computes nothing.
+function FollowupChip({ followup, onPick }) {
+  const Icon = FOLLOWUP_ICON[followup.kind] || CornerDownRight
+  return (
+    <button
+      onClick={() => onPick(followup.question)}
+      title={followup.question}
+      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-600 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600 transition"
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
+      {followup.label}
+    </button>
+  )
+}
+
+function AskResult({ result, onClear, onPick }) {
+  const { answer, narrated, meta, columns, rows, followups } = result
   const hasBucket    = columns.includes('bucket')
   const bucketHeader = BUCKET_HEADER[meta.group_by] || 'Item'
 
@@ -194,6 +226,20 @@ function AskResult({ result, onClear }) {
       {/* Honest empty state */}
       {rows.length === 0 && (
         <p className="mt-2 text-xs text-slate-400">No matching data for that question and timeframe.</p>
+      )}
+
+      {/* intel-v6 (4): turn this answer into a branch point. The server proposed
+          these parser-stable next questions (lib/followups) for the spec it just
+          answered; each chip re-runs through the SAME grounded path, so a click is
+          just another verified answer — never a dead end at a single number. Hidden
+          when none were proposed (e.g. an unknown metric) so it never renders empty. */}
+      {Array.isArray(followups) && followups.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-slate-50">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Ask next</p>
+          <div className="flex flex-wrap gap-1.5">
+            {followups.map((f) => <FollowupChip key={f.question} followup={f} onPick={onPick} />)}
+          </div>
+        </div>
       )}
     </div>
   )
@@ -349,7 +395,7 @@ export default function AskBox({
       )}
 
       {/* Result */}
-      {status === 'done' && result && <AskResult result={result} onClear={reset} />}
+      {status === 'done' && result && <AskResult result={result} onClear={reset} onPick={run} />}
     </div>
   )
 }
