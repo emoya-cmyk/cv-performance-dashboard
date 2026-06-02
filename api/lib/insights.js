@@ -83,6 +83,14 @@ const { benchmarkPortfolio, clientStanding } = require('./benchmark')
 // (no operator except to connect accounts) made literal. Pure; [] on no history.
 const { detectCoverageGaps } = require('./coverage')
 
+// Intra-week early-warning (PURE): the weekly engine is blind BETWEEN Mondays — a client can
+// crater on a Tuesday and nothing is said until the week closes. dayPulse watches the trailing-
+// week LEVEL on the atomic daily grain (recomputed daily, judged against prior non-overlapping
+// weeks) so a collapse/spike is flagged the day it shows up; narrateDayPulse turns a signal into
+// one grounded sentence. Computed on READ (see the pulse reads below); never persisted. See
+// lib/dayPulse.js. DEFAULT_WINDOW (7) is reused so the trailing window matches the sensor's own.
+const { dayPulse, narrateDayPulse, DEFAULT_WINDOW } = require('./dayPulse')
+
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
 // channel that materially fed it. Stamps a `caused_by` pointer on the symptom and an
@@ -2240,6 +2248,156 @@ async function getClientPacing(clientId, { asOf, weeks = 26 } = {}) {
   return { as_of: day, month: monthFirst, days_elapsed: daysElapsed, days_in_month: daysInMonth, metrics }
 }
 
+// ============================================================================
+// INTRA-WEEK PULSE (intel-v7) — the early-warning organ over the ATOMIC DAILY grain.
+//
+// Everything above judges each client's latest COMPLETED ISO week against its own
+// weekly baseline — the right grain for "what happened," but blind between Mondays:
+// a client can crater on a Tuesday and nothing is said until the week closes and the
+// recap fires. The daily facts that would catch it are already ingested, but used
+// ONLY for channel FRESHNESS (coverage) and to attribute an already-raised weekly
+// anomaly to a channel (correlate). Nothing watched the daily LEVEL. lib/dayPulse.js
+// is that missing sensor; the reads below feed it off fact_metric.
+//
+// COMPUTED ON READ — NO MIGRATION, NO ORCHESTRATOR CHANGE. Like goal-pacing, the pulse
+// is derived live from facts already on disk; it is NOT persisted into the insights feed
+// and runInsightsForClient/All never call it. That keeps a fast-moving daily signal out
+// of the dedupe/lifecycle machinery (it would thrash the fingerprint) and makes it a
+// pure, side-effect-free read mirroring the pacing split:
+//   * getPortfolioPulse() - agency roster across the whole book (NAMES clients).
+//   * getClientPulse(id)  - ONE client's OWN numbers, no peer -> folds into GET /:clientId.
+// ============================================================================
+
+// Trailing calendar days of atomic daily facts to pull. 63d => 9 full 7-day windows
+// (1 latest + 8 prior), comfortably above dayPulse's minWindows(3): a fresh-ish client
+// still earns a trustworthy band, an established one isn't swamped by ancient history.
+// start = end - span days, BETWEEN-inclusive on both ends (so span+1 calendar days).
+const PULSE_LOOKBACK_DAYS = 63
+const PULSE_WINDOW = DEFAULT_WINDOW   // 7 - one trailing week, dayPulse's default
+
+// The FLOW metrics whose trailing-window SUM is meaningful - exactly the additive set
+// ENGINE_METRIC_FACTS already names (revenue/leads/spend/jobs). The ratio metrics
+// (roas/cpl/close_rate) are deliberately ABSENT: a rolling SUM of a ratio is nonsense.
+// Keyed by ENGINE metric (the caller reasons in engine metrics + their polarity), each
+// folded down from its atomic fact key via FACT_TO_ENGINE so the two can never drift.
+const PULSE_METRICS = Object.keys(ENGINE_METRIC_FACTS)   // ['revenue','leads','spend','jobs']
+
+// loadDailySeries(clientId, { asOf, windowDays }) - a DENSE daily series PER FLOW metric over
+// the trailing window, read straight off the atomic grain (fact_metric) and summed across ALL
+// channels per calendar day. Returns { start, end, dates:[isoDay...], series:{ [engineMetric]:
+// number[] } }, each array oldest->newest with ONE entry per calendar day in [start..end] -
+// missing days ZERO-FILLED, because for a flow SUM a day with no activity is a true 0, not a
+// gap to interpolate (exactly the density dayPulse expects). NO dim_channel JOIN: the pulse
+// watches the client-LEVEL total, so we sum every channel's contribution per day rather than
+// break it down (that per-channel split is correlate's job). Mirrors loadChannelCoverage's
+// window math so this read agrees day-for-day with the freshness / root-cause reads. A client
+// with no atomic facts yet -> all-zero dense arrays (never a throw); dayPulse then abstains.
+async function loadDailySeries(clientId, { asOf, windowDays = PULSE_LOOKBACK_DAYS } = {}) {
+  const end   = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const span  = Number.isFinite(Number(windowDays)) ? Number(windowDays) : PULSE_LOOKBACK_DAYS
+  const start = new Date(Date.parse(end + 'T00:00:00Z') - span * 86400000)
+                  .toISOString().slice(0, 10)
+  const factKeys = Object.values(ENGINE_METRIC_FACTS)        // ['revenue','leads','spend','closed_won']
+  const ph = factKeys.map((_, i) => `$${i + 4}`).join(', ')  // $4, $5, ...
+  const { rows } = await query(
+    `SELECT f.date AS date, f.metric_key AS metric_key, SUM(f.metric_value) AS total
+       FROM fact_metric f
+      WHERE f.client_id = $1 AND f.date BETWEEN $2 AND $3
+        AND f.metric_key IN (${ph})
+      GROUP BY f.date, f.metric_key
+      ORDER BY f.date`,
+    [clientId, start, end, ...factKeys]
+  )
+
+  // Dense calendar spine [start..end] in UTC day-steps (every key is 'T00:00:00Z' + 86400000ms,
+  // so no DST drift); each metric's series aligns to it by index.
+  const dates = []
+  for (let t = Date.parse(start + 'T00:00:00Z'); t <= Date.parse(end + 'T00:00:00Z'); t += 86400000) {
+    dates.push(new Date(t).toISOString().slice(0, 10))
+  }
+  const indexByDate = new Map(dates.map((d, i) => [d, i]))
+
+  // One zero-filled array per ENGINE metric, then drop each summed fact-day into its slot.
+  const series = {}
+  for (const m of PULSE_METRICS) series[m] = new Array(dates.length).fill(0)
+  for (const r of rows) {
+    const engine = FACT_TO_ENGINE[r.metric_key]
+    const i = indexByDate.get(isoDate(r.date))
+    if (engine == null || i == null) continue
+    const v = Number(r.total)
+    if (Number.isFinite(v)) series[engine][i] += v
+  }
+  return { start, end, dates, series }
+}
+
+// Worst-first ordering for a pulse signal list: an ADVERSE move (slid the metric's bad way) ranks
+// above a merely-unusual one, then the most EXTREME by |z| (how far outside the band), critical
+// before warning as the final tiebreak. Pure - a total order over a copy, never mutates its input.
+function rankPulse(signals) {
+  const sev = { critical: 0, warning: 1 }
+  return [...signals].sort((a, b) =>
+    (Number(b.adverse) - Number(a.adverse)) ||
+    (Math.abs(Number(b.z)) - Math.abs(Number(a.z))) ||
+    ((sev[a.severity] ?? 9) - (sev[b.severity] ?? 9))
+  )
+}
+
+// getClientPulse(clientId, opts) - ONE client's intra-week pulse: a verdict per FLOW metric whose
+// trailing-week total has slid out of that client's OWN recent band RIGHT NOW, computed live off the
+// atomic daily grain with NOTHING cross-tenant (its own history only). This is the early warning the
+// weekly engine structurally can't give - it sees a Tuesday collapse days before the ISO week closes.
+// Own-numbers-only, exactly like getClientPacing / getClientStanding, so it's safe to fold into the
+// per-client payload that BOTH the agency card and the client's /my-dashboard read. Returns ONLY the
+// metrics actually firing (status:'signal'), worst-first, each carrying the verdict + its label, the
+// window's calendar bounds, and TWO grounded sentences - an agency-toned `message` and a client-toned
+// `client_message` (the same split escalation uses: the surface picks its own; /my-dashboard reads the
+// latter). A quiet / in-band / data-thin client -> an empty list, never a throw. Polarity per metric is
+// read from METRIC_META (goodWhenUp ? a DROP is adverse : a SPIKE is adverse), so "bad" means the same
+// here as everywhere else in the engine. asOf optional (tests pin a clock; prod -> today).
+async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DAYS, window = PULSE_WINDOW } = {}) {
+  const { end, dates, series } = await loadDailySeries(clientId, { asOf, windowDays: lookbackDays })
+  const signals = []
+  for (const m of PULSE_METRICS) {
+    const meta = METRIC_META[m]
+    const adverseWhen = meta.goodWhenUp ? 'drop' : 'spike'
+    const v = dayPulse(series[m], { window, adverseWhen })
+    if (v.status !== 'signal') continue
+    const li = v.latest_index
+    const ws = li - v.window + 1
+    signals.push({
+      metric: m,
+      label: meta.label,
+      ...v,
+      window_start: ws >= 0 && dates[ws] != null ? dates[ws] : null,
+      window_end:   dates[li] != null ? dates[li] : null,
+      message:        narrateDayPulse(v, { label: meta.label, audience: 'agency' }),
+      client_message: narrateDayPulse(v, { label: meta.label, audience: 'client' }),
+    })
+  }
+  return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(signals) }
+}
+
+// getPortfolioPulse(opts) - the PORTFOLIO intra-week pulse roster (AGENCY-ONLY): every client with a
+// FLOW metric outside its own band right now, flattened into one worst-first stream, each row tagged
+// with client_name - the "who needs a look before Monday?" capstone over the daily grain. Like the
+// other agency rosters (/systemic - /trajectory - /pacing) it names other clients, so it lives ONLY
+// behind its own endpoint and NEVER rides the per-client GET /:clientId (a single client's own pulse
+// is per-client-safe - getClientPulse - this whole-book stream is not). Iterates the client list and
+// runs the per-client pulse for each, each isolated in try/catch so one data-less or erroring client
+// never sinks the roster (mirrors runInsightsForAll). asOf optional.
+async function getPortfolioPulse({ asOf, lookbackDays = PULSE_LOOKBACK_DAYS, window = PULSE_WINDOW } = {}) {
+  const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const { rows } = await query(`SELECT id, name FROM clients`)
+  const roster = []
+  for (const c of rows) {
+    try {
+      const { signals } = await getClientPulse(c.id, { asOf: day, lookbackDays, window })
+      for (const s of signals) roster.push({ client_id: String(c.id), client_name: c.name, ...s })
+    } catch { /* atomic grain unavailable / brand-new client -> skip, keep the rest of the roster */ }
+  }
+  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster) }
+}
+
 // Move one finding to a new lifecycle status and return the fresh row (null if the
 // id doesn't exist → the route answers 404). Two portable statements rather than
 // UPDATE … RETURNING, which the SQLite shim doesn't surface. The engine's
@@ -2332,4 +2490,8 @@ module.exports = {
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)
   getPortfolioPacing, getClientPacing,
+  // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
+  // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
+  // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.
+  loadDailySeries, getClientPulse, getPortfolioPulse,
 }

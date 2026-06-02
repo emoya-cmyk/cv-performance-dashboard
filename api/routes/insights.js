@@ -80,6 +80,7 @@ const {
   getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
+  getPortfolioPulse, getClientPulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -324,6 +325,27 @@ router.get('/pacing', async (_req, res) => {
   }
 })
 
+// ── GET /api/insights/pulse ───────────────────────────────────────────────────
+// INTRA-WEEK PULSE roster — the early-warning capstone over the ATOMIC DAILY grain.
+// Everything the weekly engine raises waits for the ISO week to close; this watches the
+// trailing-week LEVEL every day, so a client cratering on a Tuesday surfaces here days
+// before the Monday recap. Each row: a client + a flow metric whose trailing-week total
+// has slid out of that client's OWN recent band right now, worst-first across the book.
+// AGENCY-ONLY: the roster names other clients — the same cross-tenant boundary
+// /systemic · /trajectory · /pacing respect — so it lives here and NEVER rides the
+// per-client GET /:clientId payload (a client sees only its OWN pulse, folded in below).
+// Declared before the :clientId route so the literal "pulse" can't be read as a client id.
+// No params: the window is the trailing week, the clock is "now".
+router.get('/pulse', async (_req, res) => {
+  try {
+    const out = await getPortfolioPulse()
+    res.json({ ...out, count: out.roster.length })
+  } catch (err) {
+    console.error('[insights] GET pulse error', err.message)
+    res.status(500).json({ error: 'Failed to load pulse roster' })
+  }
+})
+
 // ── GET /api/insights/efficacy ────────────────────────────────────────────────
 // Portfolio EFFICACY LEDGER: the self-improving grain — does the recommended PLAY actually
 // fix the problem? Every adverse finding ships with a recommendedAction; the recovery
@@ -425,7 +447,7 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const [insights, standing, recoveries, pacing, effTable] = await Promise.all([
+    const [insights, standing, recoveries, pacing, pulse, effTable] = await Promise.all([
       getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
       getClientStanding(clientId),
       // recent WINS for this client — problems the engine flagged that then cleared.
@@ -434,6 +456,10 @@ router.get('/:clientId', async (req, res) => {
       // this client's OWN pace-to-goal this month (per metric with a target) — computed
       // from its own MTD actual vs. target alone, NO peers, so it's safe in the client view.
       getClientPacing(clientId),
+      // this client's OWN intra-week pulse — flow metrics whose trailing-week LEVEL has slid out
+      // of its own recent band RIGHT NOW, computed live off the atomic daily grain. Own numbers
+      // only, names no peer, so it's safe in the shared per-client payload the client view reads.
+      getClientPulse(clientId),
       // the pooled, ANONYMOUS efficacy ledger (Map play→record) — used only to stamp a
       // client-safe "this play has worked X% of the time" note onto adverse findings that
       // already carry advice. Names no peer; quotes only the play's own track record.
@@ -463,6 +489,10 @@ router.get('/:clientId', async (req, res) => {
       // "will you hit your goal?" — this client's own pace-to-goal per metric this month
       // (ahead/on_track/behind/at_risk/early, or empty when no goal is set). Own numbers only.
       pacing,
+      // "anything cratering RIGHT NOW?" — this client's own intra-week pulse: flow metrics whose
+      // trailing-week level is outside its own recent band today, days before the ISO week closes.
+      // Own numbers only; the client view reads each signal's client_message, the agency card message.
+      pulse,
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)
