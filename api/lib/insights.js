@@ -130,6 +130,16 @@ const { rankPulseSignals } = require('./pulseTriage')
 // signal byte-identical. Both pulse reads inherit these via the `...s` spread — no route
 // change. See lib/pulseAccuracy.js.
 const { pulseAccuracy, narratePulseAccuracy } = require('./pulseAccuracy')
+// The FEEDBACK edge that closes the pulse loop into a self-tuning controller:
+// tunePulseThresholds reads pulseAccuracy's proven precision and returns the {warn, crit}
+// the LIVE sensor should fire on next — a touch more sensitive where this metric's early
+// warnings have proven out (earn an earlier head-start), a touch more conservative where
+// they've been mixed (spend less of the operator's attention on noise). The audit that
+// feeds it is ALWAYS run at the canonical band (see below), so the controller reads an
+// unbiased thermometer and never chases its own tail. No track record ⇒ the canonical
+// band returned verbatim ⇒ a provable no-op. narratePulseTuning is the agency-only
+// one-sentence "why" of an APPLIED adjustment. See lib/pulseTuning.js.
+const { tunePulseThresholds, narratePulseTuning } = require('./pulseTuning')
 
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
@@ -2409,7 +2419,22 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
   for (const m of PULSE_METRICS) {
     const meta = METRIC_META[m]
     const adverseWhen = meta.goodWhenUp ? 'drop' : 'spike'
-    const v = dayPulse(series[m], { window, adverseWhen })
+    // SELF-TUNING (6): grade THIS metric's own early-warning track record at the CANONICAL
+    // band — pulseAccuracy is called with NO warn/crit, so classifyZ falls back to its 2/3
+    // defaults and the precision figure is an UNBIASED thermometer of "when we warned at the
+    // standard definition of unusual, how often was the week really bad." That canonical
+    // grade (acc) is reused verbatim for the accuracy SURFACE below, so the track record a
+    // client reads never moves. tunePulseThresholds turns that proven precision into the
+    // {warn, crit} the LIVE sensor fires on next. It MUST be computed BEFORE dayPulse: a
+    // proven sensor has to be able to fire SOONER (a lower band), not merely suppress an
+    // already-firing one — so the tuned band has to be in hand before the firing gate. No
+    // track record ⇒ tune is the canonical 2/3 band verbatim ⇒ dayPulse is byte-identical to
+    // passing nothing, and this layer is a provable no-op for every client that hasn't earned
+    // an adjustment. NON-CIRCULAR BY CONSTRUCTION: acc (input) is canonical; tune (output)
+    // drives only the display sensor and is NEVER fed back into the audit.
+    const acc = pulseAccuracy(series[m], { window, adverseWhen })
+    const tune = tunePulseThresholds(acc)
+    const v = dayPulse(series[m], { window, adverseWhen, warn: tune.warn, crit: tune.crit })
     if (v.status !== 'signal') continue
     const li = v.latest_index
     const ws = li - v.window + 1
@@ -2449,15 +2474,15 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       sig.reliability_note        = narratePulseReliability(rel, { label: meta.label, audience: 'agency' })
       sig.reliability_client_note = narratePulseReliability(rel, { label: meta.label, audience: 'client' })
     }
-    // The "has it actually proven out": grade THIS metric's OWN early-warning track
-    // record by replaying dayPulse at a lead day inside each prior week and scoring it
-    // against that week's realized outcome (pulseAccuracy, same `series`, same polarity,
-    // zero extra DB work). Attach the precision figures + one grounded sentence per
-    // audience ONLY when the record is gradeable; a brand-new or too-quiet client can't
-    // be scored yet and carries nothing extra, staying byte-identical. This is distinct
-    // from reliability (consistency of the signal) — accuracy is whether the early call
-    // beat the weekly close, the number that makes the tool credible to an operator.
-    const acc = pulseAccuracy(series[m], { window, adverseWhen })
+    // The "has it actually proven out": surface THIS metric's OWN early-warning track
+    // record — the precision/recall figures from the canonical-band `acc` graded ABOVE
+    // (reused verbatim; this surface is the unbiased thermometer, NEVER the tuned band, so
+    // the credibility number a client reads is independent of the live sensor's sensitivity).
+    // Attach the figures + one grounded sentence per audience ONLY when the record is
+    // gradeable; a brand-new or too-quiet client can't be scored yet and carries nothing
+    // extra, staying byte-identical. This is distinct from reliability (consistency of the
+    // signal) — accuracy is whether the early call beat the weekly close, the number that
+    // makes the tool credible to an operator.
     if (acc.status === 'graded') {
       sig.accuracy = {
         status:        acc.status,
@@ -2478,6 +2503,30 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       sig.accuracy_label       = acc.label
       sig.accuracy_note        = narratePulseAccuracy(acc, { label: meta.label, audience: 'agency' })
       sig.accuracy_client_note = narratePulseAccuracy(acc, { label: meta.label, audience: 'client' })
+    }
+    // The "what the sensor learned to do about it" (6): the live `v` above already fired
+    // at the TUNED band, so this signal IS the calibrated read. Surface the applied
+    // adjustment — factor, direction, and the moved band — ONLY when one was actually earned
+    // (status 'tuned' AND a non-neutral direction); a client with no track record sits at
+    // the canonical band, attaches nothing, and stays byte-identical. This block is the
+    // controller's OUTPUT, never its input: sig.accuracy above remains the canonical-band
+    // thermometer, which is exactly what keeps the loop non-circular. AGENCY-ONLY machinery —
+    // the client surface shows only the EFFECT (an earlier, or quieter, signal), never the
+    // dial: narratePulseTuning refuses a client audience, and no tuning_* key is client-safe.
+    if (tune.status === 'tuned' && tune.direction !== 'neutral') {
+      sig.tuning = {
+        status:    tune.status,
+        factor:    tune.factor,
+        direction: tune.direction,
+        warn:      tune.warn,
+        crit:      tune.crit,
+        base_warn: tune.base_warn,
+        base_crit: tune.base_crit,
+        precision: tune.precision,
+        label:     tune.label,
+      }
+      const tnote = narratePulseTuning(tune, { label: meta.label, audience: 'agency' })
+      if (tnote) sig.tuning_note = tnote
     }
     signals.push(sig)
   }

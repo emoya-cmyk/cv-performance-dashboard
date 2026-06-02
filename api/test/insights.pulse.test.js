@@ -51,6 +51,13 @@ const { triagePriority, triageLane, narrateTriage } = require('../lib/pulseTriag
 // wiring is faithful, not a re-impl — and that it attaches NOTHING when the record is
 // too thin to grade. loadDailySeries gives us the very series the engine grades.
 const { pulseAccuracy, narratePulseAccuracy } = require('../lib/pulseAccuracy')
+// The self-tuning controller (intel-v7 6a) that closes the pulse loop: it reads the
+// canonical-band precision the audit above produces and returns the {warn, crit} the LIVE
+// sensor should use — a lighter trigger where warnings have proven out. Unit-tested in full
+// in pulseTuning.test.js; here we only assert the ENGINE attaches its output verbatim to the
+// firing signal, keeps the accuracy SURFACE canonical (non-circular), and never lets the
+// calibration machinery reach a client.
+const { tunePulseThresholds, narratePulseTuning } = require('../lib/pulseTuning')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -564,4 +571,103 @@ test('getClientPulse: a too-thin own-history fires but attaches NO accuracy surf
   assert.equal(sig.accuracy_label, undefined)
   assert.equal(sig.accuracy_note, undefined)
   assert.equal(sig.accuracy_client_note, undefined)
+})
+
+// ── getClientPulse × pulseTuning: the self-tuning feedback edge (intel-v7 6b) ─────────
+// pulseTuning's own math is exhaustively unit-tested in pulseTuning.test.js. These two
+// tests assert only the ENGINE contract: (1) a PROVEN own-history earns a sensitized live
+// trigger and the applied band is attached VERBATIM from the pure tuner, while the accuracy
+// SURFACE the client/agency reads stays canonical (the loop never eats its own tail), and
+// the calibration machinery never reaches a client; (2) an UNGRADED record abstains to the
+// canonical band — no calibration surface attached, a provable no-op against the sensor.
+test('getClientPulse: a PROVEN own-history earns a SENSITIZED live trigger — the applied band is attached verbatim from the pure tuner, the accuracy surface stays canonical (non-circular), and the machinery never reaches the client', async () => {
+  await ready()
+  const c = await freshClient('Self-Tuning Co')
+  // The SAME sustained daily drop that grades 'proven' (precision 1.0) in the accuracy test
+  // above. Proven precision sits ABOVE the 0.70 target, so the controller lowers the live
+  // band: a sensor that has called the week right earns a lighter trigger.
+  await seedDaily(c, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  const sig = out.signals.find(s => s.metric === 'leads')
+  assert.ok(sig, 'the sustained leads drop still fires a signal')
+
+  // Recompute audit + tune from the VERY series the engine loaded. The audit is graded at
+  // the CANONICAL band (no warn/crit), exactly as the engine computes it; the tune is its
+  // pure consequence. The engine must attach this consequence verbatim — not a re-impl.
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  const expectedAcc = pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' })
+  const expectedTune = tunePulseThresholds(expectedAcc)
+
+  // the fixture must actually EARN a non-neutral, lighter trigger — else the test is vacuous.
+  assert.equal(expectedTune.status, 'tuned')
+  assert.equal(expectedTune.direction, 'sensitize')
+  assert.ok(expectedTune.factor < 1, 'proven precision lowers the band')
+
+  // the engine attached EXACTLY the curated tuning projection — the moved band, the factor,
+  // and the canonical base it scaled from — and nothing more (the 9-key surface contract).
+  assert.deepEqual(sig.tuning, {
+    status: expectedTune.status,
+    factor: expectedTune.factor,
+    direction: expectedTune.direction,
+    warn: expectedTune.warn,
+    crit: expectedTune.crit,
+    base_warn: expectedTune.base_warn,
+    base_crit: expectedTune.base_crit,
+    precision: expectedTune.precision,
+    label: expectedTune.label,
+  })
+
+  // the band genuinely MOVED below the canonical 2/3, and BOTH legs scaled by the SAME
+  // factor — the 2:3 warning/critical shape is preserved, only overall sensitivity shifts.
+  assert.ok(sig.tuning.warn < sig.tuning.base_warn && sig.tuning.crit < sig.tuning.base_crit)
+  assert.ok(Math.abs(sig.tuning.warn / sig.tuning.base_warn - sig.tuning.factor) < 1e-9)
+  assert.ok(Math.abs(sig.tuning.crit / sig.tuning.base_crit - sig.tuning.factor) < 1e-9)
+
+  // one grounded AGENCY sentence, byte-identical to the pure narrator, that lands the verdict.
+  assert.equal(sig.tuning_note, narratePulseTuning(expectedTune, { label: 'Leads', audience: 'agency' }))
+  assert.match(sig.tuning_note, /earned a lighter trigger\.$/)
+
+  // NON-CIRCULARITY: the accuracy SURFACE is STILL the canonical-band audit — unmoved by the
+  // tuning it fed. If the loop ate its own tail, precision/fires would drift off the default
+  // band; they must equal pulseAccuracy at the DEFAULT band exactly.
+  assert.equal(sig.accuracy.precision, expectedAcc.precision)
+  assert.equal(sig.accuracy.label, expectedAcc.label)
+  assert.equal(sig.accuracy.fires, expectedAcc.fires)
+  assert.equal(sig.accuracy.tp, expectedAcc.tp)
+  assert.equal(sig.accuracy.fp, expectedAcc.fp)
+
+  // CLIENT SAFETY: calibration is internal. The pure narrator refuses a client audience
+  // outright, and the engine never stamps a client-toned tuning key — the client sees only
+  // the EFFECT (an earlier warning), never the dial.
+  assert.equal(narratePulseTuning(expectedTune, { label: 'Leads', audience: 'client' }), '')
+  assert.equal(sig.tuning_client_note, undefined)
+})
+
+test('getClientPulse: an UNGRADED own-history tunes to the canonical band — no calibration surface is attached, and the live trigger is a provable no-op', async () => {
+  await ready()
+  const c = await freshClient('No Track Record Co')
+  // One sharp latest-week collapse over an otherwise flat history (the same anchor the
+  // too-thin accuracy case uses). It FIRES hard, but too few prior weeks cross the lead-day
+  // fire bar to grade → no precision → the controller earns nothing and abstains.
+  await seedWeekly(c, 'leads', [20, 90, 100, 110, 95, 105, 100, 98, 102])
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  const sig = out.signals.find(s => s.metric === 'leads')
+  assert.ok(sig, 'the collapse still fires a signal')
+
+  // the record is genuinely ungradeable → the tuner abstains to the canonical band verbatim.
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  const tune = tunePulseThresholds(pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' }))
+  assert.equal(tune.status, 'default')
+  assert.equal(tune.direction, 'neutral')
+  assert.equal(tune.warn, 2)
+  assert.equal(tune.crit, 3)
+
+  // so NO calibration surface is attached — truly absent, not a neutral block — and because
+  // the band handed to dayPulse WAS the canonical 2/3, the live signal is byte-identical to
+  // an untuned sensor.
+  assert.equal(sig.tuning, undefined)
+  assert.equal(sig.tuning_note, undefined)
+  assert.equal(sig.tuning_client_note, undefined)
 })
