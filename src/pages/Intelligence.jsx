@@ -188,6 +188,13 @@ export default function Intelligence() {
         />
       )}
 
+      {/* act today — the DECISION strip atop the daily pulse: the SAME adverse signals, re-ranked
+          by severity × the pulse's own LEARNED reliability (lib/pulseTriage), each tagged with an
+          action lane and a 1-based priority rank. A reliable Warning can outrank a noisy Critical,
+          so the agency's first hour lands by evidence, not just by how loud the alarm is. Agency-
+          only; hidden until one signal fires. The full worst-first roster follows directly below. */}
+      {pulse?.act_today?.length > 0 && <ActTodayStrip data={pulse} />}
+
       {/* daily pulse — the INTRA-WEEK early warning, and the freshest read on the page. Every
           other panel here is weekly-grain: the engine only speaks once an ISO week closes, blind
           between Mondays. This watches each client's trailing-7-day LEVEL on the atomic DAILY
@@ -1561,6 +1568,139 @@ function PulseRow({ r }) {
             <>
               <div className={cn('text-lg font-black tabular-nums leading-none', tone.text)}>{deltaStr}</div>
               <div className="text-[10px] font-semibold text-slate-400 mt-0.5">vs usual week</div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Act today — the DECISION strip on top of the daily pulse ───────────────────
+   The pulse roster below ranks worst-first by RAW severity (adverse, then |z|). This
+   re-ranks the SAME adverse signals by severity × the pulse's own LEARNED reliability
+   for each client × metric (lib/pulseTriage.rankPulseSignals, adverseOnly), so a Warning
+   the sensor has been right about repeatedly can outrank a Critical it keeps crying wolf
+   on. Each row carries an action LANE (act now / verify / worth a look / monitor) — the
+   cross of how-bad × how-sure — and a 1-based priority_rank. It's the "what do I touch
+   first this morning" list, not the full read: adverse-only and capped. Agency-only, the
+   same cross-tenant boundary as the rest of the page. Hidden until one signal fires.
+   Self-improving: as more alarms mature, the reliability term re-weights the order on its
+   own — no thresholds, no model, the same numbers dayPulse + pulseReliability produced. */
+const ACT_TODAY_SHOWN = 5
+
+// The action lane → chrome. A clean heat gradient that doubles as the decision: act_now
+// (rose, strongest) → verify (amber, "critical but unproven — confirm") → worth_a_look
+// (sky, "slipping and the alarm has held") → monitor (slate, "slipping but the alarm
+// flickers"). The numbered rank badge carries the same fill, so ORDER and DECISION read
+// in one glance. Lane is the cross of severity × learned reliability, computed by the engine.
+const LANE_TONE = {
+  act_now:      { badge: 'bg-rose-500 text-white',  chip: 'bg-rose-50 text-rose-600 border-rose-200',    text: 'text-rose-600',  Icon: AlertTriangle, label: 'Act now' },
+  verify:       { badge: 'bg-amber-500 text-white', chip: 'bg-amber-50 text-amber-600 border-amber-200', text: 'text-amber-600', Icon: Crosshair,     label: 'Verify' },
+  worth_a_look: { badge: 'bg-sky-500 text-white',   chip: 'bg-sky-50 text-sky-600 border-sky-200',       text: 'text-sky-600',   Icon: Eye,           label: 'Worth a look' },
+  monitor:      { badge: 'bg-slate-400 text-white', chip: 'bg-slate-50 text-slate-500 border-slate-200', text: 'text-slate-500', Icon: Radar,         label: 'Monitor' },
+}
+function laneTone(r) { return LANE_TONE[r?.lane] || LANE_TONE.monitor }
+
+function ActTodayStrip({ data }) {
+  const feed = Array.isArray(data?.act_today) ? data.act_today : []
+  if (feed.length === 0) return null                 // nothing adverse → degrade to no strip
+  const shown  = feed.slice(0, ACT_TODAY_SHOWN)
+  const hidden = feed.length - shown.length
+  const urgent = feed.filter(r => r?.lane === 'act_now').length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50 bg-indigo-50/30">
+        <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+          <Crosshair className="w-4 h-4 text-indigo-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Act today</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {urgent > 0
+            ? `${urgent} need${urgent === 1 ? 's' : ''} action now · ${feed.length} ranked`
+            : `${feed.length} ranked by severity × reliability`}
+        </span>
+        <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+          <Sparkles className="w-3 h-3" /> reliability-weighted
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <ActTodayRow key={`${r.client_id}:${r.metric}`} r={r} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more ranked below in the full pulse</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-indigo-50/20 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The same adverse signals as the pulse below, re-ranked by
+          <span className="font-bold text-indigo-600"> how bad × how sure</span> — each alarm's severity crossed with the
+          pulse's own learned track record for that client × metric. A Warning we've been right about can outrank a Critical
+          that keeps crying wolf, so your first hour lands where the evidence says it should. Sharpens as more alarms mature.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One ranked decision: the lane-tinted rank badge (order + call in one glance), the client
+   and metric, the action LANE chip, and — the reason this row is where it is — the learned
+   CONFIDENCE chip (why a Critical may sit in 'verify', or a Warning climb above one). The
+   grounded one-liner is the engine's own agency-toned narration of the lane. Right rail is
+   the swing off the client's usual week, painted in the lane tone. */
+function ActTodayRow({ r }) {
+  const lane     = laneTone(r)
+  const rel      = RELIABILITY_TONE[r.reliability_label] || null   // null when too thin to grade → no chip
+  const delta    = Math.round(Number(r.delta_pct))
+  const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%` : null
+  const rank     = Number(r.priority_rank)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        {/* the rank badge carries the lane color — ORDER and DECISION in one glance */}
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 text-xs font-black tabular-nums', lane.badge)}>
+          {Number.isFinite(rank) ? rank : '·'}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{r.client_name || 'Unknown'}</span>
+            <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+              {r.label || metricLabel(r.metric)}
+            </span>
+            <span className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', lane.chip)}>
+              <lane.Icon className="w-2.5 h-2.5" />
+              {lane.label}
+            </span>
+            {/* the CONFIDENCE that drove this rank — the cross made visible. Hover for the count. */}
+            {rel && (
+              <span
+                title={r.reliability_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', rel.chip)}
+              >
+                <rel.Icon className="w-2.5 h-2.5" />
+                {rel.label}
+              </span>
+            )}
+          </div>
+
+          {/* the grounded one-liner: the lane, explained in the engine's own words */}
+          {r.triage_reason && (
+            <p className="mt-1.5 text-[11px] font-semibold text-slate-500 leading-relaxed">{r.triage_reason}</p>
+          )}
+        </div>
+
+        <div className="shrink-0 text-right w-20">
+          {deltaStr != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', lane.text)}>{deltaStr}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">vs usual</div>
             </>
           )}
         </div>
