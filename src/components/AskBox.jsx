@@ -158,16 +158,21 @@ function FollowupChip({ followup, onPick }) {
   )
 }
 
-// intel-v6 (5): the grounded "why did it change?" breakdown. Renders ONLY what the
-// server already computed and formatted (lib/contribution via runExplain) — the
-// one-line narration, then the exact per-client receipts. Every figure and sign is
-// read verbatim (delta_display, share_pct); the only thing this panel computes is
-// cosmetic bar width. Because the arithmetic is EXACT — named contributors + others
-// + unattributed sum to the true Δtotal — it carries the same "Verified" trust mark
-// as the figures, never the "AI-written" one: there is no model in this path to
-// hallucinate a driver.
+// intel-v6 (5/6): the grounded "why did it change?" breakdown. Renders ONLY what the
+// server already computed and formatted — the one-line narration, then the exact
+// receipts. Two shapes share this one panel, told apart by explain.basis:
+//   • 'client' — an ADDITIVE figure (revenue/leads/jobs/spend) split by WHO moved it
+//     (lib/contribution): per-client contributors, then others + unattributed.
+//   • 'driver' — a RATIO figure (roas/cpl/close_rate) split by WHICH LEVER moved it
+//     (lib/ratioAttribution): numerator vs denominator. others/unattributed are null —
+//     a quotient has no residual, its two signed shares sum to exactly 1.
+// Every figure and sign is read verbatim (delta_display, share_pct); the only thing
+// this panel computes is cosmetic bar width (normalised by |share|, so the differently
+// -scaled ratio levers stay comparable). Because both decompositions are EXACT it
+// carries the "Verified" trust mark, never the "AI-written" one — no model in either
+// path to hallucinate a driver.
 function WhyPanel({ explain }) {
-  const { narration, contributors, others, unattributed, moved, lead } = explain
+  const { narration, contributors, others, unattributed, moved, lead, basis } = explain
 
   // Eligible but washed out: the answer said it moved, the recomputed totals agree it
   // didn't (a rare race). runExplain reports that honestly with moved:false; mirror
@@ -228,7 +233,7 @@ function WhyPanel({ explain }) {
         )}
       </div>
       <p className="mt-2.5 text-[10px] text-slate-400">
-        Each client’s share of the total change · <span className="text-emerald-600 font-semibold">drivers</span> pushed it, <span className="text-rose-500 font-semibold">drags</span> held it back
+        {basis === 'driver' ? 'Each lever’s share of the move' : 'Each client’s share of the total change'} · <span className="text-emerald-600 font-semibold">drivers</span> pushed it, <span className="text-rose-500 font-semibold">drags</span> held it back
       </p>
     </div>
   )
