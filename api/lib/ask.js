@@ -49,6 +49,11 @@ const { contributionBreakdown, narrateContribution, isAdditive: isAdditiveMetric
 // (roas=revenue/spend, cpl=spend/leads, close_rate=jobs/leads). Also pure + require-
 // free, so a plain top-level require stays cycle-safe.
 const { ratioAttribution, narrateRatio, isRatioMetric, RATIO_IDENTITIES } = require('./ratioAttribution')
+// intel-v6 (7): the FORWARD answer — "what WILL revenue be next week?". Pure (no
+// DB/clock/LLM), so a plain top-level require is cycle-safe. Turns a metric's own
+// weekly series into a grounded Holt projection + a self-tuned 80% band + an honest
+// trust gate — the metric-side twin of trajectory.js, exposed through the Ask surface.
+const { forecastAnswer, narrateForecast, DEFAULT_HORIZON, MAX_HORIZON } = require('./forecastAnswer')
 
 // ── METRIC WHITELIST ──────────────────────────────────────────────────────────
 // Aggregate fragments over weekly_reports (alias wr). Each SUM is COALESCEd so a
@@ -132,6 +137,17 @@ function validateSpec(raw) {
   out.client_filter = (cf != null && String(cf).trim() !== '')
     ? String(cf).trim().slice(0, 120)
     : null
+
+  // intel-v6 (7): the FORWARD path. `forecast:true` flips the answer from the past
+  // ("what WAS it") to the future ("what WILL it be"); `horizon` is how many weeks
+  // ahead to project, clamped to forecastAnswer's [1, MAX_HORIZON] (int or int-ish
+  // string; default DEFAULT_HORIZON). Both keys are OMITTED on a normal past-tense
+  // spec — exactly like `month` above — so existing spec shapes stay byte-identical.
+  if (raw.forecast === true) {
+    out.forecast = true
+    const hInt = Number.isInteger(raw.horizon) ? raw.horizon : parseInt(raw.horizon, 10)
+    out.horizon = Math.min(MAX_HORIZON, Math.max(1, Number.isInteger(hInt) ? hInt : DEFAULT_HORIZON))
+  }
 
   return out
 }
@@ -481,7 +497,9 @@ const PARSE_SYSTEM = [
   '  "month":         "YYYY-MM"  (only when time_range is "month"),',
   '  "client_filter": a single client name, or null for all clients,',
   '  "order":         "desc" or "asc",',
-  '  "limit":         integer 1-50',
+  '  "limit":         integer 1-50,',
+  '  "forecast":      true ONLY when the question asks about the FUTURE (a projection); omit otherwise,',
+  '  "horizon":       integer 1-26 — weeks ahead to project (only when forecast is true)',
   '}',
   '',
   'Mapping rules:',
@@ -496,6 +514,13 @@ const PARSE_SYSTEM = [
   '  "March 2026" → time_range "month" with month "2026-03".',
   '- client_filter: the client name when the question is about ONE named client,',
   '  otherwise null.',
+  '- forecast: set true ONLY for a forward-looking question — "will", "next week/',
+  '  month/quarter", "expected", "projected", "forecast", "predict", "going to",',
+  '  "where is X heading". A question about the PAST or a current total has NO',
+  '  forecast field. A forecast is a single projected figure, so pair it with',
+  '  group_by "none" (never client/week/month).',
+  '- horizon (only with forecast): "next week" → 1; "next month"/"in 4 weeks" → 4;',
+  '  "next quarter"/"12 weeks" → 12; a bare "will"/"expected" with no period → 4.',
   'Output JSON only — no code fences, no commentary.',
 ].join('\n')
 
@@ -552,6 +577,127 @@ async function parseSpec(question) {
   }
 }
 
+// ── GROUNDED FORWARD ANSWER (intel-v6 (7): "what WILL it be?") ─────────────────
+// The future-tense twin of runAsk's past-tense flow. When parseSpec flags a
+// question forward-looking (spec.forecast), this builds the metric's OWN weekly
+// series through the EXACT scope+whitelist compile path runAsk uses — group_by
+// 'week' over the trailing complete weeks (rollingWeeks) — so a scoped caller still
+// binds wr.client_id first and the numbers share the dashboard's provenance, then
+// hands that series to forecastAnswer for a Holt projection + a self-tuned 80% band
+// + an honest trust gate (NO LLM arithmetic). It returns the SAME envelope runAsk
+// does, so the route and the FE need zero special-casing: the projection rides in
+// meta.forecast and meta.explainable is always false (a forecast has no period-over-
+// period "why" to decompose).
+const MAX_TRAIN_WEEKS = 26   // train on at most ~half a year of complete weeks
+
+async function answerForecast(question, spec, ctx) {
+  const { now, isPg, scope } = ctx
+  const metricDef = METRICS[spec.metric]
+  const fmt = (v) => formatValue(v, metricDef)
+
+  // Training series via the SAME compile path, grouped by week over the trailing
+  // complete weeks (oldest→newest — compileQuery orders week buckets ASC, NO LIMIT,
+  // so the full window survives). group_by:'week' is scope-safe (compileQuery keeps a
+  // client's own week trend; only a cross-client 'client' grouping collapses under
+  // scope) and uses ask.js's own metric exprs, so the series shares the dashboard's
+  // numbers exactly. A missing week is simply not a row (NO zero-fill: an absent
+  // report ≠ $0), so the model trains on consecutive OBSERVATIONS, matching
+  // forecast.js / trajectory.js.
+  const trainSpec = { ...spec, group_by: 'week' }
+  const compiled  = compileQuery(trainSpec, now, isPg, scope, () => rollingWeeks(now, MAX_TRAIN_WEEKS))
+  const { rows: rawRows } = await query(compiled.sql, compiled.params)
+  const series = rawRows.map((r) => Number(r.value))
+
+  const answer = forecastAnswer(spec.metric, series, { horizon: spec.horizon || DEFAULT_HORIZON })
+
+  // No finite history at all → nothing to project. A graceful, grounded "no data"
+  // envelope (never throw, never fabricate), in the SAME shape as a real forecast.
+  if (!answer) {
+    return forecastEnvelope(question, spec, scope, metricDef, {
+      answer:    `No ${metricDef.label.toLowerCase()} history yet to project a forecast.`,
+      rows:      [],
+      forecast:  null,
+      timeLabel: 'the weeks ahead',
+    })
+  }
+
+  // Decorate each projected point with grounded, unit-aware display strings the UI
+  // renders verbatim. step is 1-based weeks-ahead; lo/hi are the self-tuned 80% band.
+  const rows = answer.points.map((p) => ({
+    step:       p.step,
+    value:      p.point,
+    lo:         p.lo,
+    hi:         p.hi,
+    display:    fmt(p.point),
+    lo_display: fmt(p.lo),
+    hi_display: fmt(p.hi),
+  }))
+  const timeLabel = answer.horizon === 1 ? 'next week' : `the next ${answer.horizon} weeks`
+
+  return forecastEnvelope(question, spec, scope, metricDef, {
+    answer:    narrateForecast(answer, { label: metricDef.label, fmt }),
+    rows,
+    forecast:  answer,
+    timeLabel,
+  })
+}
+
+// Assemble the standard runAsk envelope for a forecast — ONE shape for both the data
+// and no-data paths, so the route/FE never special-case a forecast. Follow-up chips
+// are built from the spec with `forecast`/`horizon` STRIPPED, so every chip is a
+// normal past-tense question runAsk can re-answer (we never emit a chip that would
+// 422 on click). A forecast has no period-over-period, so hasComparison:false; the
+// cross-client "which clients" pivot is offered only to an unscoped agency caller,
+// exactly as in runAsk. meta.explainable is always false — a projection has no prior
+// period to decompose — so the UI never shows the "Why?" chip for a forecast.
+function forecastEnvelope(question, spec, scope, metricDef, parts) {
+  const { answer, rows, forecast, timeLabel } = parts
+
+  const pastSpec = { ...spec }
+  delete pastSpec.forecast
+  delete pastSpec.horizon
+  const followups = require('./followups').suggestFollowups(pastSpec, {
+    hasComparison:        false,
+    allowClientBreakdown: scope == null,
+  })
+
+  return {
+    question,
+    spec,
+    answer,
+    narrated: false,                 // deterministic grounded narration, never free LLM prose
+    template: answer,                // the deterministic forecast sentence IS the template
+    columns: ['step', 'value', 'lo', 'hi'],
+    rows,
+    followups,
+    meta: {
+      metric:      metricDef.label,
+      unit:        metricDef.unit,
+      group_by:    'none',
+      time_label:  timeLabel,
+      row_count:   rows.length,
+      comparison:  null,
+      explainable: false,            // a projection has no period-over-period "why"
+      // intel-v6 (7): the projection itself, for the FE to render a forward chart +
+      // an honest trust badge. null on the no-history path. Every number is COPIED
+      // from forecastAnswer (grounded), never recomputed here.
+      forecast: forecast && {
+        horizon:        forecast.horizon,
+        method:         forecast.method,
+        n:              forecast.n,
+        current:        forecast.current,
+        trend_per_step: forecast.trend_per_step,
+        direction:      forecast.direction,
+        headline:       forecast.headline,
+        mape:           forecast.mape,
+        confidence:     forecast.confidence,
+        trustworthy:    forecast.trustworthy,
+        caveat:         forecast.caveat,
+      },
+    },
+  }
+}
+
 /**
  * Answer a natural-language portfolio question.
  * @param {string} question
@@ -576,7 +722,14 @@ async function runAsk(question, opts = {}) {
   const isPg  = opts.isPg != null ? opts.isPg : !!process.env.DATABASE_URL
   const scope = opts.scopeClientId != null ? opts.scopeClientId : null
 
-  const spec     = await parseSpec(q)
+  const spec = await parseSpec(q)
+
+  // intel-v6 (7): a forward-looking question ("what WILL revenue be next week?")
+  // branches to the grounded forecast answer — the SAME envelope shape, so the route
+  // and the FE need zero special-casing. Placed before compile so a forecast never
+  // runs the past-tense aggregate path.
+  if (spec.forecast) return await answerForecast(q, spec, { now, isPg, scope })
+
   const compiled = compileQuery(spec, now, isPg, scope)
 
   const { rows: rawRows } = await query(compiled.sql, compiled.params)
@@ -925,7 +1078,7 @@ async function runSuggestions(opts = {}) {
 }
 
 module.exports = {
-  runAsk, runSuggestions, runExplain, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  runAsk, runSuggestions, runExplain, answerForecast, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,

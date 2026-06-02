@@ -57,7 +57,7 @@ const reply = (text) => ({ data: { content: [{ type: 'text', text }] } })
 const db = require('../db')
 const { AGG, derive } = require('../lib/metricsCore')
 const {
-  runAsk, runExplain, validateSpec, compileQuery, resolveTimeRange, SpecError,
+  runAsk, runExplain, answerForecast, validateSpec, compileQuery, resolveTimeRange, SpecError,
 } = require('../lib/ask')
 // The PURE follow-up core is exhaustively proven in test/followups.test.js; here we
 // only assert runAsk WIRES it correctly — the right spec + the right scope/comparison
@@ -151,6 +151,28 @@ test('validateSpec clamps + coerces limit', () => {
   assert.equal(validateSpec({ metric: 'revenue', limit: '7' }).limit, 7)   // int-ish string
   assert.equal(validateSpec({ metric: 'revenue', limit: 'abc' }).limit, 5) // garbage → default
   assert.equal(validateSpec({ metric: 'revenue' }).limit, 5)
+})
+
+// intel-v6 (7): a forward-looking question carries two extra keys; everything else
+// stays the past-tense 6-key shape untouched (the deepEqual above must still hold).
+test('validateSpec accepts forecast + clamped horizon, only when forecast === true', () => {
+  // forecast:true adds the two forward keys; horizon defaults to 4
+  assert.deepEqual(validateSpec({ metric: 'revenue', forecast: true }), {
+    metric: 'revenue', group_by: 'none', time_range: 'last_week',
+    order: 'desc', limit: 5, client_filter: null,
+    forecast: true, horizon: 4,
+  })
+  // horizon clamps to [1, 26], coerces int-ish strings, falls back on garbage
+  assert.equal(validateSpec({ metric: 'revenue', forecast: true, horizon: 1 }).horizon, 1)
+  assert.equal(validateSpec({ metric: 'revenue', forecast: true, horizon: 999 }).horizon, 26)
+  assert.equal(validateSpec({ metric: 'revenue', forecast: true, horizon: 0 }).horizon, 1)
+  assert.equal(validateSpec({ metric: 'revenue', forecast: true, horizon: '4' }).horizon, 4)
+  assert.equal(validateSpec({ metric: 'revenue', forecast: true, horizon: 'abc' }).horizon, 4)
+  // NOT a forecast → neither key is added (only the boolean true triggers it)
+  assert.equal('forecast' in validateSpec({ metric: 'revenue' }), false)
+  assert.equal('horizon'  in validateSpec({ metric: 'revenue' }), false)
+  assert.equal('forecast' in validateSpec({ metric: 'revenue', forecast: false }),  false)
+  assert.equal('forecast' in validateSpec({ metric: 'revenue', forecast: 'true' }), false)
 })
 
 test('validateSpec rejects everything off the whitelist', () => {
@@ -800,5 +822,123 @@ test('a client-scoped RATIO still explains — by its own numerator-vs-denominat
   const asked = await runAsk('roas last week', { now: NOW2, scopeClientId: acme })
   assert.ok(asked.meta.comparison, 'a scoped ratio single figure still carries a comparison')
   assert.equal(asked.meta.explainable, true)
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+// ── 9. FORECAST — grounded "what WILL it be?" (intel-v6 (7)) ───────────────────
+// The Ask box already answers the past ("what WAS revenue", "WHO moved it", "WHY
+// did the ratio shift"). This proves the forward answer is wired end-to-end: a
+// real weekly series is pulled for the SCOPED client only, projected by the same
+// self-tuning forecast.js the health layer trusts, and returned in the standard
+// envelope — trustworthy when the trend is clean, honest when history is thin or
+// absent, and never leaking another client's weeks into the training series.
+const FC_WEEKS = [
+  '2026-03-30', '2026-04-06', '2026-04-13', '2026-04-20',
+  '2026-04-27', '2026-05-04', '2026-05-11', '2026-05-18',
+]
+async function seedCleanTrend(name) {
+  const id = await freshClient(name)
+  let rev = 10000
+  for (const wk of FC_WEEKS) {
+    await seedWeek(id, wk, { rev, ads: 1000, leads: 50, jobs: 5 })
+    rev += 1000
+  }
+  return id   // last actual week (2026-05-18) = 17000
+}
+
+test('forecast: clean upward trend → grounded, trustworthy projection envelope', async () => {
+  await ensurePortfolio()
+  const id = await seedCleanTrend('FcUp')
+  const spec = validateSpec({ metric: 'revenue', forecast: true, horizon: 4 })
+  const env  = await answerForecast('will revenue grow over the next month?', spec,
+    { now: NOW, isPg: false, scope: id })
+  assert.equal(env.narrated, false)
+  assert.deepEqual(env.columns, ['step', 'value', 'lo', 'hi'])
+  assert.equal(env.rows.length, 4)
+  env.rows.forEach((r, i) => {
+    assert.equal(r.step, i + 1)
+    assert.equal(typeof r.value, 'number')
+    assert.ok(r.lo <= r.value && r.value <= r.hi, 'band brackets the point')
+    assert.ok(r.display.startsWith('$'))
+    assert.ok(r.lo_display.startsWith('$') && r.hi_display.startsWith('$'))
+  })
+  assert.equal(env.meta.metric, 'Revenue')
+  assert.equal(env.meta.unit, 'money')
+  assert.equal(env.meta.group_by, 'none')
+  assert.equal(env.meta.explainable, false)
+  assert.equal(env.meta.comparison, null)
+  assert.equal(env.meta.time_label, 'the next 4 weeks')
+  assert.equal(env.meta.row_count, 4)
+  const f = env.meta.forecast
+  assert.equal(f.method, 'holt')
+  assert.equal(f.n, 8)                // LEAK CHECK: only THIS client's 8 weeks trained
+  assert.equal(f.current, 17000)
+  assert.equal(f.direction, 'up')
+  assert.equal(f.trustworthy, true)   // a leak would inflate shared 05-04/05-11 buckets → poor_fit
+  assert.equal(f.caveat, null)
+  assert.equal(f.horizon, 4)
+  assert.equal(f.headline.step, 4)
+  assert.ok(f.headline.point > f.current)
+  assert.ok(f.confidence != null && f.confidence >= 0.8)
+  assert.ok(env.answer.includes('trending up'), env.answer)
+  assert.ok(env.answer.includes('in 4 weeks'), env.answer)
+  assert.ok(env.answer.includes('/week'), env.answer)
+  assert.deepEqual(env.followups,
+    suggestFollowups(validateSpec({ metric: 'revenue' }),
+      { hasComparison: false, allowClientBreakdown: false }))
+})
+
+test('forecast: thin history → honest (not trustworthy), rows still present', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('FcThin')
+  await seedWeek(id, '2026-05-11', { rev: 16000, ads: 1000, leads: 50, jobs: 5 })
+  await seedWeek(id, '2026-05-18', { rev: 17000, ads: 1000, leads: 50, jobs: 5 })
+  const spec = validateSpec({ metric: 'revenue', forecast: true, horizon: 4 })
+  const env  = await answerForecast('what will revenue be next month?', spec,
+    { now: NOW, isPg: false, scope: id })
+  assert.equal(env.rows.length, 4)
+  const f = env.meta.forecast
+  assert.equal(f.method, 'holt')
+  assert.equal(f.n, 2)
+  assert.equal(f.trustworthy, false)
+  assert.equal(f.caveat, 'thin_history')
+  assert.equal(f.confidence, null)
+  assert.equal(env.answer,
+    'Only 2 weeks of history — too little to project revenue confidently yet.')
+})
+
+test('forecast: no history → graceful, grounded no-data envelope (never throws)', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('FcEmpty')
+  const spec = validateSpec({ metric: 'revenue', forecast: true, horizon: 4 })
+  const env  = await answerForecast('will revenue grow next week?', spec,
+    { now: NOW, isPg: false, scope: id })
+  assert.equal(env.answer, 'No revenue history yet to project a forecast.')
+  assert.deepEqual(env.rows, [])
+  assert.deepEqual(env.columns, ['step', 'value', 'lo', 'hi'])
+  assert.equal(env.meta.group_by, 'none')
+  assert.equal(env.meta.explainable, false)
+  assert.equal(env.meta.row_count, 0)
+  assert.equal(env.meta.time_label, 'the weeks ahead')
+  assert.equal(env.meta.forecast, null)
+})
+
+test('runAsk routes a forward-looking question into the forecast branch', async () => {
+  await ensurePortfolio()
+  const id = await seedCleanTrend('FcRoute')
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({
+    metric: 'revenue', group_by: 'none', time_range: 'last_week', forecast: true, horizon: 4,
+  })
+  onNarrate = () => { throw new Error('forecast must not call the narrate hop') }
+  const res = await runAsk('what will revenue be over the next 4 weeks?',
+    { now: NOW, scopeClientId: id })
+  assert.equal(res.spec.forecast, true)
+  assert.equal(res.spec.horizon, 4)
+  assert.equal(res.meta.forecast.method, 'holt')
+  assert.equal(res.meta.forecast.n, 8)
+  assert.equal(res.meta.forecast.trustworthy, true)
+  assert.ok(res.answer.includes('trending up'), res.answer)
+  assert.equal(res.meta.explainable, false)
   delete process.env.ANTHROPIC_API_KEY
 })
