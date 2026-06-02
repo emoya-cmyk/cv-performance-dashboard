@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, Radar, Target, SlidersHorizontal } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, CheckCircle2, Radar, Target, SlidersHorizontal } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -174,6 +174,122 @@ function ActTodayRowPreview({ r }) {
           <div className="text-[10px] font-semibold text-slate-400 mt-0.5">vs usual</div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── morning briefing banner (intel-v7 layer 7 / 7c) — the synthesis capstone ──────
+// Copied from Intelligence.jsx PulseBriefingBanner (cn → template strings so it matches
+// this file). Collapses the whole ranked Act-today feed into ONE thing to do, a one-word
+// posture, and a confidence read — SUBTRACTING surface area. Rides ABOVE the Act-today
+// strip; the headline IS Act-today #1 by construction (lib/pulseBriefing re-ranks with the
+// identical pulseTriage call), so the hero sentence can never disagree with the list below.
+// posture: act (rose, touch something now) · watch (amber, eyes up) · steady (emerald, clear).
+const PULSE_POSTURE = {
+  act:    { pill: 'bg-rose-500 text-white',    Icon: AlertTriangle, label: 'Act' },
+  watch:  { pill: 'bg-amber-500 text-white',   Icon: Eye,           label: 'Watch' },
+  steady: { pill: 'bg-emerald-500 text-white', Icon: CheckCircle2,  label: 'Steady' },
+}
+// the system grading its OWN briefing: what share of today's calls come from sensors that
+// have earned credibility (accuracy 'proven' / reliability 'reliable') vs ones still building.
+const CONFIDENCE_TONE = {
+  high:     { chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', Icon: ShieldCheck, label: 'High confidence'     },
+  moderate: { chip: 'bg-amber-50 text-amber-700 border-amber-200',       Icon: Gauge,       label: 'Moderate confidence' },
+  building: { chip: 'bg-slate-100 text-slate-500 border-slate-200',      Icon: Radar,       label: 'Building confidence' },
+  'n/a':    { chip: 'bg-slate-50 text-slate-400 border-slate-200',       Icon: Radar,       label: 'No calls today'      },
+}
+const BRIEFING_STAT_TONE = {
+  rose:    'bg-rose-50 text-rose-600 border-rose-200',
+  amber:   'bg-amber-50 text-amber-600 border-amber-200',
+  emerald: 'bg-emerald-50 text-emerald-600 border-emerald-200',
+  slate:   'bg-slate-50 text-slate-500 border-slate-200',
+}
+function BriefingStat({ tone, label }) {
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${BRIEFING_STAT_TONE[tone] || BRIEFING_STAT_TONE.slate}`}>
+      {label}
+    </span>
+  )
+}
+
+// Shaped EXACTLY like lib/pulseBriefing.summarizePortfolioPulse(roster) over the ACT_TODAY
+// rows above: headline = ACT_TODAY[0] (Skyline), also = ACT_TODAY[1..3]. 2 of the 4 alerts
+// are credible (Skyline + Harbor are proven AND reliable; Vista learning/noisy + Peak
+// developing/mixed are not) → proven_share 0.5 → 'high'. posture 'act' because #1 is act_now.
+const BRIEFING = {
+  status: 'briefing',
+  posture: 'act',
+  counts: { adverse: 4, clients: 4, act_now: 1, tailwinds: 2, proven: 2, learning: 0 },
+  headline: ACT_TODAY[0],
+  headline_text: '4 alerts across 4 clients today. First up, Skyline Dental: Leads is critical and this alert has a reliable track record — act today.',
+  also: ACT_TODAY.slice(1, 4),
+  also_text: 'Next: Harbor Family Law — revenue (worth a look), Vista Auto Group — leads (verify), Peak Roofing Co. — spend (monitor).',
+  confidence: {
+    proven_share: 0.5,
+    graded_share: 1,
+    label: 'high',
+    note: "Most of today's alerts come from sensors with a proven track record — this read is well-grounded.",
+  },
+}
+
+function PulseBriefingBannerPreview({ data }) {
+  const b = data
+  if (!b || !b.headline_text) return null                  // no synthesis → degrade to no banner
+  const quiet   = b.status !== 'briefing'
+  const posture = PULSE_POSTURE[b.posture] || PULSE_POSTURE.steady
+  const conf    = CONFIDENCE_TONE[b.confidence?.label] || CONFIDENCE_TONE['n/a']
+  const c       = b.counts || {}
+  return (
+    <div className={`rounded-2xl border shadow-sm overflow-hidden ${quiet ? 'border-emerald-100 bg-gradient-to-br from-emerald-50/70 to-white' : 'border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-white'}`}>
+      <div className="px-5 pt-4 pb-4">
+        {/* eyebrow: the synthesis label, the one-word posture, and the confidence read */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-indigo-500">
+            <Activity className="w-3.5 h-3.5" /> Today&rsquo;s pulse
+          </span>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${posture.pill}`}>
+            <posture.Icon className="w-3 h-3" /> {posture.label}
+          </span>
+          {!quiet && (
+            <span title={b.confidence?.note || undefined} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-black uppercase tracking-wider ${conf.chip}`}>
+              <conf.Icon className="w-3 h-3" /> {conf.label}
+            </span>
+          )}
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+            <Sparkles className="w-3 h-3" /> the one thing first
+          </span>
+        </div>
+
+        {/* the hero — the morning's ONE sentence, the top of the same ranked feed below */}
+        <p className={`mt-3 font-black leading-snug ${quiet ? 'text-base text-slate-700' : 'text-lg text-slate-900'}`}>
+          {b.headline_text}
+        </p>
+
+        {/* the supporting cast — muted, only when more than the headline fired */}
+        {b.also_text && (
+          <p className="mt-1.5 text-xs font-medium text-slate-500 leading-relaxed">{b.also_text}</p>
+        )}
+
+        {/* the book at a glance — counts the engine already produced */}
+        {!quiet && (
+          <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+            <BriefingStat tone="rose" label={`${c.adverse} to act on`} />
+            {c.clients > 1   && <BriefingStat tone="slate"   label={`${c.clients} clients`} />}
+            {c.proven > 0    && <BriefingStat tone="emerald" label={`${c.proven} proven`} />}
+            {c.learning > 0  && <BriefingStat tone="slate"   label={`${c.learning} still learning`} />}
+            {c.tailwinds > 0 && <BriefingStat tone="emerald" label={`${c.tailwinds} pacing ahead`} />}
+          </div>
+        )}
+      </div>
+
+      {/* the confidence note as a grounding footer — the system explaining its own call */}
+      {!quiet && b.confidence?.note && (
+        <div className="px-5 py-2.5 bg-white/60 border-t border-indigo-50">
+          <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+            <span className="font-bold text-slate-500">How sure: </span>{b.confidence.note}
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -415,6 +531,21 @@ export default function PulseDiagnosisPreview() {
             mixed it sets a higher bar (<span className="font-bold text-teal-500">Calmer</span> — fewer false alarms), always graded against the
             canonical band and never its own tuned one, so the loop can never chase its own tail. No LLM and no human-set dial anywhere in the
             chain; every figure traces to a stored daily fact. Sample numbers; client names fictional.
+          </p>
+        </div>
+
+        {/* ── MORNING BRIEFING — the synthesis capstone (layer 7), full width, ABOVE Act today.
+            Collapses the ranked strip below into ONE thing + posture + confidence; the headline
+            is Act-today #1 by construction. This is the "subtract surface area" payoff: nine
+            chips become one sentence, with the detail one glance below. ───────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Today&rsquo;s pulse</p>
+          <PulseBriefingBannerPreview data={BRIEFING} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The capstone reads the SAME ranked feed below and answers one question — &ldquo;if you do one thing today, do this&rdquo; —
+            then grades its own call <span className="font-bold text-emerald-600">high confidence</span> because 2 of the 4 alerts come from
+            sensors that have already <span className="font-bold text-violet-600">proven out</span>. Synthesis on top, never a new sensor; it
+            reuses the headline signal&rsquo;s own triage sentence verbatim and only counts what&rsquo;s already on the roster.
           </p>
         </div>
 
