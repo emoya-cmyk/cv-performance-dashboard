@@ -59,6 +59,10 @@ const { AGG, derive } = require('../lib/metricsCore')
 const {
   runAsk, validateSpec, compileQuery, resolveTimeRange, SpecError,
 } = require('../lib/ask')
+// The PURE follow-up core is exhaustively proven in test/followups.test.js; here we
+// only assert runAsk WIRES it correctly — the right spec + the right scope/comparison
+// flags — by deep-comparing the response against the module's own output.
+const { suggestFollowups } = require('../lib/followups')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -523,6 +527,61 @@ test('no comparison for an open-ended range (all_time / this_month)', async () =
   onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'this_month' })
   const tm = await runAsk('revenue this month', { now: NOW2 })
   assert.equal(tm.meta.comparison, null)
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+// ── 7. CONVERSATIONAL FOLLOW-UPS (intel-v6 4b) ────────────────────────────────
+// runAsk turns every answer into a branch point: it attaches `followups`, the
+// parser-stable next-question chips for the spec it just answered. These tests own
+// the WIRING that followups.test.js can't see — that runAsk hands the module the
+// answered spec, threads hasComparison from meta.comparison, and (critically) only
+// permits the cross-client "which clients" pivot for an unscoped agency caller.
+
+test('runAsk attaches follow-up chips faithful to the pure module (unscoped agency)', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'Revenue was $20,000, up 11.1% from $18,000 the prior week.'
+
+  const res = await runAsk('how much revenue last week?', { now: NOW2 })   // no scope → whole book
+  assert.ok(Array.isArray(res.followups) && res.followups.length >= 1, 'followups attached')
+  for (const f of res.followups) {
+    assert.equal(typeof f.question, 'string'); assert.ok(f.question.length > 0)
+    assert.ok(typeof f.label === 'string' && f.label.length > 0)
+    assert.ok(['metric', 'time', 'trend', 'clients', 'total'].includes(f.kind), `known kind: ${f.kind}`)
+    assert.ok(!/\bwhy\b/i.test(f.question), 'no unparseable "why" chip')
+  }
+  // the response carries EXACTLY what the pure module derives from the answered spec,
+  // with hasComparison/allowClientBreakdown threaded from meta.comparison + (null) scope.
+  assert.deepEqual(
+    res.followups,
+    suggestFollowups(res.spec, { hasComparison: !!res.meta.comparison, allowClientBreakdown: true })
+  )
+  // this single figure carried a comparison, and the whole-book view may rank clients.
+  assert.ok(res.meta.comparison, 'WEEK_B vs WEEK_A is a real delta')
+  assert.ok(res.followups.some((f) => f.kind === 'clients'), 'agency gets a "By client" pivot')
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('a client-scoped ask never offers a cross-client follow-up', async () => {
+  const { acme } = await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'Revenue was $12,000 last week, up from $10,000.'
+
+  const res = await runAsk('how much revenue last week?', { now: NOW2, scopeClientId: acme })
+  assert.ok(res.followups.length >= 1, 'a scoped caller still gets useful drill-downs')
+  for (const f of res.followups) {
+    assert.notEqual(f.kind, 'clients')
+    assert.ok(!/which clients/i.test(f.question), 'no cross-client question on a scoped surface')
+  }
+  // faithful to the module with allowClientBreakdown:false — the scope boundary, threaded.
+  assert.deepEqual(
+    res.followups,
+    suggestFollowups(res.spec, { hasComparison: !!res.meta.comparison, allowClientBreakdown: false })
+  )
 
   delete process.env.ANTHROPIC_API_KEY
 })

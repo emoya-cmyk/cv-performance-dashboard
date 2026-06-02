@@ -617,6 +617,19 @@ async function runAsk(question, opts = {}) {
     if (llm && llm.grounded && llm.text) { answer = llm.text; narrated = true }
   }
 
+  // intel-v6 (4): turn a single answer into a branch point — propose the next
+  // questions as click-to-run chips. suggestFollowups is pure + parser-stable, so
+  // every chip is a question runAsk itself can re-answer; the cross-client "which
+  // clients" ranking is offered ONLY to an unscoped (whole-book) agency caller —
+  // a scoped token's "clients" pivot would just collapse to its own total. We pass
+  // NO limit: spec.limit is a ROW cap (1..50), not a chip count, so the chip count
+  // defaults to 3 inside the module. The require is LAZY for the same cycle reason
+  // as runSuggestions below — followups.js top-level requires THIS module's METRICS.
+  const followups = require('./followups').suggestFollowups(spec, {
+    hasComparison:        !!meta.comparison,
+    allowClientBreakdown: scope == null,
+  })
+
   return {
     question: q,
     spec,
@@ -625,6 +638,7 @@ async function runAsk(question, opts = {}) {
     template,                     // always-grounded deterministic phrasing
     columns: compiled.columns,
     rows: formatted,
+    followups,                    // intel-v6 (4): parser-stable "Ask next" chips
     meta: {
       metric:     compiled.metric.label,
       unit:       compiled.metric.unit,
