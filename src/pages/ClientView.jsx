@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
   Award, Minus, ArrowUpRight, RefreshCw, ShieldCheck,
+  AlertTriangle, Crosshair, Eye, Radar,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -887,10 +888,43 @@ function pulseClientTone(s) {
     : { chip: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-600', accent: '#f59e0b', label: 'Keep an eye' }
 }
 
+// The reliability-crossed action lane, in the client's voice. dayPulse severity says HOW BAD;
+// pulseTriage's lane crosses that severity with how RELIABLE this client's own firing history on
+// the metric has been, into one posture. We render it as the agency's first-person response
+// ("we're on it / confirming / reviewing / watching"), so it pairs with — never repeats — the
+// severity chip's HOW-BAD beside it, and we deliberately soften the agency-internal words: a noisy
+// Critical reads "Confirming", never "noisy". Tailwinds get no lane pill — the emerald chip and the
+// celebratory sentence already say it, and there's nothing to act on. The grounded posture sentence
+// (triage_client_reason) rides along as the pill's hover title — surfaced where it adds signal,
+// never stacked as a second line that would just re-state client_message.
+const PULSE_LANE_CLIENT = {
+  act_now:      { label: 'On it today', chip: 'bg-rose-50 text-rose-600 border-rose-200',     Icon: AlertTriangle },
+  verify:       { label: 'Confirming',  chip: 'bg-amber-50 text-amber-700 border-amber-200',  Icon: Crosshair },
+  worth_a_look: { label: 'Reviewing',   chip: 'bg-sky-50 text-sky-700 border-sky-200',        Icon: Eye },
+  monitor:      { label: 'Watching',    chip: 'bg-slate-100 text-slate-500 border-slate-200', Icon: Radar },
+}
+const pulseLaneClient = (s) => (s?.adverse ? PULSE_LANE_CLIENT[s?.lane] || null : null)
+
+// Client-side ordering mirrors the engine's rankPulseSignals comparator (adverse desc →
+// reliability-weighted priority desc → |z| desc → metric asc; client_name is constant for one
+// client, so it drops out). The server keeps pulse.signals worst-first by raw severity×|z| for the
+// agency roster; the client deck instead leads with what the triage layer would have us tackle
+// first — so a reliable Heads-up can sit above a noisier Critical, the same call the agency's
+// Act-today list makes. Pure presentation over a copy; never mutates pulse.signals.
+function orderClientPulse(signals) {
+  return [...signals].sort((a, b) =>
+    (Number(!!b?.adverse) - Number(!!a?.adverse)) ||
+    ((Number(b?.priority) || 0) - (Number(a?.priority) || 0)) ||
+    (Math.abs(Number(b?.z) || 0) - Math.abs(Number(a?.z) || 0)) ||
+    String(a?.metric || '').localeCompare(String(b?.metric || ''))
+  )
+}
+
 function ClientPulse({ pulse }) {
   const signals = Array.isArray(pulse?.signals) ? pulse.signals : []
   if (signals.length === 0) return null                 // nothing out of band this week → hide
   const adverse = signals.filter(s => s?.adverse).length
+  const ordered = orderClientPulse(signals)             // reliability-weighted triage order (4d)
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.08s' }}>
@@ -907,7 +941,7 @@ function ClientPulse({ pulse }) {
       </p>
 
       <div className="space-y-3">
-        {signals.map(s => <ClientPulseRow key={s.metric} s={s} />)}
+        {ordered.map(s => <ClientPulseRow key={s.metric} s={s} />)}
       </div>
 
       <p className="text-[10px] text-slate-400 mt-3.5 pt-3 border-t border-slate-50 leading-relaxed">
@@ -925,6 +959,7 @@ function ClientPulse({ pulse }) {
 // good move (revenue up, spend down) and a bad one (revenue down, spend up) read correctly.
 function ClientPulseRow({ s }) {
   const tone     = pulseClientTone(s)
+  const lane     = pulseLaneClient(s)   // reliability-crossed action posture (4d), null for tailwinds
   const DirIcon  = s.direction === 'down' ? ArrowDown : s.direction === 'up' ? ArrowUp : Minus
   const d        = Number(s.delta_pct)
   const deltaStr = Number.isFinite(d) ? `${d >= 0 ? '+' : '−'}${Math.abs(Math.round(d))}%` : null
@@ -943,6 +978,19 @@ function ClientPulseRow({ s }) {
             <span className={`inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${tone.chip}`}>
               {tone.label}
             </span>
+            {/* The reliability-crossed action lane (4d) — what WE'll do, in the agency's voice, so it
+                pairs with the severity chip's HOW-BAD rather than repeating it. Softened from the
+                agency words (a noisy Critical reads "Confirming", never "noisy"); the grounded
+                posture sentence rides along as the hover title. Tailwinds carry none. */}
+            {lane && (
+              <span
+                title={s.triage_client_reason || undefined}
+                className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${lane.chip}`}
+              >
+                <lane.Icon className="w-2.5 h-2.5" />
+                {lane.label}
+              </span>
+            )}
           </div>
           {/* The engine's grounded, own-numbers sentence — the single source of the figures,
               so the prose can never disagree with the chip beside it. */}

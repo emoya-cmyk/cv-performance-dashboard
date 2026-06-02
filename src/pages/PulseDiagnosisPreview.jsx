@@ -61,6 +61,32 @@ const LANE_TONE = {
 }
 const laneTone = (r) => LANE_TONE[r?.lane] || LANE_TONE.monitor
 
+// ── client-side action lane (copied from ClientView.jsx 4d so the preview matches) ──
+// The SAME severity × reliability cross, re-voiced for the client: the agency's first-person
+// response ("we're on it / confirming / reviewing / watching"), softened from the internal words
+// (a noisy Critical reads "Confirming", never "noisy"), and pairing with — not repeating — the
+// severity chip's HOW-BAD. Tailwinds carry no lane pill; the emerald chip already says it.
+const PULSE_LANE_CLIENT = {
+  act_now:      { label: 'On it today', chip: 'bg-rose-50 text-rose-600 border-rose-200',     Icon: AlertTriangle },
+  verify:       { label: 'Confirming',  chip: 'bg-amber-50 text-amber-700 border-amber-200',  Icon: Crosshair },
+  worth_a_look: { label: 'Reviewing',   chip: 'bg-sky-50 text-sky-700 border-sky-200',        Icon: Eye },
+  monitor:      { label: 'Watching',    chip: 'bg-slate-100 text-slate-500 border-slate-200', Icon: Radar },
+}
+const pulseLaneClient = (s) => (s?.adverse ? PULSE_LANE_CLIENT[s?.lane] || null : null)
+
+// Mirrors ClientView.jsx orderClientPulse (4d): adverse desc → reliability-weighted priority desc
+// → |z| desc → metric asc. So the client deck leads with what the triage layer is most sure is
+// worth attention — a reliable Heads-up can sit above a noisier Critical, the same call the
+// agency's Act-today list makes — instead of the server's raw severity×|z| roster order.
+function orderClientPulse(signals) {
+  return [...signals].sort((a, b) =>
+    (Number(!!b?.adverse) - Number(!!a?.adverse)) ||
+    ((Number(b?.priority) || 0) - (Number(a?.priority) || 0)) ||
+    (Math.abs(Number(b?.z) || 0) - Math.abs(Number(a?.z) || 0)) ||
+    String(a?.metric || '').localeCompare(String(b?.metric || ''))
+  )
+}
+
 // Shaped EXACTLY like lib/pulseTriage.rankPulseSignals(roster, { adverseOnly: true }) output:
 // each row already carries priority_rank + lane + triage_reason and the reliability fields the
 // rank was computed from. Ordered by priority (severity × reliability × magnitude) desc. THE
@@ -159,6 +185,7 @@ function PreviewPulseRow({ r }) {
 // ── client row (My Dashboard ▸ This Week So Far) + diagnosis ──────────────────
 function PreviewClientPulseRow({ s }) {
   const tone     = pulseClientTone(s)
+  const lane     = pulseLaneClient(s)   // reliability-crossed action posture (4d), null for tailwinds
   const DirIcon  = s.direction === 'down' ? ArrowDown : s.direction === 'up' ? ArrowUp : Minus
   const d        = Number(s.delta_pct)
   const deltaStr = `${d >= 0 ? '+' : '−'}${Math.abs(Math.round(d))}%`
@@ -172,6 +199,13 @@ function PreviewClientPulseRow({ s }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-black text-slate-800">{s.label}</span>
             <span className={`inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${tone.chip}`}>{tone.label}</span>
+            {/* reliability-crossed action lane (4d) — what WE'll do, in the agency's voice, pairing
+                with the severity chip rather than repeating it; grounded posture on hover. */}
+            {lane && (
+              <span title={s.triage_client_reason || undefined} className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${lane.chip}`}>
+                <lane.Icon className="w-2.5 h-2.5" />{lane.label}
+              </span>
+            )}
           </div>
           {s.client_message && <p className="text-xs text-slate-600 leading-relaxed font-medium mt-1">{s.client_message}</p>}
           <DriverBreakdown message={s.diagnosis_client_message} diagnosis={s.diagnosis} tone={tone} audience="client" />
@@ -226,27 +260,32 @@ const AGENCY = [
     diagnosis_message: 'Revenue is up 43% — the driver is ROAS (up 30%), with Ad spend also up 10%.' },
 ]
 
+// One coherent client's week. Authored in naive worst-by-magnitude order (Leads −51% first) so the
+// 4d reorder is visible: orderClientPulse floats the trusted Revenue slip ABOVE the louder-but-noisy
+// Leads dip — the same reliability-weighted call the agency's Act-today list makes. Leads is atomic
+// (no driver breakdown) and noisy (no consistency note → the "Confirming" lane is its only cue, so
+// the client gets calibration without ever being shown the word "noisy").
 const CLIENT = [
-  { metric: 'jobs', label: 'Jobs won', adverse: true, severity: 'critical', direction: 'down', delta_pct: -50,
-    client_message: 'Jobs won is tracking about 50% below your usual week so far.',
-    reliability_client_note: 'This has been a consistent signal lately.',
-    diagnosis: { metric: 'jobs', direction: 'down', lead: 'leads',
-      drivers: [{ metric: 'leads', pct: -50, share: 1, share_pct: 100 }, { metric: 'close_rate', pct: 0, share: 0, share_pct: 0 }] },
-    diagnosis_client_message: 'Your jobs won is down 50% — the driver is Leads (down 50%), while Close rate held.' },
-
-  { metric: 'revenue', label: 'Revenue', adverse: true, severity: 'warning', direction: 'down', delta_pct: -30,
-    client_message: 'Revenue is running about 30% under your usual week.',
+  { metric: 'leads', label: 'Leads', adverse: true, severity: 'critical', direction: 'down', delta_pct: -51,
+    z: -3.1, priority: 0.40, lane: 'verify',
+    client_message: 'Leads are tracking about 51% below your usual week so far.',
     reliability_client_note: '',
-    diagnosis: { metric: 'revenue', direction: 'down', lead: 'spend',
-      drivers: [{ metric: 'spend', pct: -50, share: 1.9434, share_pct: 194.3 }, { metric: 'roas', pct: 40, share: -0.9434, share_pct: -94.3 }] },
-    diagnosis_client_message: 'Your revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.' },
+    triage_client_reason: "Your leads dipped — we're confirming it before we act." },
 
-  { metric: 'revenue', label: 'Revenue', adverse: false, severity: 'info', direction: 'up', delta_pct: 43,
-    client_message: 'Revenue is pacing about 43% ahead of your usual week — nice momentum.',
+  { metric: 'revenue', label: 'Revenue', adverse: true, severity: 'warning', direction: 'down', delta_pct: -24,
+    z: -2.3, priority: 0.60, lane: 'worth_a_look',
+    client_message: 'Revenue is running about 24% under your usual week.',
     reliability_client_note: 'This has been a consistent signal lately.',
-    diagnosis: { metric: 'revenue', direction: 'up', lead: 'roas',
-      drivers: [{ metric: 'spend', pct: 10, share: 0.2665, share_pct: 26.6 }, { metric: 'roas', pct: 30, share: 0.7335, share_pct: 73.3 }] },
-    diagnosis_client_message: 'Your revenue is up 43% — the driver is ROAS (up 30%), with Ad spend also up 10%.' },
+    triage_client_reason: 'Your revenue is worth a look this week.',
+    diagnosis: { metric: 'revenue', direction: 'down', lead: 'roas',
+      drivers: [{ metric: 'roas', pct: -20, share: 0.813, share_pct: 81.3 }, { metric: 'spend', pct: -5, share: 0.187, share_pct: 18.7 }] },
+    diagnosis_client_message: 'Your revenue is down 24% — the driver is ROAS (down 20%), with Ad spend down a touch (5%).' },
+
+  { metric: 'close_rate', label: 'Close rate', adverse: false, severity: 'info', direction: 'up', delta_pct: 18,
+    z: 2.2, priority: 0.55, lane: 'tailwind',
+    client_message: 'Your close rate is pacing about 18% ahead of your usual week — nice momentum.',
+    reliability_client_note: 'This has been a consistent signal lately.',
+    triage_client_reason: 'Your close rate is pacing ahead — nice momentum.' },
 ]
 
 export default function PulseDiagnosisPreview() {
@@ -346,16 +385,23 @@ export default function PulseDiagnosisPreview() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
-                An early read on the week in progress — with the reason behind each move, in your own numbers.
+                An early read on the week in progress — with the reason behind each move, in your own numbers,{' '}
+                <span className="font-semibold text-slate-600">ordered by what&rsquo;s most worth your attention first</span>.
               </p>
               <div className="space-y-3">
-                {CLIENT.map((s, i) => <PreviewClientPulseRow key={`${s.metric}:${i}`} s={s} />)}
+                {orderClientPulse(CLIENT).map((s, i) => <PreviewClientPulseRow key={`${s.metric}:${i}`} s={s} />)}
               </div>
               <p className="text-[10px] text-slate-400 mt-3.5 pt-3 border-t border-slate-50 leading-relaxed">
                 Watched live off your daily numbers and refreshed every day. When a number moves, we break down what drove it —
                 so you see the cause days before the week officially closes. When a signal has a steady track record, a small{' '}
                 <span className="font-semibold text-emerald-600">consistent-signal</span> note appears; a flickery one stays
-                quiet, so you&rsquo;re never shown a number you can&rsquo;t lean on.
+                quiet, so you&rsquo;re never shown a number you can&rsquo;t lean on. They&rsquo;re ordered the same way your team
+                works them — your steady <span className="font-semibold text-slate-600">Revenue</span> dip leads, and the louder{' '}
+                <span className="font-semibold text-slate-600">Leads</span> drop sits just below at{' '}
+                <span className="font-semibold text-amber-600">Confirming</span> while we make sure it&rsquo;s real before acting.
+                The little status tag on each — <span className="font-semibold text-rose-600">On it today</span>,{' '}
+                <span className="font-semibold text-amber-600">Confirming</span>,{' '}
+                <span className="font-semibold text-sky-600">Reviewing</span> — tells you exactly where we are on it.
               </p>
             </div>
           </div>
