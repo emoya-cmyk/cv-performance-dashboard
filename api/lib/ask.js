@@ -54,6 +54,12 @@ const { ratioAttribution, narrateRatio, isRatioMetric, RATIO_IDENTITIES } = requ
 // weekly series into a grounded Holt projection + a self-tuned 80% band + an honest
 // trust gate — the metric-side twin of trajectory.js, exposed through the Ask surface.
 const { forecastAnswer, narrateForecast, DEFAULT_HORIZON, MAX_HORIZON } = require('./forecastAnswer')
+// intel-v6 (8): the GOAL answer — "are we on track to hit our number this month?".
+// Pure (no DB/clock/LLM), so a plain top-level require is cycle-safe. Wraps pacing.js
+// (the run-rate-vs-target verdict the health badge already uses) for the Ask surface —
+// the goal-side twin of forecastAnswer: forecast asks "what WILL it be", pacing asks
+// "do we make the number we committed to". Numbers in, verdict + one grounded sentence out.
+const { pacingAnswer, narratePacing } = require('./pacingAnswer')
 
 // ── METRIC WHITELIST ──────────────────────────────────────────────────────────
 // Aggregate fragments over weekly_reports (alias wr). Each SUM is COALESCEd so a
@@ -147,6 +153,15 @@ function validateSpec(raw) {
     out.forecast = true
     const hInt = Number.isInteger(raw.horizon) ? raw.horizon : parseInt(raw.horizon, 10)
     out.horizon = Math.min(MAX_HORIZON, Math.max(1, Number.isInteger(hInt) ? hInt : DEFAULT_HORIZON))
+  }
+
+  // intel-v6 (8): the GOAL path. `pacing:true` flips the answer to "are we on track to
+  // hit this month's target?". OMITTED on a normal spec (like `forecast`/`month`), so
+  // existing shapes stay byte-identical. Forecast WINS a tie — a plain projection with
+  // no goal mentioned is a forecast, not pacing — so the two are mutually exclusive and
+  // runAsk's single dispatch can never run both paths for one question.
+  if (raw.pacing === true && raw.forecast !== true) {
+    out.pacing = true
   }
 
   return out
@@ -499,7 +514,8 @@ const PARSE_SYSTEM = [
   '  "order":         "desc" or "asc",',
   '  "limit":         integer 1-50,',
   '  "forecast":      true ONLY when the question asks about the FUTURE (a projection); omit otherwise,',
-  '  "horizon":       integer 1-26 — weeks ahead to project (only when forecast is true)',
+  '  "horizon":       integer 1-26 — weeks ahead to project (only when forecast is true),',
+  '  "pacing":        true ONLY when the question asks whether a monthly GOAL/target will be hit; omit otherwise',
   '}',
   '',
   'Mapping rules:',
@@ -521,6 +537,12 @@ const PARSE_SYSTEM = [
   '  group_by "none" (never client/week/month).',
   '- horizon (only with forecast): "next week" → 1; "next month"/"in 4 weeks" → 4;',
   '  "next quarter"/"12 weeks" → 12; a bare "will"/"expected" with no period → 4.',
+  '- pacing: set true when the question asks whether a MONTHLY GOAL/target/quota will',
+  '  be met — "are we on track", "are we on pace", "will we hit our goal/target/number/',
+  '  quota", "how are we pacing this month". Pacing applies ONLY to revenue, leads, or',
+  '  jobs — pick that metric, with group_by "none" and time_range "this_month". A plain',
+  '  projection with NO goal mentioned is a forecast, NOT pacing. NEVER set both pacing',
+  '  and forecast on one spec.',
   'Output JSON only — no code fences, no commentary.',
 ].join('\n')
 
@@ -698,6 +720,174 @@ function forecastEnvelope(question, spec, scope, metricDef, parts) {
   }
 }
 
+// ── GROUNDED GOAL-PACING ANSWER (intel-v6 (8): "are we on track?") ─────────────
+// The goal-side twin of answerForecast. answerForecast asks "what WILL the number be?";
+// this asks "do we make the number we COMMITTED to this month?". When parseSpec flags a
+// question as a goal/target check (spec.pacing), this resolves the client's monthly goal
+// + month-to-date actual through the SAME scope+whitelist compile path runAsk uses, hands
+// both to pacingAnswer for a pure run-rate verdict (NO LLM arithmetic), and returns the
+// SAME envelope shape — so the route and the FE need zero special-casing: the verdict
+// rides in meta.pacing and meta.explainable is always false (a pacing call has no period-
+// over-period "why" to decompose).
+//
+// Pacing is defined ONLY for the metrics that carry a monthly target in client_goals
+// (revenue / leads / jobs) and against ONE client's own goal — so a non-pacing metric or
+// a missing client name returns a grounded, honest "nothing to pace" envelope rather than
+// a fabricated verdict. A single client's verdict names no other tenant, so it is leak-
+// safe on BOTH the agency Intelligence page and a client /my-dashboard, exactly like the
+// per-client health badge pacing.js already feeds.
+const PACING_METRICS = new Set(['revenue', 'leads', 'jobs'])
+
+async function answerPacing(question, spec, ctx) {
+  const { now, isPg, scope } = ctx
+  const metricDef = METRICS[spec.metric]
+  const fmt   = (v) => formatValue(v, metricDef)
+  const label = metricDef.label
+
+  // (a) METRIC GUARD first — only revenue/leads/jobs carry a monthly target, so a pacing
+  // question about ROAS/spend/cpl/close_rate has nothing to pace against. Answer honestly
+  // (and skip a needless client lookup) rather than ask which client.
+  if (!PACING_METRICS.has(spec.metric)) {
+    return pacingEnvelope(question, spec, scope, metricDef, {
+      answer:  `There's no monthly goal for ${label.toLowerCase()} to pace against — pacing covers revenue, leads, and jobs.`,
+      verdict: null,
+    })
+  }
+
+  // (b) RESOLVE the one client whose goal we pace. A scoped (/my-dashboard) caller is
+  // already pinned; an unscoped agency caller must NAME a client (goals are per-client),
+  // so a portfolio-wide "are we on track?" asks which client rather than guessing.
+  let clientId = scope
+  if (clientId == null) {
+    if (!spec.client_filter) {
+      return pacingEnvelope(question, spec, scope, metricDef, {
+        answer:  `Tell me which client to check — pacing is measured against one client's monthly goal.`,
+        verdict: null,
+      })
+    }
+    const { rows } = await query('SELECT id FROM clients WHERE LOWER(name) = LOWER($1) LIMIT 1', [spec.client_filter])
+    if (!rows.length) {
+      return pacingEnvelope(question, spec, scope, metricDef, {
+        answer:  `I couldn't find a client named "${spec.client_filter}" to check pacing for.`,
+        verdict: null,
+      })
+    }
+    clientId = rows[0].id
+  }
+
+  // (c) DAY COUNTS for the current month — byte-identical to insights.monthBounds, so the
+  // Ask verdict and the health-badge verdict agree to the digit.
+  const today       = isoDay(now)
+  const daysElapsed = Number(today.slice(8, 10))
+  const month       = monthFirst(today)
+  const daysInMonth = Number(lastDayOfMonth(today.slice(0, 7)).slice(8, 10))
+
+  // (d) THE GOAL — the human-set monthly target for this metric (mirrors
+  // insights.loadGoal). A missing row or a non-positive target → undefined, which
+  // pacingAnswer renders as a quiet "no goal set" no-op (never a fabricated pace).
+  const { rows: goalRows } = await query(
+    'SELECT revenue_target, leads_target, jobs_target FROM client_goals WHERE client_id = $1 AND month = $2 LIMIT 1',
+    [clientId, month],
+  )
+  const goal      = goalRows[0] || null
+  const targetRaw = goal ? Number(goal[`${spec.metric}_target`]) : NaN
+  const target    = Number.isFinite(targetRaw) && targetRaw > 0 ? targetRaw : undefined
+
+  // (e) MONTH-TO-DATE ACTUAL — the same metric summed over this month through the SAME
+  // scope+whitelist compile path (group_by 'none', time_range 'this_month'), so the pacing
+  // actual equals what the dashboard shows for the month. The resolved clientId pins the
+  // query to one client (scoped binds wr.client_id first), so it can never read another.
+  const monthSpec  = { metric: spec.metric, group_by: 'none', time_range: 'this_month', order: 'desc', limit: 5 }
+  const compiled   = compileQuery(monthSpec, now, isPg, clientId)
+  const { rows: actualRows } = await query(compiled.sql, compiled.params)
+  const actual = Number(actualRows[0] && actualRows[0].value) || 0
+
+  // (f) THE VERDICT — pure run-rate classification (pacingAnswer → classifyPacing), then
+  // ONE grounded sentence copying every figure from the verdict via fmt.
+  const verdict = pacingAnswer(spec.metric, { target, actual, daysElapsed, daysInMonth })
+  return pacingEnvelope(question, spec, scope, metricDef, {
+    answer:  narratePacing(verdict, { label, fmt }),
+    verdict,
+  })
+}
+
+// Assemble the standard runAsk envelope for a pacing answer — ONE shape for both the
+// "has a verdict" and the grounded "nothing to pace" paths, so the route/FE never special-
+// case pacing. When a real verdict exists we surface three legible rows (month-to-date,
+// projected month-end, goal) — mirroring how forecastEnvelope always shows projected rows
+// even on thin history; the early-month/closed caveats ride in the status field, never by
+// hiding numbers. Follow-up chips are built from the spec with `pacing` STRIPPED, so every
+// chip is a normal question runAsk can re-answer. A pacing call has no period-over-period,
+// so hasComparison:false and meta.explainable:false (the UI never offers the "Why?" chip
+// for a pacing answer); the cross-client pivot is offered only to an unscoped agency caller.
+function pacingEnvelope(question, spec, scope, metricDef, parts) {
+  const { answer, verdict } = parts
+  const fmt = (v) => formatValue(v, metricDef)
+
+  const baseSpec = { ...spec }
+  delete baseSpec.pacing
+  const followups = require('./followups').suggestFollowups(baseSpec, {
+    hasComparison:        false,
+    allowClientBreakdown: scope == null,
+  })
+
+  // a verdict is "shown" (with projected rows + a meta.pacing block) for every status
+  // except the 'none' no-op — for which projected/attainment are null and the sentence
+  // already explains there's nothing to pace. For every other status (incl. 'early')
+  // projected/attainment/shortfall are finite, so the rows + ratios below are safe.
+  const shown = verdict != null && verdict.status !== 'none'
+  const rows = shown
+    ? [
+        { label: 'Month-to-date',       value: verdict.actual,    display: fmt(verdict.actual) },
+        { label: 'Projected month-end', value: verdict.projected, display: fmt(verdict.projected) },
+        { label: 'Goal',                value: verdict.target,    display: fmt(verdict.target) },
+      ]
+    : []
+
+  return {
+    question,
+    spec,
+    answer,
+    narrated: false,                 // deterministic grounded narration, never free LLM prose
+    template: answer,                // the deterministic pacing sentence IS the template
+    columns: ['label', 'value'],
+    rows,
+    followups,
+    meta: {
+      metric:      metricDef.label,
+      unit:        metricDef.unit,
+      group_by:    'none',
+      time_label:  'this month',
+      row_count:   rows.length,
+      comparison:  null,
+      explainable: false,            // a pacing call has no period-over-period "why"
+      // intel-v6 (8): the verdict itself, for the FE to render a pace bar + an honest
+      // status badge. null on every "nothing to pace" path. Every number is COPIED from
+      // the verdict (grounded), never recomputed here.
+      pacing: shown ? {
+        status:            verdict.status,
+        metric:            metricDef.label,
+        target:            verdict.target,
+        target_display:    fmt(verdict.target),
+        actual:            verdict.actual,
+        actual_display:    fmt(verdict.actual),
+        projected:         verdict.projected,
+        projected_display: fmt(verdict.projected),
+        attainment:        verdict.attainment,
+        attainment_pct:    verdict.attainment != null ? Math.round(verdict.attainment * 100) : null,
+        shortfall:         verdict.shortfall,
+        shortfall_display: verdict.shortfall != null ? fmt(verdict.shortfall) : null,
+        remaining:         verdict.remaining,
+        catchup:           verdict.catchup,
+        days_elapsed:      verdict.days_elapsed,
+        days_in_month:     verdict.days_in_month,
+        days_remaining:    verdict.days_remaining,
+        confidence:        verdict.confidence,
+      } : null,
+    },
+  }
+}
+
 /**
  * Answer a natural-language portfolio question.
  * @param {string} question
@@ -723,6 +913,11 @@ async function runAsk(question, opts = {}) {
   const scope = opts.scopeClientId != null ? opts.scopeClientId : null
 
   const spec = await parseSpec(q)
+
+  // intel-v6 (8): a goal/target question ("are we on track to hit our number?")
+  // branches to the grounded pacing answer — the SAME envelope shape. validateSpec makes
+  // pacing and forecast mutually exclusive, so only one of these two branches can fire.
+  if (spec.pacing) return await answerPacing(q, spec, { now, isPg, scope })
 
   // intel-v6 (7): a forward-looking question ("what WILL revenue be next week?")
   // branches to the grounded forecast answer — the SAME envelope shape, so the route
@@ -1078,7 +1273,7 @@ async function runSuggestions(opts = {}) {
 }
 
 module.exports = {
-  runAsk, runSuggestions, runExplain, answerForecast, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  runAsk, runSuggestions, runExplain, answerForecast, answerPacing, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,

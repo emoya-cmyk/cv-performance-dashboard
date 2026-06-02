@@ -57,7 +57,7 @@ const reply = (text) => ({ data: { content: [{ type: 'text', text }] } })
 const db = require('../db')
 const { AGG, derive } = require('../lib/metricsCore')
 const {
-  runAsk, runExplain, answerForecast, validateSpec, compileQuery, resolveTimeRange, SpecError,
+  runAsk, runExplain, answerForecast, answerPacing, validateSpec, compileQuery, resolveTimeRange, SpecError,
 } = require('../lib/ask')
 // The PURE follow-up core is exhaustively proven in test/followups.test.js; here we
 // only assert runAsk WIRES it correctly — the right spec + the right scope/comparison
@@ -939,6 +939,216 @@ test('runAsk routes a forward-looking question into the forecast branch', async 
   assert.equal(res.meta.forecast.n, 8)
   assert.equal(res.meta.forecast.trustworthy, true)
   assert.ok(res.answer.includes('trending up'), res.answer)
+  assert.equal(res.meta.explainable, false)
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+// ── 10. PACING — grounded "are we on track to hit the goal?" (intel-v6 (8)) ────
+// pacing.js (intel-v4 (6)) already bands run-rate-vs-goal for the health badge and
+// the at-risk roster; intel-v6 (8) wires that SAME verdict into the Ask box. This
+// proves the wire end-to-end: the SCOPED client's monthly goal + month-to-date
+// actual are pulled through the same compile path, classified by the same
+// pacing.js, and returned in the standard envelope (meta.pacing) — honest when no
+// goal exists, leak-safe to one client, and never calling the LLM narrate hop.
+// At NOW = 2026-05-30, 30 of 31 days are gone (elapsed ≈ 0.968, never 'early'), so
+// projected = actual × 31/30 and the seeded actuals land in the intended bands.
+const PACE_MONTH = '2026-05-01'   // client_goals.month is first-of-month
+const PACE_WEEK  = '2026-05-04'   // a Monday inside this_month (≤ the 2026-05-30 cutoff)
+
+// Fresh client + one monthly goal + ONE in-month week, so the month-to-date actual
+// is exact and single-tenant (compileQuery pins wr.client_id → the portfolio's own
+// 05-04 / 05-11 rows can't leak in).
+async function seedPacing(name, goal, may) {
+  const id = await freshClient(name)
+  await db.query(
+    `INSERT INTO client_goals (client_id, month, revenue_target, leads_target, jobs_target)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [id, PACE_MONTH, goal.revenue ?? null, goal.leads ?? null, goal.jobs ?? null],
+  )
+  await seedWeek(id, PACE_WEEK, { rev: may.rev ?? 0, ads: 1000, leads: may.leads ?? 0, jobs: may.jobs ?? 0 })
+  return id
+}
+// strip `pacing` exactly as pacingEnvelope does, so the follow-up assertion proves WIRING
+// (same spec in → same chips out) rather than re-predicting the chip content here.
+const baseOf = (spec) => { const s = { ...spec }; delete s.pacing; return s }
+const pace = (question, spec, scope) =>
+  answerPacing(question, spec, { now: NOW, isPg: false, scope })
+
+test('pacing: revenue AHEAD of goal → grounded on-track-to-beat envelope', async () => {
+  await ensurePortfolio()
+  const id   = await seedPacing('PaceAhead', { revenue: 100 }, { rev: 110 })
+  const spec = validateSpec({ metric: 'revenue', pacing: true })
+  const env  = await pace('are we on track to hit our revenue goal?', spec, id)
+  assert.equal(env.narrated, false)
+  assert.deepEqual(env.columns, ['label', 'value'])
+  assert.deepEqual(env.rows.map(r => r.label), ['Month-to-date', 'Projected month-end', 'Goal'])
+  assert.deepEqual(env.rows.map(r => r.display), ['$110', '$114', '$100'])  // 110 × 31/30 ≈ 114
+  assert.equal(env.meta.metric, 'Revenue')
+  assert.equal(env.meta.unit, 'money')
+  assert.equal(env.meta.group_by, 'none')
+  assert.equal(env.meta.time_label, 'this month')
+  assert.equal(env.meta.explainable, false)
+  assert.equal(env.meta.comparison, null)
+  assert.equal(env.meta.row_count, 3)
+  const p = env.meta.pacing
+  assert.equal(p.status, 'ahead')
+  assert.equal(p.target, 100);    assert.equal(p.target_display, '$100')
+  assert.equal(p.actual, 110);    assert.equal(p.actual_display, '$110')
+  assert.equal(p.projected, 114); assert.equal(p.projected_display, '$114')
+  assert.equal(p.attainment_pct, 114)
+  assert.equal(p.days_elapsed, 30)
+  assert.equal(p.days_in_month, 31)
+  assert.equal(p.days_remaining, 1)
+  assert.ok(env.answer.includes('pacing ahead'), env.answer)
+  assert.ok(env.answer.includes('114% of target'), env.answer)
+  assert.deepEqual(env.followups,
+    suggestFollowups(baseOf(spec), { hasComparison: false, allowClientBreakdown: false }))
+})
+
+test('pacing: revenue ON TRACK → grounded on-track envelope', async () => {
+  await ensurePortfolio()
+  const id   = await seedPacing('PaceOnTrack', { revenue: 100 }, { rev: 95 })
+  const spec = validateSpec({ metric: 'revenue', pacing: true })
+  const env  = await pace('are we on track to hit our revenue goal?', spec, id)
+  assert.deepEqual(env.rows.map(r => r.display), ['$95', '$98', '$100'])   // 95 × 31/30 ≈ 98
+  const p = env.meta.pacing
+  assert.equal(p.status, 'on_track')
+  assert.equal(p.attainment_pct, 98)
+  assert.equal(p.projected, 98)
+  assert.equal(p.shortfall, 2)        // nonneg(100 - 98.17) rounds to 2
+  assert.ok(env.answer.includes('on track'), env.answer)
+  assert.ok(env.answer.includes('98% of target'), env.answer)
+})
+
+test('pacing: revenue BEHIND pace → shortfall + catch-up multiple, grounded', async () => {
+  await ensurePortfolio()
+  const id   = await seedPacing('PaceBehind', { revenue: 100 }, { rev: 80 })
+  const spec = validateSpec({ metric: 'revenue', pacing: true })
+  const env  = await pace('are we on track to hit our revenue goal?', spec, id)
+  assert.deepEqual(env.rows.map(r => r.display), ['$80', '$83', '$100'])   // 80 × 31/30 ≈ 83
+  const p = env.meta.pacing
+  assert.equal(p.status, 'behind')
+  assert.equal(p.attainment_pct, 83)
+  assert.equal(p.shortfall, 17);  assert.equal(p.shortfall_display, '$17')
+  assert.equal(p.catchup, 7.5)    // need 20 in the last day vs a 2.67/day pace
+  assert.ok(env.answer.includes('behind pace'), env.answer)
+  assert.ok(env.answer.includes('$17 short'), env.answer)
+  assert.ok(env.answer.includes('7.5× your current pace'), env.answer)
+})
+
+test('pacing: revenue AT RISK → strongest band, grounded', async () => {
+  await ensurePortfolio()
+  const id   = await seedPacing('PaceAtRisk', { revenue: 100 }, { rev: 60 })
+  const spec = validateSpec({ metric: 'revenue', pacing: true })
+  const env  = await pace('are we on track to hit our revenue goal?', spec, id)
+  assert.deepEqual(env.rows.map(r => r.display), ['$60', '$62', '$100'])   // 60 × 31/30 = 62
+  const p = env.meta.pacing
+  assert.equal(p.status, 'at_risk')
+  assert.equal(p.attainment_pct, 62)
+  assert.equal(p.shortfall, 38);  assert.equal(p.shortfall_display, '$38')
+  assert.ok(env.answer.includes('at risk of missing goal'), env.answer)
+  assert.ok(env.answer.includes('62% of target'), env.answer)
+})
+
+test('pacing: the count metrics pace too — leads on track, jobs at risk', async () => {
+  await ensurePortfolio()
+  const leadsId = await seedPacing('PaceLeads', { leads: 100 }, { leads: 95 })
+  const jobsId  = await seedPacing('PaceJobs',  { jobs: 20 },   { jobs: 12 })
+
+  const leadsEnv = await pace('are we on track on leads?',
+    validateSpec({ metric: 'leads', pacing: true }), leadsId)
+  assert.equal(leadsEnv.meta.metric, 'Leads')
+  assert.equal(leadsEnv.meta.unit, 'count')
+  assert.equal(leadsEnv.meta.pacing.status, 'on_track')
+  assert.equal(leadsEnv.meta.pacing.attainment_pct, 98)
+  assert.deepEqual(leadsEnv.rows.map(r => r.display), ['95', '98', '100'])  // counts: no '$'
+
+  const jobsEnv = await pace('are we on track on jobs?',
+    validateSpec({ metric: 'jobs', pacing: true }), jobsId)
+  assert.equal(jobsEnv.meta.metric, 'Jobs won')
+  assert.equal(jobsEnv.meta.pacing.status, 'at_risk')
+  assert.equal(jobsEnv.meta.pacing.attainment_pct, 62)
+  assert.equal(jobsEnv.rows[2].display, '20')                                // goal, no '$'
+})
+
+test('pacing: a non-goal metric (roas) → honest "no goal to pace", no verdict', async () => {
+  await ensurePortfolio()
+  const id  = await seedPacing('PaceRoas', { revenue: 100 }, { rev: 110 })
+  const env = await pace('are we on track on roas?',
+    validateSpec({ metric: 'roas', pacing: true }), id)
+  assert.equal(env.answer,
+    "There's no monthly goal for roas to pace against — pacing covers revenue, leads, and jobs.")
+  assert.equal(env.meta.pacing, null)
+  assert.deepEqual(env.rows, [])
+  assert.equal(env.meta.metric, 'ROAS')
+  assert.equal(env.meta.row_count, 0)
+})
+
+test('pacing: a paced metric with no goal set → honest none, no verdict', async () => {
+  await ensurePortfolio()
+  const id = await freshClient('PaceNoGoal')
+  await seedWeek(id, PACE_WEEK, { rev: 5000, ads: 1000, leads: 50, jobs: 5 })
+  const env = await pace('are we on track to hit our revenue goal?',
+    validateSpec({ metric: 'revenue', pacing: true }), id)
+  assert.equal(env.answer,
+    "No revenue goal is set for this month, so there's nothing to pace against yet.")
+  assert.equal(env.meta.pacing, null)
+  assert.deepEqual(env.rows, [])
+})
+
+test('pacing: unscoped with no client named → asks which client (goals are per-client)', async () => {
+  await ensurePortfolio()
+  const env = await pace('are we on track to hit goal?',
+    validateSpec({ metric: 'revenue', pacing: true }), null)
+  assert.equal(env.answer,
+    "Tell me which client to check — pacing is measured against one client's monthly goal.")
+  assert.equal(env.meta.pacing, null)
+})
+
+test('pacing: unscoped naming an unknown client → honest not-found', async () => {
+  await ensurePortfolio()
+  const env = await pace('is Nope on track?',
+    validateSpec({ metric: 'revenue', pacing: true, client_filter: 'Nope' }), null)
+  assert.equal(env.answer, 'I couldn\'t find a client named "Nope" to check pacing for.')
+  assert.equal(env.meta.pacing, null)
+})
+
+test('pacing: unscoped naming a known client resolves it and paces that one client', async () => {
+  await ensurePortfolio()
+  await seedPacing('PaceByName', { revenue: 100 }, { rev: 95 })
+  const spec = validateSpec({ metric: 'revenue', pacing: true, client_filter: 'PaceByName' })
+  const env  = await pace('is PaceByName on track to hit revenue goal?', spec, null)
+  assert.equal(env.meta.pacing.status, 'on_track')
+  assert.equal(env.meta.pacing.target, 100)
+  assert.equal(env.meta.row_count, 3)
+  // unscoped → the portfolio breakdown follow-up is allowed
+  assert.deepEqual(env.followups,
+    suggestFollowups(baseOf(spec), { hasComparison: false, allowClientBreakdown: true }))
+})
+
+test('validateSpec: pacing flag survives on a normal spec; forecast wins a tie', () => {
+  assert.equal(validateSpec({ metric: 'revenue', pacing: true }).pacing, true)
+  assert.equal(validateSpec({ metric: 'revenue' }).pacing, undefined)
+  // a plain projection with no goal mentioned is a forecast, not pacing — mutually exclusive
+  const both = validateSpec({ metric: 'revenue', pacing: true, forecast: true })
+  assert.equal(both.forecast, true)
+  assert.equal(both.pacing, undefined)
+})
+
+test('runAsk routes a goal/target question into the pacing branch (no narrate hop)', async () => {
+  await ensurePortfolio()
+  const id = await seedPacing('PaceRoute', { revenue: 100 }, { rev: 80 })
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({
+    metric: 'revenue', group_by: 'none', time_range: 'this_month', pacing: true,
+  })
+  onNarrate = () => { throw new Error('pacing must not call the narrate hop') }
+  const res = await runAsk('are we on track to hit our revenue goal this month?',
+    { now: NOW, scopeClientId: id })
+  assert.equal(res.spec.pacing, true)
+  assert.equal(res.meta.pacing.status, 'behind')
+  assert.equal(res.meta.pacing.target, 100)
+  assert.ok(res.answer.includes('behind pace'), res.answer)
   assert.equal(res.meta.explainable, false)
   delete process.env.ANTHROPIC_API_KEY
 })
