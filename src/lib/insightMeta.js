@@ -391,6 +391,43 @@ export function timeAgo(iso) {
   return `${Math.floor(days / 30)}mo ago`
 }
 
+// ── recap intelligence posture → the narrated week's strategic stance, presentation-ready ──
+// lib/intelDigest.js folds a small, CLIENT-SAFE "posture" digest into every recap's evidence
+// pack (evidence_pack.intelligence): how many findings are open and by what severity, which
+// areas the self-improving loop is actively re-strategising ("adjusting"), which ones measurably
+// cleared ("improving"), and the month's goal-pace split. The recap PROSE already narrates this
+// posture; this view pulls the same digest back out as structured chips so a surface can show it
+// at a glance beside the narrative — from the IDENTICAL numbers the narrator was grounded on, no
+// re-derivation. Every value is a small integer count or a metric label (never an efficacy %,
+// never a peer), exactly as the digest guarantees by construction (intelDigest.test.js pins it).
+// Returns null when the pack predates the digest OR carries no signal at all — the keystone
+// no-op, so a recap with nothing to say about posture renders as plain prose, unchanged.
+export function recapPosture(pack) {
+  const intel = pack && typeof pack === 'object' ? pack.intelligence : null
+  if (!intel || typeof intel !== 'object') return null
+  const count = (v) => Math.max(0, Math.trunc(Number(v) || 0))
+  const labelsOf = (block) =>
+    (block && Array.isArray(block.areas) ? block.areas : [])
+      .map((a) => a && a.label).filter(Boolean)
+  const sev    = intel.by_severity || {}
+  const pacing = intel.pacing || {}
+  const out = {
+    active:         count(intel.active),
+    critical:       count(sev.critical),
+    warning:        count(sev.warning),
+    adjusting:      labelsOf(intel.adjusting),          // metric labels we're re-strategising on
+    adjustingCount: count(intel.adjusting && intel.adjusting.count),
+    improving:      labelsOf(intel.improving),          // metric labels that cleared (wins)
+    improvingCount: count(intel.improving && intel.improving.count),
+    onTrack:        count(pacing.on_track),
+    atRisk:         count(pacing.at_risk),
+  }
+  const hasSignal =
+    out.active > 0 || out.adjustingCount > 0 || out.improvingCount > 0 ||
+    out.onTrack > 0 || out.atRisk > 0
+  return hasSignal ? out : null
+}
+
 function titleCase(s) {
   return String(s || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

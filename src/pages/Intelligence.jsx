@@ -11,7 +11,7 @@ import {
   precisionMeta, hasLearnedPrecision, precisionTooltip,
   forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue, attributionView,
   correlateView, impactsView, escalationView,
-  healthBandMeta, recoveryMeta, timeAgo,
+  healthBandMeta, recoveryMeta, timeAgo, recapPosture,
 } from '@/lib/insightMeta'
 
 /**
@@ -163,6 +163,23 @@ export default function Intelligence() {
           byBand={health.by_band}
           activeClient={clientFilter}
           onPick={(id) => { if (id) setClientFilter(c => (c === id ? 'all' : id)) }}
+        />
+      )}
+
+      {/* weekly AI recap — the grounded narrative for the client in focus. Reads the same
+          clientFilter the roster pivots, so picking a client (click or dropdown) turns "look
+          here first" into "and here's the AI's plain-English read of their week" in one motion.
+          Self-fetching + keyed on the client id so it remounts clean on every focus change; the
+          keystone no-op is the all-clients view, where it simply isn't rendered. */}
+      {clientFilter !== 'all' && (
+        <WeeklyRecapPanel
+          key={clientFilter}
+          clientId={clientFilter}
+          clientName={
+            health?.roster?.find(r => r.client_id === clientFilter)?.client_name ||
+            clients.find(c => c.id === clientFilter)?.name ||
+            'this client'
+          }
         />
       )}
 
@@ -353,6 +370,178 @@ function StatCard({ label, value, tone, active, onClick }) {
       </div>
       <p className={cn('mt-1.5 text-3xl font-black tabular-nums leading-none', value > 0 ? t.v : 'text-slate-300')}>{value}</p>
     </button>
+  )
+}
+
+/* ── weekly AI recap — the grounded narrative for the client in focus ──────────
+   The whole intelligence stack on this page is per-FINDING and per-CLIENT scoring;
+   this is the one surface where the autonomous analyst speaks in plain English. It
+   reads GET /api/ai/recap/:clientId — the verifier-checked narration of that client's
+   most recently completed week, whose evidence pack now carries the intelligence
+   posture digest (lib/intelDigest.js). The recap layer degrades to a deterministic
+   template when no API key is set, so there's no missing-key state to handle — only
+   load / error. Self-fetching so the roster stays a single read; a "Regenerate" forces
+   a fresh narration + re-verify in place. Grounded means every number in the prose was
+   checked against the same evidence the rest of the page is scored from. */
+function WeeklyRecapPanel({ clientId, clientName }) {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [recap, setRecap]   = useState(null)
+  const [error, setError]   = useState('')
+  const [busy, setBusy]     = useState(false)        // a Regenerate in flight
+
+  const fetchRecap = useCallback(async (regen) => {
+    if (regen) { setBusy(true) } else { setStatus('loading'); setError('') }
+    try {
+      const r = regen ? await api.regenerateRecap(clientId) : await api.getRecap(clientId)
+      setRecap(r); setStatus('done'); setError('')
+    } catch (e) {
+      if (regen) setError(e?.message || 'Regenerate failed')
+      else { setError(e?.message || 'Could not load the recap'); setStatus('error') }
+    } finally { setBusy(false) }
+  }, [clientId])
+
+  useEffect(() => { fetchRecap(false) }, [fetchRecap])
+
+  const posture  = status === 'done' && recap ? recapPosture(recap.evidence_pack) : null
+  const period   = recap?.evidence_pack?.period?.label || recap?.week_start || ''
+  const text     = (recap?.recap_text || '').trim()
+  const grounded = !!recap?.grounded
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Sparkles className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">This week, in plain English</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">{clientName}</p>
+        </div>
+        {status === 'done' && (
+          grounded ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+              <ShieldCheck className="w-3 h-3" /> AI-verified
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+              <AlertTriangle className="w-3 h-3" /> Unverified draft
+            </span>
+          )
+        )}
+        <button
+          onClick={() => fetchRecap(true)}
+          disabled={busy || status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Regenerate
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Reading the week…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load the recap'}</p>
+            <button
+              onClick={() => fetchRecap(false)}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && (
+          <>
+            {period && (
+              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                <Clock className="w-3 h-3" /> {period}
+              </div>
+            )}
+            {text ? (
+              <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{text}</p>
+            ) : (
+              <p className="text-sm text-slate-400 italic">No recap text for this week yet.</p>
+            )}
+            {error && (
+              <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-rose-500">
+                <AlertTriangle className="w-3 h-3" /> {error}
+              </p>
+            )}
+            {posture && <RecapPostureStrip p={posture} />}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Written by the analyst from the same verified numbers the rest of this page is scored from.
+          {recap?.model ? ` Model ${recap.model}.` : ''}
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* The posture strip — a compact "where things stand now" read of the recap's
+   intelligence digest, the same self-improving signals the feed exposes per-finding,
+   rolled to client level: how many findings are open (and the critical/warning split),
+   which areas the loop is actively re-strategising, which measurably cleared, and the
+   goal-pace split. Every chip is conditional, so a quiet week renders nothing. */
+function RecapPostureStrip({ p }) {
+  return (
+    <div className="mt-4 pt-3 border-t border-slate-50">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Where things stand now</p>
+      <div className="flex flex-wrap gap-1.5">
+        {p.active > 0 && (
+          <PostureChip
+            icon={Radar} tone="slate" label={`${p.active} open`}
+            detail={[p.critical ? `${p.critical} critical` : '', p.warning ? `${p.warning} warning` : '']
+              .filter(Boolean).join(' · ')}
+          />
+        )}
+        {p.adjustingCount > 0 && (
+          <PostureChip
+            icon={SlidersHorizontal} tone="amber" label={`Adjusting ${p.adjustingCount}`}
+            detail={p.adjusting.join(', ')}
+          />
+        )}
+        {p.improvingCount > 0 && (
+          <PostureChip
+            icon={ArrowUpCircle} tone="emerald" label={`Improving ${p.improvingCount}`}
+            detail={p.improving.join(', ')}
+          />
+        )}
+        {p.onTrack > 0 && (
+          <PostureChip icon={Target} tone="emerald" label={`${p.onTrack} on pace`} />
+        )}
+        {p.atRisk > 0 && (
+          <PostureChip icon={TrendingDown} tone="rose" label={`${p.atRisk} off pace`} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+const POSTURE_TONES = {
+  slate:   'text-slate-600 bg-slate-50 border-slate-200',
+  amber:   'text-amber-700 bg-amber-50 border-amber-200',
+  emerald: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  rose:    'text-rose-700 bg-rose-50 border-rose-200',
+}
+function PostureChip({ icon: Icon, tone, label, detail }) {
+  return (
+    <span className={cn('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold', POSTURE_TONES[tone] || POSTURE_TONES.slate)}>
+      <Icon className="w-3 h-3 shrink-0" />{label}
+      {detail ? <span className="font-medium opacity-70">· {detail}</span> : null}
+    </span>
   )
 }
 

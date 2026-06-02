@@ -137,6 +137,16 @@ export const api = {
   getLatestReport: (clientId)     => get(`/api/reports/${clientId}/latest`),
   // Ask-your-data (Sprint 2): natural-language portfolio questions
   ask,
+  // Weekly AI recap (intel-v5): the grounded, verifier-checked narration of a client's most
+  // recently completed week — now carrying the intelligence-posture digest folded into its
+  // evidence pack (lib/intelDigest.js). getRecap() READS it, generating on the first miss for
+  // a (client, week) then serving the cached row cheaply thereafter (the same row the Monday
+  // email already pre-warmed); regenerateRecap() forces a fresh narration + re-verify — the
+  // in-app "Regenerate" button. `week` is an optional Monday 'YYYY-MM-DD'; omit for the most
+  // recent completed week. The route returns the recap row DIRECTLY (recap_text / grounded /
+  // model / week_start / evidence_pack), not wrapped in an envelope.
+  getRecap:        (clientId, week) => get(`/api/ai/recap/${clientId}${week ? `?week=${week}` : ''}`),
+  regenerateRecap: (clientId, week) => post(`/api/ai/recap/${clientId}`, week ? { week } : {}),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),
