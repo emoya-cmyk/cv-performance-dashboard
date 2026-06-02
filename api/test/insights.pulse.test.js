@@ -40,7 +40,7 @@ for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } c
 process.env.SQLITE_PATH = DB_PATH
 
 const db = require('../db')
-const { getClientPulse, getPortfolioPulse, loadDailySeries } = require('../lib/insights')
+const { getClientPulse, getPortfolioPulse, loadDailySeries, clientSafePulse } = require('../lib/insights')
 // The pure triage contract (severity×confidence → priority/lane/reason), unit-tested
 // exhaustively in pulseTriage.test.js. Here we only assert the ENGINE emits exactly
 // what these produce for its own signals — i.e. the wiring is faithful, not a re-impl.
@@ -670,4 +670,111 @@ test('getClientPulse: an UNGRADED own-history tunes to the canonical band — no
   assert.equal(sig.tuning, undefined)
   assert.equal(sig.tuning_note, undefined)
   assert.equal(sig.tuning_client_note, undefined)
+})
+
+// ── 6d: clientSafePulse — the CLIENT-EGRESS machinery strip ───────────────────────
+// 6b above proved the ENGINE attaches the self-tuning controller's OUTPUT (sig.tuning +
+// the agency-toned sig.tuning_note) to an earned signal and never stamps a client-toned
+// variant. 6d proves the COMPLEMENTARY, surface-facing half of the contract: at the
+// client-shared GET /:clientId egress the dial is stripped from the WIRE — not merely
+// unread by the client UI — while the EFFECT (the live signal already fired at the tuned
+// band) rides through whole. The pure helper is tested hermetically first; the end-to-end
+// test then runs it over the very proven/sensitized pulse the engine actually produces.
+test('clientSafePulse: strips EVERY tuning* key from each signal, leaves all else byte-identical, is pure, and no-ops BY REFERENCE when there is nothing to strip', () => {
+  // a tuned signal (the 6b shape) beside an untuned one, carrying the dual-toned observation
+  // fields the client surface actually reads — the strip must take the dial and ONLY the dial,
+  // including a hypothetical FUTURE tuning_* key (the prefix match is fail-closed).
+  const tunedSig = {
+    metric: 'leads', label: 'Leads', adverse: true, severity: 'critical', delta_pct: -80,
+    message: 'AGENCY: leads cratered', client_message: 'Your leads are well below your usual week.',
+    reliability_client_note: 'This alert has held up before.', accuracy_client_note: 'We tend to catch this early.',
+    diagnosis: { drivers: [] }, diagnosis_client_message: 'Mostly fewer form fills.',
+    triage_client_reason: 'Worth a look today.',
+    tuning: { status: 'tuned', factor: 0.9, direction: 'sensitize', warn: 1.8, crit: 2.7, base_warn: 2, base_crit: 3, precision: 0.9, label: 'proven' },
+    tuning_note: "Leads early-warnings here have proven out — it's earned a lighter trigger.",
+    tuning_debug: { raw: 1 },
+  }
+  const plainSig = { metric: 'revenue', label: 'Revenue', adverse: false, severity: 'normal', delta_pct: 3, client_message: 'Revenue is right where it usually sits.' }
+  const pulse = { as_of: '2026-06-01', window: 7, lookback_days: 63, signals: [tunedSig, plainSig] }
+
+  const safe = clientSafePulse(pulse)
+
+  // a NEW envelope (a strip happened), same scalar envelope fields preserved.
+  assert.notEqual(safe, pulse)
+  assert.equal(safe.as_of, pulse.as_of)
+  assert.equal(safe.window, pulse.window)
+  assert.equal(safe.lookback_days, pulse.lookback_days)
+  assert.equal(safe.signals.length, 2)
+
+  // the tuned signal: EVERY tuning* key gone (object, note, AND the future-proofed extra),
+  // and not one client-readable field disturbed — byte-identical minus the dial.
+  const cTuned = safe.signals[0]
+  assert.equal(Object.keys(cTuned).some(k => k.startsWith('tuning')), false)
+  assert.equal(cTuned.tuning, undefined)
+  assert.equal(cTuned.tuning_note, undefined)
+  assert.equal(cTuned.tuning_debug, undefined)
+  const { tuning, tuning_note, tuning_debug, ...expectedTuned } = tunedSig
+  assert.deepEqual(cTuned, expectedTuned)
+
+  // PURITY: the input signal still carries its full machinery — the agency roster reads the
+  // same underlying objects and must be unharmed.
+  assert.ok(tunedSig.tuning && tunedSig.tuning_note && tunedSig.tuning_debug, 'input untouched')
+
+  // NO-OP BY REFERENCE: an untouched signal is returned as the SAME object (cheap + byte-
+  // identical for the common, untuned client) even when a sibling did get stripped.
+  assert.equal(safe.signals[1], plainSig)
+})
+
+test('clientSafePulse: a null / signal-less / all-untuned pulse passes through verbatim (same reference — a strip allocates only when earned)', () => {
+  assert.equal(clientSafePulse(null), null)
+  assert.equal(clientSafePulse(undefined), undefined)
+  const noSignals = { as_of: '2026-06-01', window: 7 }
+  assert.equal(clientSafePulse(noSignals), noSignals)               // signals not an array → untouched
+  const emptySignals = { as_of: '2026-06-01', signals: [] }
+  assert.equal(clientSafePulse(emptySignals), emptySignals)         // nothing to strip → same ref
+  const clean = { signals: [{ metric: 'leads', client_message: 'ok' }, { metric: 'spend', client_message: 'ok' }] }
+  assert.equal(clientSafePulse(clean), clean)                        // all-untuned roster → same ref
+})
+
+test('clientSafePulse over a PROVEN/sensitized client: the EFFECT (the tuned-band warning) reaches the client envelope while the calibration machinery is stripped from the WIRE', async () => {
+  await ready()
+  const c = await freshClient('Egress-Safe Tuning Co')
+  // the SAME sustained drop that earns a sensitized trigger in the 6b engine test above.
+  await seedDaily(c, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+
+  // what the AGENCY roster reads (getPortfolioPulse spreads this very per-client result).
+  const agencyPulse = await getClientPulse(c, { asOf: ASOF })
+  const aSig = agencyPulse.signals.find(s => s.metric === 'leads')
+  assert.ok(aSig, 'the sustained drop fires')
+  // the sensor was genuinely RETUNED — else the egress test is vacuous.
+  assert.ok(aSig.tuning && aSig.tuning.direction === 'sensitize', 'agency carries the earned dial')
+  assert.ok(aSig.tuning.warn < aSig.tuning.base_warn, 'the live band actually moved lighter')
+  assert.ok(aSig.tuning_note, 'agency carries the why')
+
+  // what GET /:clientId serves.
+  const clientPulse = clientSafePulse(agencyPulse)
+  const cSig = clientPulse.signals.find(s => s.metric === 'leads')
+  assert.ok(cSig, 'the SAME signal reaches the client')
+
+  // EFFECT flows through: this signal already fired at the tuned band, and the client-facing
+  // read of it is intact — the grounded sentence, the magnitude, and the foresight note ride.
+  assert.equal(cSig.client_message, aSig.client_message)
+  assert.ok(cSig.client_message, 'the client gets the grounded warning')
+  assert.equal(cSig.severity, aSig.severity)
+  assert.equal(cSig.delta_pct, aSig.delta_pct)
+  assert.equal(cSig.accuracy_client_note, aSig.accuracy_client_note)
+
+  // MACHINERY stripped WHOLE from the wire: not one tuning* key survives on the client signal.
+  assert.equal(Object.keys(cSig).some(k => k.startsWith('tuning')), false)
+  assert.equal(cSig.tuning, undefined)
+  assert.equal(cSig.tuning_note, undefined)
+  assert.equal(cSig.tuning_client_note, undefined)
+
+  // and no client-readable string SMUGGLES the dial: the agency tuning_note text appears
+  // nowhere in the serialized client signal.
+  assert.equal(JSON.stringify(cSig).includes(aSig.tuning_note), false)
+
+  // PURITY: the agency object the roster still reads is unharmed by the client projection.
+  const agencyAfter = agencyPulse.signals.find(s => s.metric === 'leads')
+  assert.ok(agencyAfter.tuning && agencyAfter.tuning_note, 'agency machinery intact after the strip')
 })

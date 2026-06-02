@@ -80,7 +80,7 @@ const {
   getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
-  getPortfolioPulse, getClientPulse,
+  getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -492,7 +492,10 @@ router.get('/:clientId', async (req, res) => {
       // "anything cratering RIGHT NOW?" — this client's own intra-week pulse: flow metrics whose
       // trailing-week level is outside its own recent band today, days before the ISO week closes.
       // Own numbers only; the client view reads each signal's client_message, the agency card message.
-      pulse,
+      // clientSafePulse strips the self-tuning machinery (sig.tuning*) from this client-shared
+      // envelope: the EFFECT (the signal already fired at the tuned band) rides through, the dial
+      // never egresses — machinery-free on the WIRE, not merely unread by the client UI.
+      pulse: clientSafePulse(pulse),
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)

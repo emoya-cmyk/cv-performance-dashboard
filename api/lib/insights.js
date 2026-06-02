@@ -2548,6 +2548,36 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
   return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(enriched) }
 }
 
+// clientSafePulse(pulse) - the CLIENT-EGRESS projection of a getClientPulse result. getClientPulse
+// attaches the self-tuning controller's OUTPUT to every earned signal - sig.tuning (the moved band,
+// factor, precision) + the agency-toned sig.tuning_note - because the AGENCY roster (getPortfolioPulse
+// -> GET /pulse) renders that calibration chip. Unlike every other agency-toned field on a signal
+// (message / reliability_note / accuracy_note / diagnosis_message / triage_reason), tuning is the ONE
+// that is pure MACHINERY with no client-toned counterpart by design: narratePulseTuning refuses a
+// client audience outright, so there is deliberately no tuning_client_note to carry. That asymmetry is
+// exactly why tuning - and only tuning - is stripped here when the SAME per-client pulse is served on
+// the client-shared GET /:clientId envelope. The EFFECT is untouched: the live signal already fired at
+// the TUNED band (an earlier, or quieter, warning), and every client-readable field rides through. The
+// client feels the calibrated sensor; the dial never reaches them - not just unread by the UI, ABSENT
+// from the wire. The strip is a fail-closed prefix match, so any future tuning_* field is agency-only
+// on this egress for free. Pure: returns a new object only when a strip is needed, else the SAME
+// reference (byte-identical for clients with no earned tuning). A null / signal-less pulse passes
+// through verbatim.
+function clientSafePulse(pulse) {
+  if (!pulse || !Array.isArray(pulse.signals)) return pulse
+  let stripped = false
+  const signals = pulse.signals.map((s) => {
+    if (!s || typeof s !== 'object') return s
+    const keys = Object.keys(s)
+    if (!keys.some((k) => k.startsWith('tuning'))) return s
+    stripped = true
+    const safe = {}
+    for (const k of keys) if (!k.startsWith('tuning')) safe[k] = s[k]
+    return safe
+  })
+  return stripped ? { ...pulse, signals } : pulse
+}
+
 // getPortfolioPulse(opts) - the PORTFOLIO intra-week pulse roster (AGENCY-ONLY): every client with a
 // FLOW metric outside its own band right now, flattened into one worst-first stream, each row tagged
 // with client_name - the "who needs a look before Monday?" capstone over the daily grain. Like the
@@ -2673,5 +2703,5 @@ module.exports = {
   // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
   // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
   // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.
-  loadDailySeries, getClientPulse, getPortfolioPulse,
+  loadDailySeries, getClientPulse, getPortfolioPulse, clientSafePulse,
 }

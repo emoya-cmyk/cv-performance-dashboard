@@ -1028,6 +1028,15 @@ function ClientPulseRow({ s }) {
               {s.accuracy_client_note}
             </p>
           )}
+          {/* The self-tuning layer (intel-v7 6) deliberately renders NOTHING here. The client
+              feels its EFFECT — this signal already fired at the calibrated band, so it's an
+              earlier (or quieter) warning, and the foresight note just above says "we catch
+              shifts like this early." But the dial itself — the factor, the moved band, the
+              precision — is agency-only machinery with no client-toned counterpart by design.
+              The contract is enforced upstream, not by omission here: narratePulseTuning refuses
+              a client audience (returns ''), and clientSafePulse strips every tuning* key from
+              the GET /:clientId envelope, so the machinery is absent from the WIRE, not merely
+              unread by this row. TRIPWIRE: never wire a tuning_* field into this client row. */}
         </div>
         {deltaStr != null && (
           <div className="shrink-0 text-right">
