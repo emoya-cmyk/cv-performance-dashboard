@@ -126,6 +126,18 @@ const { rankEarlyWarnings } = require('./trajectory')
 // See lib/pacing.js — numbers in, verdict out (the engine supplies the real clock below).
 const { classifyPacing, rankPacing } = require('./pacing')
 
+// Action→recovery efficacy (PURE): the recommendation layer (recommendedAction) proposes a
+// PLAY for every adverse finding; the recovery classifier (lib/outcomes) later proves whether
+// that finding's problem RECOVERED or merely LAPSED. Those two organs were never connected —
+// we proposed actions and, separately, recorded wins, but never learned which PLAYS work.
+// efficacyTable closes the loop: pooled across the whole book it learns, per play archetype
+// (kind::metric), the rate the recommended action actually CLEARED the problem — Beta-Bernoulli
+// shrunk toward the pooled base rate, ranked by a Wilson 95% lower bound so a deep 9/10 outranks
+// a lucky 1/1 — plus the median days-to-recovery. Pooled + ANONYMOUS (a rate names no client) →
+// both an agency "which plays earn their place" board AND a client-safe note a recommendation
+// can carry ("this play has cleared it 73% of the time, usually within 2 days"). See lib/efficacy.
+const { efficacyTable } = require('./efficacy')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -1731,6 +1743,76 @@ async function getPortfolioRecoveries({ limit = 50, days = RECOVERY_WINDOW_DAYS 
   return rows.map(normalizeRecoveryRow).sort(recoverySort).slice(0, limit)
 }
 
+// Normalize a stored timestamp to epoch-ms, bridging the two backends. Postgres hands
+// back a Date; the SQLite shim hands back text. `recovered_at` is written as ISO-Zulu
+// (lib/insights stamps it), but `first_seen` takes the column DEFAULT CURRENT_TIMESTAMP,
+// which under SQLite is 'YYYY-MM-DD HH:MM:SS' — space-separated, UTC, NO zone. Date.parse
+// reads that bare form as LOCAL time, so diffing it against a Zulu stamp would smuggle the
+// host's UTC offset into every duration. We detect that exact shape and pin it to Zulu
+// first. Returns null on anything unparseable so a bad row drops out of the median, never
+// poisons it.
+function stampMs(v) {
+  if (v == null) return null
+  let s
+  if (typeof v === 'string') {
+    s = v.trim()
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) s = s.replace(' ', 'T') + 'Z'
+  } else {
+    try { s = new Date(v).toISOString() } catch { return null }
+  }
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? t : null
+}
+
+// Days a finding took to recover = recovered_at − first_seen, in whole+fractional days.
+// Computed in JS (not SQL) so it's identical across Postgres Date objects and SQLite text.
+// A negative span (clock skew, manual backfill) is rejected rather than fed as a 0 — an
+// impossible duration is missing data, not an instant recovery.
+function daysToRecovery(firstSeen, recoveredAt) {
+  const a = stampMs(firstSeen), b = stampMs(recoveredAt)
+  if (a == null || b == null) return null
+  const d = (b - a) / DAY_MS
+  return Number.isFinite(d) && d >= 0 ? d : null
+}
+
+// Portfolio EFFICACY LEDGER: does the recommended PLAY actually fix the problem? The
+// recommendation layer (recommendedAction) attaches a play to every adverse finding; the
+// recovery classifier (lib/outcomes) later stamps whether that finding RECOVERED or merely
+// LAPSED. This is the join that was missing — pooled across the whole book it learns, per
+// play archetype (kind::metric), the rate the action genuinely CLEARED the problem and how
+// fast. lib/efficacy does the pure Beta-Bernoulli shrink toward the pooled base rate and the
+// Wilson lower-bound ranking; here we only supply decided samples.
+//
+// MEASURED-ONLY by construction — the WHERE clause is the whole argument. We sample ONLY
+// kind IN ('anomaly','trend','coverage_gap'): precisely the kinds classifyRecovery can ever
+// mark 'recovered' (anomaly/trend return-to-baseline, coverage_gap channel-reconnect).
+// forecast / pacing / benchmark / data_health lapse BY CONSTRUCTION — they're never re-
+// measured for recovery — so counting their expiries as failures would slander plays that
+// simply aren't recovery-testable. Absence of proof is never proof of failure. A 'recovered'
+// row is a success; an 'expired' row of a recoverable kind is a true failure (it was testable
+// and didn't clear). days_to_recovery is computed only for the successes that have both stamps.
+//
+// AGENCY-SAFE because a rate names no client: the full ranked table is cross-tenant-clean, and
+// so is any single play's note — which is exactly what lets 1c reuse one play's efficacy on a
+// client-facing surface. Empty/thin book → efficacyTable still returns a coherent base + [].
+async function getPortfolioEfficacy(opts = {}) {
+  const { rows } = await query(
+    `SELECT kind, metric, status, first_seen, recovered_at
+       FROM insights
+      WHERE scope = 'client'
+        AND status IN ('recovered', 'expired')
+        AND kind IN ('anomaly', 'trend', 'coverage_gap')`
+  )
+  const samples = rows.map(r => ({
+    kind:             r.kind,
+    metric:           r.metric == null ? null : r.metric,
+    status:           r.status,
+    days_to_recovery: r.status === 'recovered' ? daysToRecovery(r.first_seen, r.recovered_at) : null,
+  }))
+  const { ranked, base } = efficacyTable(samples, opts)
+  return { base, plays: ranked }
+}
+
 // Portfolio TRIAGE ROSTER: every client rolled into one health score, ranked
 // worst-first. Where the feed above is a flat stream of individual findings (the
 // grain for "what is wrong"), this is the grain for the question asked first every
@@ -2180,6 +2262,8 @@ module.exports = {
   getPortfolioBenchmarks, getClientStanding,
   // cross-client common-cause detection (agency-only — names other clients + book share)
   getPortfolioSystemic,
+  // action→recovery efficacy (does the recommended play actually fix it; pooled, anonymous)
+  getPortfolioEfficacy,
   // predictive early-warning (agency-only): per-sweep health snapshot + forward-looking roster
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)

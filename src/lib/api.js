@@ -190,6 +190,17 @@ export const api = {
   // getSystemic/getTrajectory) it never rides getClientInsights() — a client's OWN pace rides
   // inside getClientInsights() (.pacing), own numbers only. No params (current month, clock = now).
   getPacing:          ()         => get('/api/insights/pacing'),
+  // getEfficacy() → portfolio EFFICACY LEDGER: the self-improving grain — does the recommended PLAY
+  // actually fix the problem? Per play archetype (kind::metric), the measured recovery rate (shrunk
+  // toward the pooled base rate, ranked by a Wilson lower bound so a deep 9/10 beats a lucky 1/1) plus
+  // the median days-to-recovery — how the system learns which of its OWN advice earns its place. Pooled
+  // + ANONYMOUS (a rate names no client). Optional { priorWeight } (shrink strength, 0..100; default 6).
+  getEfficacy:        (opts = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.priorWeight != null) qs.set('priorWeight', String(opts.priorWeight))
+    const q = qs.toString()
+    return get(`/api/insights/efficacy${q ? `?${q}` : ''}`)
+  },
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

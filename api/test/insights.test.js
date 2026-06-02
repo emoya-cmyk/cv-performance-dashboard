@@ -55,6 +55,8 @@ const {
   getRecentRecoveries, getPortfolioRecoveries,
   // cross-client common-cause (agency-only): the systemic scan over the active book.
   getPortfolioSystemic,
+  // action→recovery efficacy (pooled, anonymous): does the recommended play actually fix it.
+  getPortfolioEfficacy,
   // predictive early-warning (agency-only): persist the per-sweep health series, read it forward.
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + a client's OWN per-metric
@@ -1538,6 +1540,72 @@ test('recoveries (read): getRecentRecoveries + getPortfolioRecoveries surface th
     'a 60-day-old fix is outside the default 30-day window')
   assert.equal((await getRecentRecoveries(c, { days: 90 })).length, 1,
     'widen the window and the aged fix returns')
+})
+
+// ── efficacy ledger (read): getPortfolioEfficacy joins recommendation→recovery ──
+// The 1a module (efficacy.test.js) exhaustively tests the pure math; this is the 1b
+// WIRING proof — that the engine read pulls the right rows out of the live DB, computes
+// days-to-recovery across the two timestamp backends, and hands lib/efficacy a clean
+// sample set. It pins the three things only the wiring can get wrong:
+//   1. the WHERE discipline — ONLY kind IN (anomaly,trend,coverage_gap) AND status IN
+//      (recovered,expired) become samples; a forecast (un-re-measurable, lapses by
+//      construction) and an still-open finding must NOT count, or plays get slandered;
+//   2. the success/failure split — a 'recovered' row is a win, an 'expired' recoverable
+//      row is a real loss, pooled per play archetype (kind::metric);
+//   3. days_to_recovery = recovered_at − first_seen, computed in JS and fed to the median.
+// Pooled across the whole book and anonymous (a play names no client), so to stay immune
+// to whatever rows sibling tests leave in the shared DB we probe a SYNTHETIC metric the
+// engine never emits — isolating this play's counts while the real base rate flows around it.
+test('efficacy (read): getPortfolioEfficacy samples only recoverable decided findings, splits win/loss, and times the recovery', async () => {
+  await ready()
+  const c = await freshClient('Efficacy Labs Co')
+  const PROBE = 'zz_eff_probe'   // synthetic metric → playKey 'anomaly::zz_eff_probe' is ours alone
+
+  // Controlled rows, inserted straight to the grain the read pools over. Timestamps are in
+  // the SQLite CURRENT_TIMESTAMP shape (space-separated, no zone) on BOTH stamps of each
+  // row, so the day-diff is offset-immune across Postgres and the shim (the zones cancel)
+  // AND exercises stampMs's normalization branch. fingerprints are globally unique (the
+  // table's ON CONFLICT arbiter). Two wins (2d, 4d → median 3), one loss; then two rows the
+  // WHERE must reject: a non-recoverable kind, and a still-open finding.
+  const ins = (fp, kind, status, first, recovered) => db.query(
+    `INSERT INTO insights (client_id, scope, kind, metric, severity, title, fingerprint, status, first_seen, recovered_at)
+     VALUES ($1, 'client', $2, $3, 'warning', $4, $5, $6, $7, $8)`,
+    [c, kind, PROBE, `probe ${fp}`, fp, status, first, recovered])
+
+  await ins('eff-win-1',  'anomaly',  'recovered', '2026-05-01 00:00:00', '2026-05-03 00:00:00') // +2d
+  await ins('eff-win-2',  'anomaly',  'recovered', '2026-05-01 00:00:00', '2026-05-05 00:00:00') // +4d
+  await ins('eff-loss-1', 'anomaly',  'expired',   '2026-05-01 00:00:00', null)                  // real loss
+  await ins('eff-excl-k', 'forecast', 'expired',   '2026-05-01 00:00:00', null)                  // kind excluded
+  await ins('eff-excl-s', 'anomaly',  'open',      '2026-05-01 00:00:00', null)                  // status excluded
+
+  const out = await getPortfolioEfficacy({ priorWeight: 0 })
+
+  // Shape contract the route depends on: { base:{rate,n,prior}, plays:[...] }.
+  assert.ok(out && typeof out.base === 'object' && out.base !== null, 'base summary present')
+  assert.ok(Array.isArray(out.plays), 'plays is the ranked array')
+  assert.ok(Number.isFinite(out.base.n) && out.base.n >= 3, 'base.n counts at least our 3 decided samples')
+
+  // OUR play, isolated by the synthetic metric: 2 wins + 1 loss, raw rate 2/3, median 3 days.
+  const p = out.plays.find(x => x.play === `anomaly::${PROBE}`)
+  assert.ok(p, 'the probed play is ranked')
+  assert.equal(p.n, 3,         'decided denominator = 2 wins + 1 loss (open + forecast excluded)')
+  assert.equal(p.successes, 2)
+  assert.equal(p.failures, 1)
+  assert.equal(p.recovery_rate, 0.667, 'raw recovery rate 2/3, round3')
+  approx(p.median_days, 3, 1e-9)            // median of {2,4} days-to-recovery
+
+  // The WHERE discipline: neither excluded row produced a play of its own.
+  assert.equal(out.plays.find(x => x.play === `forecast::${PROBE}`), undefined,
+    'a non-recoverable kind never enters the efficacy sample')
+  assert.equal(out.plays.find(x => x.play === `anomaly::${PROBE}` && x.n !== 3), undefined,
+    'the still-open finding did not inflate the denominator')
+
+  // priorWeight reaches the lib: with the default (6) the rate shrinks toward base, but the
+  // raw count/rate is untouched — proving the param is wired, not that the math re-derives.
+  const shrunk = (await getPortfolioEfficacy()).plays.find(x => x.play === `anomaly::${PROBE}`)
+  assert.equal(shrunk.recovery_rate, 0.667, 'raw rate is prior-independent')
+  assert.ok(Number.isFinite(shrunk.efficacy) && shrunk.efficacy >= 0 && shrunk.efficacy <= 1,
+    'shrunk efficacy is a valid probability')
 })
 
 // ============================================================

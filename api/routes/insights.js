@@ -77,6 +77,7 @@ const {
   getPortfolioBenchmarks, getClientStanding,
   getRecentRecoveries, getPortfolioRecoveries,
   getPortfolioSystemic,
+  getPortfolioEfficacy,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
   ackInsight, resolveInsight,
@@ -139,6 +140,17 @@ function parseHorizon(raw) {
   const n = Number(raw)
   if (!Number.isFinite(n) || n < 1) return null
   return Math.min(Math.floor(n), 52)
+}
+
+// Clamp ?priorWeight (efficacy: pseudo-count strength of the Beta-Bernoulli shrink toward the
+// pooled base rate) to 0..100; undefined/invalid → null so the lib default (PRIOR_WEIGHT=6)
+// stands. 0 is a legitimate value (no shrink — raw rates), so it must survive the floor; only
+// negative/non-finite is rejected. Same string-coercion rationale as the other parsers.
+function parsePriorWeight(raw) {
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.min(n, 100)
 }
 
 // Insights FK-reference clients(id); a sweep for an unknown client would trip the
@@ -298,6 +310,33 @@ router.get('/pacing', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET pacing error', err.message)
     res.status(500).json({ error: 'Failed to load pacing roster' })
+  }
+})
+
+// ── GET /api/insights/efficacy ────────────────────────────────────────────────
+// Portfolio EFFICACY LEDGER: the self-improving grain — does the recommended PLAY actually
+// fix the problem? Every adverse finding ships with a recommendedAction; the recovery
+// classifier later proves whether that finding cleared or merely lapsed. This endpoint joins
+// the two across the whole book and returns, per play archetype (kind::metric), the measured
+// recovery rate (Beta-Bernoulli shrunk toward the pooled base rate, ranked by a Wilson 95%
+// lower bound so a deep 9/10 outranks a lucky 1/1) plus the median days-to-recovery. It is
+// how the system learns which of its OWN advice earns its place — the loop that lets the next
+// recommendation carry a track record ("this play has cleared it 73% of the time, ~2 days").
+// Pooled + ANONYMOUS: a rate names no client, so unlike /systemic this isn't a cross-tenant
+// disclosure — but it's mounted here beside the agency reads because the full ranked TABLE is
+// an agency-operations view; 1c lifts a single play's note onto the client surface. Declared
+// before the :clientId route so the literal "efficacy" can never be captured as a client id.
+// Optional ?priorWeight (shrink strength, 0..100; default 6; 0 = raw rates, no shrink).
+router.get('/efficacy', async (req, res) => {
+  try {
+    const opts = {}
+    const pw = parsePriorWeight(req.query.priorWeight)
+    if (pw != null) opts.priorWeight = pw
+    const out = await getPortfolioEfficacy(opts)
+    res.json({ ...out, count: out.plays.length })
+  } catch (err) {
+    console.error('[insights] GET efficacy error', err.message)
+    res.status(500).json({ error: 'Failed to load efficacy ledger' })
   }
 })
 
