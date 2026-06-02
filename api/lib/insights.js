@@ -111,6 +111,13 @@ const { diagnoseComposite, narratePulseDiagnosis } = require('./pulseDiagnose')
 // the record is too thin to grade, leaving the signal byte-identical. Both pulse reads
 // inherit these via the `...s` spread — no route change. See lib/pulseReliability.js.
 const { pulseReliability, narratePulseReliability } = require('./pulseReliability')
+// The DECISION on top of severity (dayPulse) × confidence (pulseReliability):
+// rankPulseSignals folds those two axes into one deterministic priority + action lane,
+// so a reliable Warning outranks a noisy Critical. PURE; enriches each signal with
+// { priority, lane, triage_reason, triage_client_reason } and (when ranking a feed)
+// priority_rank. getClientPulse adds the intrinsic fields per signal; getPortfolioPulse
+// adds the ranked "Act today" feed. See lib/pulseTriage.js.
+const { rankPulseSignals } = require('./pulseTriage')
 
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
@@ -2432,7 +2439,22 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
     }
     signals.push(sig)
   }
-  return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(signals) }
+  // The "what to do about it": fold each signal's severity (dayPulse) × learned
+  // confidence (pulseReliability) into one priority + action lane, and attach the
+  // INTRINSIC triage fields to the signal it belongs to (priority/lane/reason — NOT
+  // priority_rank, which is a feed-position and would be meaningless on a single
+  // client's per-metric list). The array stays worst-first by rankPulse (severity×|z|,
+  // the order the per-client UI and its tests expect); triage adds an orthogonal,
+  // self-improving "act today vs monitor" read on top, byte-additive — both reads
+  // (GET /pulse roster via `...s`, GET /:clientId `pulse`) inherit it with no route change.
+  const triaged = new Map(rankPulseSignals(signals).map((r) => [r.metric, r]))
+  const enriched = signals.map((s) => {
+    const t = triaged.get(s.metric)
+    return t
+      ? { ...s, priority: t.priority, lane: t.lane, triage_reason: t.triage_reason, triage_client_reason: t.triage_client_reason }
+      : s
+  })
+  return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(enriched) }
 }
 
 // getPortfolioPulse(opts) - the PORTFOLIO intra-week pulse roster (AGENCY-ONLY): every client with a
@@ -2453,7 +2475,16 @@ async function getPortfolioPulse({ asOf, lookbackDays = PULSE_LOOKBACK_DAYS, win
       for (const s of signals) roster.push({ client_id: String(c.id), client_name: c.name, ...s })
     } catch { /* atomic grain unavailable / brand-new client -> skip, keep the rest of the roster */ }
   }
-  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster) }
+  // `roster` stays the full worst-first stream (every firing, tailwinds included — the
+  // order /pulse and its tests expect). `act_today` is the agency morning-triage feed
+  // ON TOP of it: the SAME rows, dropped to the adverse ones and re-ordered by learned
+  // priority (severity×confidence, then |z|), each stamped with a 1-based priority_rank
+  // so the UI can render "what to actually touch today, in order" without re-sorting. A
+  // reliable Warning correctly leads a noisy Critical here; the ordering sharpens itself
+  // as pulseReliability regrades each metric's firing history. Additive — `roster` is
+  // untouched, so existing readers are byte-identical.
+  const act_today = rankPulseSignals(roster, { adverseOnly: true })
+  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster), act_today }
 }
 
 // Move one finding to a new lifecycle status and return the fresh row (null if the

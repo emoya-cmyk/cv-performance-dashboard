@@ -339,7 +339,7 @@ router.get('/pacing', async (_req, res) => {
 router.get('/pulse', async (_req, res) => {
   try {
     const out = await getPortfolioPulse()
-    res.json({ ...out, count: out.roster.length })
+    res.json({ ...out, count: out.roster.length, act_today_count: out.act_today.length })
   } catch (err) {
     console.error('[insights] GET pulse error', err.message)
     res.status(500).json({ error: 'Failed to load pulse roster' })

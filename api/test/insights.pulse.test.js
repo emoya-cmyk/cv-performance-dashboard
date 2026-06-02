@@ -41,6 +41,10 @@ process.env.SQLITE_PATH = DB_PATH
 
 const db = require('../db')
 const { getClientPulse, getPortfolioPulse, loadDailySeries } = require('../lib/insights')
+// The pure triage contract (severity×confidence → priority/lane/reason), unit-tested
+// exhaustively in pulseTriage.test.js. Here we only assert the ENGINE emits exactly
+// what these produce for its own signals — i.e. the wiring is faithful, not a re-impl.
+const { triagePriority, triageLane, narrateTriage } = require('../lib/pulseTriage')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -364,4 +368,95 @@ test('getClientPulse: a revenue drop is diagnosed as spend-driven, with ROAS sho
   assert.equal(spend.adverse, false)              // a spend DROP isn't adverse on a spike-adverse metric
   assert.equal(spend.diagnosis, undefined)
   assert.equal(spend.diagnosis_message, undefined)
+})
+
+// ── intel-v7 (4): reliability-weighted triage wired onto BOTH reads ─────────────
+// pulseTriage.js is unit-tested in full in pulseTriage.test.js (the severity×confidence
+// arithmetic, the lane grid, the narrator, and the headline cross — a reliable Warning
+// outranking a noisy Critical). These wiring tests prove only that the ENGINE forwards
+// its real signals through that module faithfully: getClientPulse stamps each signal
+// with the INTRINSIC triage fields the pure module returns for THAT signal (priority /
+// lane / triage_reason / triage_client_reason — but NOT priority_rank, a feed-position
+// meaningless on a single client's per-metric list), and getPortfolioPulse additionally
+// emits the ranked, adverse-only "Act today" feed on top of the unchanged roster.
+
+test('getClientPulse: each signal carries the intrinsic triage fields (faithful to pulseTriage), and NO priority_rank', async () => {
+  await ready()
+  const c = await freshClient('Triage Client Co')
+  await seedWeekly(c, 'leads', [20, 90, 100, 110, 95, 105, 100, 98, 102])   // critical adverse drop
+  const out = await getClientPulse(c, { asOf: ASOF })
+  assert.equal(out.signals.length, 1)
+  const s = out.signals[0]
+
+  // the engine attached EXACTLY what the pure module computes from this very signal —
+  // proving it forwarded the real severity / reliability / delta_pct, not a stale copy.
+  assert.equal(s.priority, triagePriority(s))
+  assert.equal(s.lane, triageLane(s))
+  assert.equal(s.triage_reason, narrateTriage(s, { audience: 'agency' }))
+  assert.equal(s.triage_client_reason, narrateTriage(s, { audience: 'client' }))
+
+  // intrinsic only — a per-metric list is already worst-first; a feed-rank would lie here.
+  assert.equal(s.priority_rank, undefined)
+
+  // and the fields are substantive: a critical adverse drop lands in an action lane.
+  assert.ok(s.priority > 0, 'priority is positive for a real adverse firing')
+  assert.ok(s.lane === 'act_now' || s.lane === 'verify', 'critical adverse → act_now or verify')
+  assert.ok(s.triage_reason.length > 0 && s.triage_client_reason.length > 0, 'both reasons grounded')
+})
+
+test('getPortfolioPulse: emits a ranked, adverse-only "Act today" feed; the roster stays the full worst-first stream', async () => {
+  await ready()
+  const aCollapse = await freshClient('Act Collapse Co')   // critical adverse leads drop
+  const aDip      = await freshClient('Act Dip Co')         // warning  adverse revenue dip
+  const aTailwind = await freshClient('Act Tailwind Co')    // leads SPIKE → a NON-adverse signal
+  const aEmpty    = await freshClient('Act Empty Co')       // no facts → contributes nothing
+  await seedWeekly(aCollapse, 'leads',   [20, 90, 100, 110, 95, 105, 100, 98, 102])
+  await seedWeekly(aDip,      'revenue', [3500, 5000, 4000, 6000, 4500, 5500, 5000, 4800, 5200])
+  await seedWeekly(aTailwind, 'leads',   [220, 100, 98, 102, 99, 101, 100, 103, 97])  // +120% surge
+
+  const out = await getPortfolioPulse({ asOf: ASOF })
+  assert.ok(Array.isArray(out.act_today), 'act_today feed present on the portfolio payload')
+
+  const mine = new Set([aCollapse, aDip, aTailwind, aEmpty])
+
+  // the tailwind IS in the worst-first roster (a non-adverse leads surge), proving the
+  // roster still carries the full stream — but it must NOT appear in the action feed.
+  const tailRow = out.roster.find(r => r.client_id === aTailwind && r.metric === 'leads')
+  assert.ok(tailRow, 'the non-adverse leads surge is present in the roster')
+  assert.equal(tailRow.adverse, false)
+  assert.equal(tailRow.lane, 'tailwind')                                   // and lane-classed as a tailwind
+  assert.ok(!out.act_today.some(r => r.client_id === aTailwind), 'tailwind excluded from Act today')
+
+  // my two ADVERSE firings both surface in the feed; the empty client never does.
+  const feed = out.act_today.filter(r => mine.has(r.client_id))
+  assert.equal(feed.length, 2, 'exactly the two adverse firings reach the feed')
+  assert.ok(!feed.some(r => r.client_id === aEmpty), 'data-less client absent from feed')
+
+  // every feed row: adverse, faithfully triaged, and stamped with a 1-based feed rank.
+  for (const r of feed) {
+    assert.equal(r.adverse, true)
+    assert.equal(r.priority, triagePriority(r))
+    assert.equal(r.lane, triageLane(r))
+    assert.equal(r.triage_reason, narrateTriage(r, { audience: 'agency' }))
+    assert.ok(Number.isInteger(r.priority_rank) && r.priority_rank >= 1, 'stamped with a feed rank')
+  }
+
+  // the WHOLE feed is adverse-only and ordered by priority desc (then |z|) — "what to
+  // touch today, in order" — with a contiguous 1..N rank. This is the end-to-end half of
+  // the headline cross: the per-row priority already folds in learned reliability (proven
+  // arithmetically in pulseTriage.test.js), so ranking by it lands a reliable Warning
+  // above a noisy Critical whenever the grades diverge.
+  for (const r of out.act_today) assert.equal(r.adverse, true)
+  out.act_today.forEach((r, i) => assert.equal(r.priority_rank, i + 1, 'priority_rank is contiguous 1..N'))
+  for (let i = 1; i < out.act_today.length; i++) {
+    assert.ok(out.act_today[i - 1].priority >= out.act_today[i].priority - 1e-9, 'feed ranked by priority desc')
+  }
+
+  // and the roster itself is UNCHANGED in contract: still worst-first (adverse, then |z|).
+  for (let i = 1; i < out.roster.length; i++) {
+    const a = out.roster[i - 1], b = out.roster[i]
+    const adv = Number(b.adverse) - Number(a.adverse)
+    assert.ok(adv <= 0, 'roster: adverse rows still sort ahead of non-adverse')
+    if (adv === 0) assert.ok(Math.abs(a.z) >= Math.abs(b.z) - 1e-9, 'roster: ties still broken by |z| desc')
+  }
 })
