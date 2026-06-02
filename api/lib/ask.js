@@ -177,6 +177,76 @@ function rollingWeeks(now, n) {
   return { wheres: rangeWheres(start, lastMon), label: `the last ${n} weeks` }
 }
 
+// ── PERIOD-OVER-PERIOD COMPARISON (pure) ──────────────────────────────────────
+// A lone figure ("revenue was $128k") is far more useful with a "vs what". This
+// derives the WHERE fragments — same shape as resolveTimeRange — for the period
+// IMMEDIATELY BEFORE the asked-for one, so the baseline total is computed by the
+// exact same compile+SQL path (the LLM never produces a comparison number).
+//
+// Only COMPLETE, equal-length windows qualify. "this_month", "this_year" and
+// "all_time" are partial or unbounded — there is no honest equal predecessor — so
+// they return null and the answer stays a single figure.
+const COMPARABLE = new Set(['last_week', 'last_4_weeks', 'last_12_weeks', 'last_month', 'month'])
+
+// 'YYYY-MM' → the previous calendar month, 'YYYY-MM'.
+function prevMonth(ym) {
+  let [y, m] = ym.split('-').map(Number)
+  m -= 1
+  if (m === 0) { m = 12; y -= 1 }
+  return `${y}-${String(m).padStart(2, '0')}`
+}
+
+// Returns { wheres, label } for the preceding equal-length window, or null when
+// the range isn't comparable. Pure — inject `now` exactly like resolveTimeRange.
+function comparisonRange(spec, now = new Date()) {
+  if (!COMPARABLE.has(spec.time_range)) return null
+
+  // MONTH family: a month isn't a uniform number of days, so step back a whole
+  // CALENDAR month (a day-count shift would land mid-month).
+  if (spec.time_range === 'last_month' || spec.time_range === 'month') {
+    const periodYm = spec.time_range === 'month'
+      ? spec.month
+      : prevMonth(isoDay(now).slice(0, 7))   // last_month = the calendar month before now's
+    const baseYm = prevMonth(periodYm)
+    return { wheres: rangeWheres(baseYm + '-01', lastDayOfMonth(baseYm)), label: 'the prior month' }
+  }
+
+  // WEEK family: uniform 7-day weeks → step back by whole weeks. N is the window
+  // width in weeks; the baseline is the N weeks ending the week BEFORE the current
+  // window's first week (so the two windows are adjacent and non-overlapping).
+  const N        = { last_week: 1, last_4_weeks: 4, last_12_weeks: 12 }[spec.time_range]
+  const lastMon  = new Date(weekStartOf(isoDay(minus(now, 7))) + 'T00:00:00Z')  // current window's last Monday
+  const prevTo   = isoDay(minus(lastMon, 7 * N))            // one whole window back
+  const prevFrom = isoDay(minus(lastMon, 7 * (2 * N - 1)))  // N-1 further weeks = N buckets inclusive
+  return {
+    wheres: rangeWheres(prevFrom, prevTo),
+    label:  N === 1 ? 'the prior week' : `the prior ${N} weeks`,
+  }
+}
+
+// Which direction of change is an improvement, per metric — used ONLY to colour a
+// delta, never to alter a number. spend is null: more/less spend isn't inherently
+// good or bad without context.
+const METRIC_POLARITY = {
+  revenue: 'up', leads: 'up', jobs: 'up', roas: 'up', close_rate: 'up',
+  cpl: 'down', spend: null,
+}
+
+// Pure period-over-period math for two already-computed figures of the SAME
+// metric. pct_change is null when the baseline is 0 (an undefined ratio we must
+// never fabricate); `improved` is null when the metric has no polarity (spend) or
+// nothing changed.
+function computeComparison(currentValue, baselineValue, metricKey) {
+  const cur   = Number(currentValue)  || 0
+  const base  = Number(baselineValue) || 0
+  const delta = cur - base
+  const direction = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat'
+  const pct = base !== 0 ? (delta / base) * 100 : null
+  const good = METRIC_POLARITY[metricKey]
+  const improved = (good == null || direction === 'flat') ? null : (direction === good)
+  return { baseline_value: base, delta, pct_change: pct, direction, improved }
+}
+
 // ── COMPILE — whitelist identifiers + bound params only ───────────────────────
 // Returns { sql, params, columns, metric, grouping, timeLabel }. `isPg` is taken
 // at call time so the same spec compiles correctly against either backend.
@@ -194,7 +264,13 @@ function rollingWeeks(now, n) {
 //      adversarial name can't redirect the scope to someone else's data.
 // When scopeClientId is null the path below is byte-identical to before, so the
 // agency "ask the whole book" behaviour is completely unchanged.
-function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL, scopeClientId = null) {
+//
+// timeRangeFn (5th arg) defaults to resolveTimeRange; pass a thunk returning a
+// pre-computed { wheres, label } (e.g. comparisonRange's output) to compile the
+// SAME scoped/grouped query over a DIFFERENT window. That is how the baseline half
+// of a period-over-period comparison is built — through this exact scope+whitelist
+// path, so a scoped baseline still binds wr.client_id and can't read another client.
+function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL, scopeClientId = null, timeRangeFn = resolveTimeRange) {
   const metric = METRICS[spec.metric]
   if (!metric) throw new SpecError(`unknown metric ${JSON.stringify(spec.metric)}`)  // defensive: callers must validate first
   const scoped = scopeClientId != null
@@ -227,7 +303,7 @@ function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL,
   // matches push order monotonically.
   const wheres = []
   if (scoped) wheres.push(`wr.client_id = ${P(scopeClientId)}`)
-  const t = resolveTimeRange(spec, now)
+  const t = timeRangeFn(spec, now)
   for (const w of t.wheres) wheres.push(w.sql.replace('%', P(w.value)))
   if (!scoped && spec.client_filter) wheres.push(`LOWER(c.name) = LOWER(${P(spec.client_filter)})`)
   if (wheres.length) sql += ` WHERE ${wheres.join(' AND ')}`
@@ -497,6 +573,7 @@ async function runAsk(question, opts = {}) {
 
 module.exports = {
   runAsk, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,
 }
