@@ -142,7 +142,22 @@ function AskResult({ result, onClear }) {
   )
 }
 
-export default function AskBox() {
+/*
+ * Props (all optional; defaults reproduce the original agency surface verbatim):
+ *   clientId    — when set, narrows the ask to one client. Passed straight to
+ *                 api.ask; the server only honours it for an agency token and
+ *                 hard-pins a client token to its own data regardless, so the
+ *                 client surface can pass its own id without ever widening access.
+ *   title/subtitle/placeholder/suggestions — surface-specific copy. The client
+ *                 surface uses "my/our" phrasing and drops cross-client prompts.
+ */
+export default function AskBox({
+  clientId,
+  title       = 'Ask your data',
+  subtitle    = 'Plain-English questions across every client — answered with exact, verified numbers',
+  placeholder = 'e.g. Which client had the highest revenue last month?',
+  suggestions = SUGGESTIONS,
+} = {}) {
   const [question, setQuestion] = useState('')
   const [status, setStatus]     = useState('idle')   // idle | loading | done | error
   const [result, setResult]     = useState(null)
@@ -156,7 +171,7 @@ export default function AskBox() {
     setStatus('loading')
     setError(null)
     try {
-      const res = await api.ask(text)
+      const res = await api.ask(text, clientId)
       setResult(res)
       setStatus('done')
     } catch (err) {
@@ -184,8 +199,8 @@ export default function AskBox() {
           <Sparkles className="w-4 h-4 text-brand-500" />
         </div>
         <div className="leading-tight">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ask your data</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">Plain-English questions across every client — answered with exact, verified numbers</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{title}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">{subtitle}</p>
         </div>
       </div>
 
@@ -195,7 +210,7 @@ export default function AskBox() {
           ref={inputRef}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
-          placeholder="e.g. Which client had the highest revenue last month?"
+          placeholder={placeholder}
           disabled={busy}
           className="flex-1 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 disabled:opacity-60 transition"
         />
@@ -212,7 +227,7 @@ export default function AskBox() {
       {/* Suggestion chips — discoverability, only before the first answer */}
       {status === 'idle' && (
         <div className="flex flex-wrap gap-1.5 mt-3">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <button
               key={s}
               onClick={() => run(s)}

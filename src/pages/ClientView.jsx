@@ -17,6 +17,7 @@ import GoalRing from '@/components/GoalRing'
 import TeamUpdate from '@/components/TeamUpdate'
 import CampaignList from '@/components/CampaignList'
 import MonthlyTrend from '@/components/MonthlyTrend'
+import AskBox from '@/components/AskBox'
 import { useAgency } from '@/lib/agencySettings'
 
 const PERIOD_OPTS = [
@@ -907,6 +908,19 @@ function DeltaBadge({ pct, inline }) {
   )
 }
 
+// Client-toned starter questions for the "Ask about your results" box. Phrased in
+// the first person ("we / our") and deliberately free of any cross-client framing —
+// the server hard-pins every ask to this client's own scope (a group_by:'client'
+// collapses to their single total), so a "top clients" prompt would be meaningless
+// here. These mirror the agency suggestions' shape (a single figure, a trend, a
+// ratio, a count) reduced to this one account's own numbers.
+const CLIENT_ASK_SUGGESTIONS = [
+  'How much revenue did we book this month?',
+  'What was our ROAS last month?',
+  'Revenue by week over the last 12 weeks',
+  'How many leads did we get last week?',
+]
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export default function ClientView({ store }) {
   const navigate = useNavigate()
@@ -1172,6 +1186,27 @@ export default function ClientView({ store }) {
               or another client). Same activity gate as the health badge; self-hides when
               there's no recap text yet. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <WeeklyRecap recap={recap} />}
+
+          {/* ── Ask about your results — the grounded "ask your data" box, client-scoped ──
+              The same plain-English query surface the agency gets on its dashboard, but
+              pinned to THIS client: we pass clientObj.id, and the server derives the hard
+              boundary from the authenticated token regardless (resolveAskScope), so a
+              client can only ever ask about its own numbers and lib/ask.js re-binds that
+              id at compile time — a question that names or groups-by another client simply
+              collapses to this account's own total. Client-toned copy (no "across every
+              client") and first-person starter prompts. Same activity gate as the cards
+              above so an empty account doesn't invite questions it has no data to answer. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && clientObj?.id && (
+            <div className="mb-4 fade-up" style={{ animationDelay: '.075s' }}>
+              <AskBox
+                clientId={clientObj.id}
+                title="Ask about your results"
+                subtitle="Plain-English questions about your performance — answered with exact, verified numbers"
+                placeholder="e.g. How much revenue did we book this month?"
+                suggestions={CLIENT_ASK_SUGGESTIONS}
+              />
+            </div>
+          )}
 
           {/* ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──
               The agency's "Off goal pace" roster (insights/pacing) reduced to ONLY this
