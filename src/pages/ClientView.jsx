@@ -1012,6 +1012,22 @@ function ClientPulseRow({ s }) {
               {s.reliability_client_note}
             </p>
           )}
+          {/* The FORESIGHT companion to the consistency line above — the engine attaches
+              accuracy_client_note ONLY when it graded THIS client's own early-warning history
+              on THIS metric as 'proven' (narratePulseAccuracy's client branch returns '' for
+              developing/learning/un-graded, and the proven sentence carries no raw number), so
+              a thin or weak record stays silent and the client is never shown doubt about their
+              own numbers. Where the line above says "this is a steady signal," this says "we
+              catch shifts like this early and they prove out" — the two compound into one calm
+              trust statement, never repeat. Block-level so it always sits on its own line below
+              the consistency note; violet target echoes the agency foresight chip, distinct from
+              the emerald shield. */}
+          {s.accuracy_client_note && (
+            <p className="flex items-center gap-1 text-[10px] font-semibold text-slate-500 mt-1.5">
+              <Target className="w-3 h-3 text-violet-500 shrink-0" />
+              {s.accuracy_client_note}
+            </p>
+          )}
         </div>
         {deltaStr != null && (
           <div className="shrink-0 text-right">

@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, Radar } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, Radar, Target } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -46,6 +46,19 @@ const RELIABILITY_TONE = {
   reliable: { chip: 'bg-emerald-50 text-emerald-600 border-emerald-200', Icon: ShieldCheck, label: 'Reliable' },
   mixed:    { chip: 'bg-slate-50 text-slate-500 border-slate-200',       Icon: Gauge,       label: 'Mixed'    },
   noisy:    { chip: 'bg-slate-100 text-slate-400 border-slate-200',      Icon: ShieldAlert, label: 'Noisy'    },
+}
+
+// ── predictive-precision tone (copied from Intelligence.jsx 5c so the preview matches) ──
+// The third, FORESIGHT axis beside severity and reliability — the pulse's PREDICTIVE-PRECISION
+// self-audit (lib/pulseAccuracy): how often THIS metric's early call actually proved out by
+// week-close, and how far ahead. Target/crosshair family in violet so it reads as a track record
+// of the EARLY call and never competes with the shield-family reliability chip or the rose/amber
+// severity fill. Keyed by the engine's accuracy label; absent → no chip. Reliability says HOW SURE
+// the call is now; this says HOW OFTEN that kind of call has actually proven out before.
+const ACCURACY_TONE = {
+  proven:     { chip: 'bg-violet-50 text-violet-600 border-violet-200',   Icon: Target,    label: 'Proven'     },
+  developing: { chip: 'bg-violet-50/60 text-violet-500 border-violet-100', Icon: Crosshair, label: 'Developing' },
+  learning:   { chip: 'bg-slate-50 text-slate-400 border-slate-200',      Icon: Radar,     label: 'Learning'   },
 }
 
 // ── action-lane tone (copied from Intelligence.jsx 4c so the preview matches) ──
@@ -93,10 +106,10 @@ function orderClientPulse(signals) {
 // HEADLINE lives at ranks 2–3: a RELIABLE Warning (worth a look) outranks a NOISY Critical
 // (verify) — exactly the cross this layer exists to make. Sample numbers; names fictional.
 const ACT_TODAY = [
-  { client_id: 'c1', client_name: 'Skyline Dental',    label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -48, lane: 'act_now',      priority_rank: 1, reliability_label: 'reliable', reliability_note: 'Reliable — this leads alert held up 9 of the last 11 times it fired for Skyline Dental.',     triage_reason: 'Leads is critical and this alert has a reliable track record — act today.' },
-  { client_id: 'c2', client_name: 'Harbor Family Law', label: 'Revenue', adverse: true, severity: 'warning',  delta_pct: -24, lane: 'worth_a_look', priority_rank: 2, reliability_label: 'reliable', reliability_note: 'Reliable — this revenue alert held up 8 of the last 10 times it fired for Harbor Family Law.', triage_reason: 'Revenue is slipping and this alert has held up before — worth a look today.' },
-  { client_id: 'c3', client_name: 'Vista Auto Group',  label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -51, lane: 'verify',       priority_rank: 3, reliability_label: 'noisy',    reliability_note: 'Noisy — this leads alert reverted 7 of the last 9 times it fired for Vista Auto Group.',      triage_reason: 'Leads is critical, but this alert has been noisy lately — confirm before acting.' },
-  { client_id: 'c4', client_name: 'Peak Roofing Co.',  label: 'Spend',   adverse: true, severity: 'warning',  delta_pct: 31,  lane: 'monitor',      priority_rank: 4, reliability_label: 'mixed',    reliability_note: 'Mixed — this spend alert held up 5 of the last 11 times it fired for Peak Roofing Co.',       triage_reason: 'Spend is slipping, but this alert flickers (mixed) — monitor for now.' },
+  { client_id: 'c1', client_name: 'Skyline Dental',    label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -48, lane: 'act_now',      priority_rank: 1, reliability_label: 'reliable', reliability_note: 'Reliable — this leads alert held up 9 of the last 11 times it fired for Skyline Dental.',     accuracy_label: 'proven',     accuracy_note: 'Leads early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 5 days before it closed — a proven lead.',          triage_reason: 'Leads is critical and this alert has a reliable track record — act today.' },
+  { client_id: 'c2', client_name: 'Harbor Family Law', label: 'Revenue', adverse: true, severity: 'warning',  delta_pct: -24, lane: 'worth_a_look', priority_rank: 2, reliability_label: 'reliable', reliability_note: 'Reliable — this revenue alert held up 8 of the last 10 times it fired for Harbor Family Law.', accuracy_label: 'proven',     accuracy_note: 'Revenue early-warnings for this client have called the week right 7 of 8 times recently (~88%), about 6 days before it closed — a proven lead.',         triage_reason: 'Revenue is slipping and this alert has held up before — worth a look today.' },
+  { client_id: 'c3', client_name: 'Vista Auto Group',  label: 'Leads',   adverse: true, severity: 'critical', delta_pct: -51, lane: 'verify',       priority_rank: 3, reliability_label: 'noisy',    reliability_note: 'Noisy — this leads alert reverted 7 of the last 9 times it fired for Vista Auto Group.',      accuracy_label: 'learning',   accuracy_note: 'Leads early-warnings for this client have called the week right 2 of 7 times recently (~29%) — still learning.',                                       triage_reason: 'Leads is critical, but this alert has been noisy lately — confirm before acting.' },
+  { client_id: 'c4', client_name: 'Peak Roofing Co.',  label: 'Spend',   adverse: true, severity: 'warning',  delta_pct: 31,  lane: 'monitor',      priority_rank: 4, reliability_label: 'mixed',    reliability_note: 'Mixed — this spend alert held up 5 of the last 11 times it fired for Peak Roofing Co.',       accuracy_label: 'developing', accuracy_note: 'Spend early-warnings for this client have called the week right 4 of 8 times recently (~50%), about 3 days before it closed — developing.',                triage_reason: 'Spend is slipping, but this alert flickers (mixed) — monitor for now.' },
 ]
 
 // One ranked decision: lane-tinted rank badge (order + call), client + metric, the action
@@ -105,6 +118,7 @@ const ACT_TODAY = [
 function ActTodayRowPreview({ r }) {
   const lane     = laneTone(r)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null
+  const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record; null until gradeable
   const deltaStr = `${r.delta_pct >= 0 ? '+' : '−'}${Math.abs(r.delta_pct)}%`
   return (
     <div className="px-4 py-3">
@@ -122,6 +136,13 @@ function ActTodayRowPreview({ r }) {
             {rel && (
               <span title={r.reliability_note} className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${rel.chip}`}>
                 <rel.Icon className="w-2.5 h-2.5" />{rel.label}
+              </span>
+            )}
+            {/* FORESIGHT (5c) rides beside reliability: how often this early call has actually
+                proven out by week-close, and how far ahead. Hover for precision + lead-days. */}
+            {acc && (
+              <span title={r.accuracy_note || undefined} className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${acc.chip}`}>
+                <acc.Icon className="w-2.5 h-2.5" />{acc.label}
               </span>
             )}
           </div>
@@ -144,6 +165,7 @@ function PreviewPulseRow({ r }) {
   const deltaStr = `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%`
   const baseN    = Number(r.baseline?.n)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null   // learned trust grade for THIS metric's firing history
+  const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record (5c); null until gradeable
   return (
     <div className="px-4 py-3">
       <div className="flex items-start gap-3">
@@ -162,6 +184,18 @@ function PreviewPulseRow({ r }) {
               >
                 <rel.Icon className="w-2.5 h-2.5" />
                 {rel.label}
+              </span>
+            )}
+            {/* FORESIGHT (5c) — the predictive-precision track record beside the trust grade:
+                how often this client's early call on THIS metric proved out by week-close, and
+                how far ahead. Hover for the grounded precision + lead-days. Silent until graded. */}
+            {acc && (
+              <span
+                title={r.accuracy_note || undefined}
+                className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${acc.chip}`}
+              >
+                <acc.Icon className="w-2.5 h-2.5" />
+                {acc.label}
               </span>
             )}
           </div>
@@ -215,6 +249,18 @@ function PreviewClientPulseRow({ s }) {
               {s.reliability_client_note}
             </p>
           )}
+          {/* FORESIGHT companion (5d) — present ONLY when the engine graded THIS client's own
+              early-warning history on THIS metric as 'proven' (the client branch of
+              narratePulseAccuracy stays silent for developing/learning, and the proven sentence
+              carries no raw number). Block-level so it lands on its own line below the consistency
+              note; the two compound into one calm trust statement — "steady signal" + "we catch
+              shifts like this early and they prove out" — never repeating each other. */}
+          {s.accuracy_client_note && (
+            <p className="flex items-center gap-1 text-[10px] font-semibold text-slate-500 mt-1.5">
+              <Target className="w-3 h-3 text-violet-500 shrink-0" />
+              {s.accuracy_client_note}
+            </p>
+          )}
         </div>
         <div className="shrink-0 text-right">
           <div className={`text-lg font-black tabular-nums leading-none ${tone.text}`}>{deltaStr}</div>
@@ -231,6 +277,8 @@ const AGENCY = [
     adverse: true, severity: 'critical', direction: 'down', delta_pct: -50, latest: 10, baseline: { median: 20, n: 8 },
     reliability: 0.9, reliability_label: 'reliable',
     reliability_note: 'Jobs won alerts for this client have held up 9 of 10 times recently (~90%) — a reliable signal.',
+    accuracy_label: 'proven',
+    accuracy_note: 'Jobs won early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 4 days before it closed — a proven lead.',
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'leads',
       drivers: [{ metric: 'leads', pct: -50, share: 1, share_pct: 100 }, { metric: 'close_rate', pct: 0, share: 0, share_pct: 0 }] },
     diagnosis_message: 'Jobs won is down 50% — the driver is Leads (down 50%), while Close rate held.' },
@@ -239,6 +287,8 @@ const AGENCY = [
     adverse: true, severity: 'warning', direction: 'down', delta_pct: -30, latest: 700, baseline: { median: 1000, n: 8 },
     reliability: 0.3333, reliability_label: 'noisy',
     reliability_note: 'Revenue alerts for this client have held up 2 of 6 times recently (~33%) — a noisy signal, read it with care.',
+    accuracy_label: 'learning',
+    accuracy_note: 'Revenue early-warnings for this client have called the week right 2 of 6 times recently (~33%) — still learning.',
     diagnosis: { metric: 'revenue', direction: 'down', lead: 'spend',
       drivers: [{ metric: 'spend', pct: -50, share: 1.9434, share_pct: 194.3 }, { metric: 'roas', pct: 40, share: -0.9434, share_pct: -94.3 }] },
     diagnosis_message: 'Revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.' },
@@ -247,6 +297,8 @@ const AGENCY = [
     adverse: true, severity: 'warning', direction: 'down', delta_pct: -60, latest: 8, baseline: { median: 20, n: 6 },
     reliability: 0.5, reliability_label: 'mixed',
     reliability_note: 'Jobs won alerts for this client have held up 3 of 6 times recently (~50%) — a mixed signal.',
+    accuracy_label: 'developing',
+    accuracy_note: 'Jobs won early-warnings for this client have called the week right 3 of 6 times recently (~50%), about 2 days before it closed — developing.',
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'close_rate',
       drivers: [{ metric: 'leads', pct: -20, share: 0.2435, share_pct: 24.3 }, { metric: 'close_rate', pct: -50, share: 0.7565, share_pct: 75.7 }] },
     diagnosis_message: 'Jobs won is down 60% — the driver is Close rate (down 50%), with Leads also down 20%.' },
@@ -255,6 +307,8 @@ const AGENCY = [
     adverse: false, severity: 'info', direction: 'up', delta_pct: 43, latest: 1144, baseline: { median: 800, n: 8 },
     reliability: 0.8889, reliability_label: 'reliable',
     reliability_note: 'Revenue alerts for this client have held up 8 of 9 times recently (~89%) — a reliable signal.',
+    accuracy_label: 'proven',
+    accuracy_note: 'Revenue early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 5 days before it closed — a proven lead.',
     diagnosis: { metric: 'revenue', direction: 'up', lead: 'roas',
       drivers: [{ metric: 'spend', pct: 10, share: 0.2665, share_pct: 26.6 }, { metric: 'roas', pct: 30, share: 0.7335, share_pct: 73.3 }] },
     diagnosis_message: 'Revenue is up 43% — the driver is ROAS (up 30%), with Ad spend also up 10%.' },
@@ -270,12 +324,14 @@ const CLIENT = [
     z: -3.1, priority: 0.40, lane: 'verify',
     client_message: 'Leads are tracking about 51% below your usual week so far.',
     reliability_client_note: '',
+    accuracy_client_note: '',
     triage_client_reason: "Your leads dipped — we're confirming it before we act." },
 
   { metric: 'revenue', label: 'Revenue', adverse: true, severity: 'warning', direction: 'down', delta_pct: -24,
     z: -2.3, priority: 0.60, lane: 'worth_a_look',
     client_message: 'Revenue is running about 24% under your usual week.',
     reliability_client_note: 'This has been a consistent signal lately.',
+    accuracy_client_note: "We've been spotting shifts like this early — and they've usually proven out.",
     triage_client_reason: 'Your revenue is worth a look this week.',
     diagnosis: { metric: 'revenue', direction: 'down', lead: 'roas',
       drivers: [{ metric: 'roas', pct: -20, share: 0.813, share_pct: 81.3 }, { metric: 'spend', pct: -5, share: 0.187, share_pct: 18.7 }] },
@@ -285,6 +341,7 @@ const CLIENT = [
     z: 2.2, priority: 0.55, lane: 'tailwind',
     client_message: 'Your close rate is pacing about 18% ahead of your usual week — nice momentum.',
     reliability_client_note: 'This has been a consistent signal lately.',
+    accuracy_client_note: '',
     triage_client_reason: 'Your close rate is pacing ahead — nice momentum.' },
 ]
 
@@ -293,8 +350,8 @@ export default function PulseDiagnosisPreview() {
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) + (3) + (4)</p>
-          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today</h1>
+          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) + (3) + (4) + (5)</p>
+          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record</h1>
           <p className="text-sm text-slate-500 font-medium mt-1.5 max-w-3xl leading-relaxed">
             The pulse already says <span className="font-bold text-slate-700">what</span> moved this week, and (2) adds the{' '}
             <span className="font-bold text-slate-700">why</span> — decomposing each composite move (revenue ≡ spend × ROAS,
@@ -304,7 +361,12 @@ export default function PulseDiagnosisPreview() {
             <span className="font-bold text-slate-500">mixed</span> / <span className="font-bold text-slate-400">noisy</span>. Now (4)
             does the agency&rsquo;s triage <span className="font-bold text-slate-700">for</span> it — crossing each alarm&rsquo;s{' '}
             <span className="font-bold text-indigo-600">severity × that learned reliability</span> into one ranked &ldquo;Act today&rdquo;
-            list with an action lane, so the first hour lands by evidence rather than by how loud the alarm is. No model, no tuning;
+            list with an action lane, so the first hour lands by evidence rather than by how loud the alarm is. And (5) closes the loop
+            on <span className="font-bold text-violet-600">foresight</span>: it checks whether each early-warning actually called the
+            eventual weekly outcome right — scoring past firings against how the week truly closed — and labels its own track record{' '}
+            <span className="font-bold text-violet-600">proven</span> / <span className="font-bold text-violet-500">developing</span> /{' '}
+            <span className="font-bold text-slate-400">learning</span>, so a sensor that keeps calling the week early (often days ahead)
+            carries earned weight while a thin or weak record stays quiet. No model, no tuning;
             every figure traces to a stored daily fact. Sample numbers; client names fictional.
           </p>
         </div>
@@ -368,7 +430,12 @@ export default function PulseDiagnosisPreview() {
                   <span className="font-bold text-emerald-600">confidence chip</span> beside the severity says whether this
                   client&rsquo;s alerts on that metric have held up before (hover for the track record). Severity says{' '}
                   <span className="italic">how bad</span>; reliability says <span className="italic">how sure</span> — a Critical
-                  that&rsquo;s also Reliable is act-now; a Critical that&rsquo;s Noisy is watch-don&rsquo;t-overreact. Agency-only.
+                  that&rsquo;s also Reliable is act-now; a Critical that&rsquo;s Noisy is watch-don&rsquo;t-overreact. The violet{' '}
+                  <span className="font-bold text-violet-600">foresight chip</span> goes one step further — it says whether those
+                  early-warnings have actually <span className="font-bold text-violet-600">called the eventual week right</span> (hover
+                  for the precision and how many days ahead): a <span className="font-semibold text-violet-600">proven</span> track
+                  record has earned the right to move you; a <span className="font-semibold text-slate-400">learning</span> one
+                  hasn&rsquo;t yet. Reliability is whether the alarm was true; foresight is whether it was early. Agency-only.
                 </p>
               </div>
             </div>
@@ -395,7 +462,9 @@ export default function PulseDiagnosisPreview() {
                 Watched live off your daily numbers and refreshed every day. When a number moves, we break down what drove it —
                 so you see the cause days before the week officially closes. When a signal has a steady track record, a small{' '}
                 <span className="font-semibold text-emerald-600">consistent-signal</span> note appears; a flickery one stays
-                quiet, so you&rsquo;re never shown a number you can&rsquo;t lean on. They&rsquo;re ordered the same way your team
+                quiet, so you&rsquo;re never shown a number you can&rsquo;t lean on. And when we&rsquo;ve been{' '}
+                <span className="font-semibold text-violet-600">spotting shifts like this early</span> and they&rsquo;ve usually
+                proven out, we say so too — quietly, and only once that track record is real. They&rsquo;re ordered the same way your team
                 works them — your steady <span className="font-semibold text-slate-600">Revenue</span> dip leads, and the louder{' '}
                 <span className="font-semibold text-slate-600">Leads</span> drop sits just below at{' '}
                 <span className="font-semibold text-amber-600">Confirming</span> while we make sure it&rsquo;s real before acting.
