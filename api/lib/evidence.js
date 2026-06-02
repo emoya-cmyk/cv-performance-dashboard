@@ -17,6 +17,15 @@
 const { query }                      = require('../db')
 const { AGG, derive, pctChange, detectAnomalies } = require('./metricsCore')
 const { weekStartOf, weekEndOf }     = require('./rollup')
+const { summarizeIntelligence }      = require('./intelDigest')
+// The live intelligence organs (read-only): the current open feed + the same
+// read-time decorators the /insights/:clientId route applies, recent recoveries,
+// this client's own pace-to-goal, and the pooled efficacy ledger. insights.js does
+// NOT require evidence.js, so this import opens no cycle.
+const {
+  METRIC_META, getInsightFeed, getRecentRecoveries, getClientPacing,
+  getEfficacyTable, attachEfficacyNotes, attachEscalations,
+} = require('./insights')
 
 // ── rounding helpers — these define the CANONICAL values the verifier allows ──
 const r0 = n => Math.round(Number(n) || 0)
@@ -67,6 +76,43 @@ const HIGHLIGHT_CHECKS = [
   { key: 'gbp_calls',     label: 'GBP Calls' },
 ]
 const HIGHLIGHT_THRESHOLD = 15
+
+// Inject the app's authoritative metric labels (METRIC_META) into the digest so a
+// recap never invents its own metric name; a null metric (a data-freshness
+// finding has no KPI) humanises to "Data freshness".
+const metricLabel = (m) =>
+  m && METRIC_META[m] && METRIC_META[m].label ? METRIC_META[m].label
+  : m ? String(m) : 'Data freshness'
+
+/**
+ * Distil this client's CURRENT intelligence posture — the open finding feed (read-
+ * time decorated exactly as the /insights/:clientId route does it), recent
+ * recoveries, and pace-to-goal — into the small, client-safe digest the recap
+ * narrator may quote. Present-tense by nature: it describes where things stand NOW,
+ * to sit alongside the completed week's numbers.
+ *
+ * FAILURE-ISOLATED. The core recap only needs the week's metrics; the intelligence
+ * read is a strict enrichment. Any error here degrades to a stable zero digest so
+ * buildEvidencePack never throws on account of the intelligence layer.
+ */
+async function intelligenceDigest(clientId) {
+  try {
+    const [feed, recoveries, pacing, effTable] = await Promise.all([
+      getInsightFeed(clientId, { limit: 50 }),            // same cap the surfaces use
+      getRecentRecoveries(clientId, { limit: 10, days: 30 }),
+      getClientPacing(clientId),
+      getEfficacyTable(),
+    ])
+    // The canonical read-time decoration order from routes/insights.js: efficacy
+    // notes first, then escalate where a play is proven ineffective — that
+    // escalation is exactly the 'play_ineffective' signal `adjusting` surfaces.
+    const annotated = attachEscalations(attachEfficacyNotes(feed, effTable), effTable)
+    return summarizeIntelligence(annotated, recoveries, pacing, { label: metricLabel })
+  } catch (err) {
+    console.error('[evidence] intelligence digest failed; using zero digest:', err && err.message)
+    return summarizeIntelligence([], [], { metrics: [] })   // stable shape, all zeros
+  }
+}
 
 /**
  * Build the deterministic evidence pack for a client's ISO week.
@@ -133,6 +179,9 @@ async function buildEvidencePack(clientId, weekStart) {
       direction:  a.pct_change >= 0 ? 'up' : 'down',
     }))
 
+  // Current strategic posture (client-safe; never blocks the recap — see helper).
+  const intelligence = await intelligenceDigest(clientId)
+
   return {
     client:       { id: client.id, name: client.name },
     period:       { week_start: weekStart,  week_end: weekEnd,  label: periodLabel(weekStart, weekEnd) },
@@ -158,6 +207,7 @@ async function buildEvidencePack(clientId, weekStart) {
 
     highlights,
     goal,
+    intelligence,
 
     meta: {
       has_data:           cur.weeks_count > 0,

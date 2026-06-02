@@ -48,7 +48,7 @@ const reply = (text) => ({ data: { content: [{ type: 'text', text }] } })
 const db = require('../db')
 const { AGG, derive, pctChange } = require('../lib/metricsCore')
 const { buildEvidencePack } = require('../lib/evidence')
-const { generateRecapText, verifyGrounding } = require('../lib/ai')
+const { generateRecapText, verifyGrounding, templateRecap } = require('../lib/ai')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -264,4 +264,103 @@ test('generateRecapText with no API key never calls the network', async () => {
   assert.equal(res.grounded, true)
   assert.match(res.text, /\$800/)
   assert.equal(axiosCalls, 0)                 // guarded before any HTTP
+})
+
+// ── 4. INTELLIGENCE POSTURE (intel-v5 3b) ────────────────────────────────────
+// buildEvidencePack now folds the live intelligence organs into a client-safe
+// `intelligence` digest, and templateRecap narrates it in the PRESENT tense.
+// These pin: the wired pack carries a well-formed, grounded-friendly digest; the
+// template adds a posture sentence only on real signal (purely additive, no candid
+// stat); and — the load-bearing property — any count folded into the pack is
+// auto-grounded with NO change to the verifier.
+
+test('buildEvidencePack folds in a well-formed, grounded-friendly intelligence digest', async () => {
+  await ready()
+  const c = await seedScenario('Posture Pack Co')   // seeds metrics + goal, no insights
+  const pack = await buildEvidencePack(c, WEEK)
+
+  const i = pack.intelligence
+  assert.ok(i, 'the pack carries an intelligence block')
+  assert.equal(typeof i.active, 'number')
+  assert.deepEqual(Object.keys(i.by_severity).sort(), ['critical', 'info', 'warning'])
+  assert.ok(typeof i.adjusting.count === 'number' && Array.isArray(i.adjusting.areas))
+  assert.ok(typeof i.improving.count === 'number' && Array.isArray(i.improving.areas))
+  assert.ok(typeof i.pacing.on_track === 'number' && typeof i.pacing.at_risk === 'number')
+
+  // No insights/recoveries were seeded → nothing active, adjusting, or improving.
+  assert.equal(i.active, 0)
+  assert.equal(i.adjusting.count, 0)
+  assert.equal(i.improving.count, 0)
+
+  // Every numeric leaf is a finite integer — grounded the instant it lands.
+  ;(function walk(v) {
+    if (typeof v === 'number') assert.ok(Number.isInteger(v) && Number.isFinite(v), `${v} is a finite int`)
+    else if (Array.isArray(v)) v.forEach(walk)
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+  })(i)
+})
+
+// A synthetic pack with KNOWN posture, so the assertions don't depend on what the
+// (empty) insight feed produced for the seeded scenario.
+const POSTURE_BASE = {
+  client:  { name: 'Posture Co' },
+  period:  { label: 'the past week' },            // numberless → keeps the test date-free
+  meta:    { has_data: true },
+  metrics: { revenue: { current: 800, pct_change: 25 }, leads: { current: 20 }, jobs: { current: 5 } },
+  goal:    { revenue_target: 3000, pct: 48 },
+}
+
+test('templateRecap adds a present-tense, client-safe posture sentence on real signal', () => {
+  const pack = {
+    ...POSTURE_BASE,
+    intelligence: {
+      active: 3, by_severity: { critical: 1, warning: 2, info: 0 },
+      adjusting: { count: 1, areas: [{ metric: 'cpl',     label: 'Cost per lead' }] },
+      improving: { count: 1, areas: [{ metric: 'revenue', label: 'Revenue' }] },
+      pacing:    { on_track: 1, at_risk: 0 },
+    },
+  }
+  const text = templateRecap(pack)
+  // Present tense, framed as proactive refinement, built from labels only.
+  assert.match(text, /Revenue has turned around/)
+  assert.match(text, /we're refining our approach on Cost per lead/)
+  // Client-safe: none of the candid efficacy vocabulary the digest stripped.
+  assert.doesNotMatch(text, /escalat|ineffective|success|\bpct\b|\bband\b/i)
+  // Load-bearing: the label-only posture clause introduced no new number, so the
+  // whole recap is still fully grounded against the pack.
+  assert.equal(verifyGrounding(text, pack).grounded, true)
+})
+
+test('templateRecap posture is purely additive: silent when intelligence is absent or all zeros', () => {
+  const noIntel = templateRecap(POSTURE_BASE)                  // an older pack, no block
+  assert.doesNotMatch(noIntel, /turned around|refining our approach/)
+
+  const zero = templateRecap({                                // present but no signal
+    ...POSTURE_BASE,
+    intelligence: {
+      active: 0, by_severity: { critical: 0, warning: 0, info: 0 },
+      adjusting: { count: 0, areas: [] }, improving: { count: 0, areas: [] },
+      pacing: { on_track: 0, at_risk: 0 },
+    },
+  })
+  assert.doesNotMatch(zero, /turned around|refining our approach/)
+  // Both narrate the core week identically — posture never disturbs the numbers.
+  assert.equal(zero, noIntel)
+})
+
+test('a count folded into the pack is auto-grounded — no verifier change required', async () => {
+  await ready()
+  const c = await seedScenario('Grounded Intel Co')
+  const pack = await buildEvidencePack(c, WEEK)
+  // Pin a known posture so the asserted counts are deterministic.
+  pack.intelligence = {
+    active: 2, by_severity: { critical: 1, warning: 1, info: 0 },
+    adjusting: { count: 1, areas: [{ metric: 'cpl',     label: 'Cost per lead' }] },
+    improving: { count: 1, areas: [{ metric: 'revenue', label: 'Revenue' }] },
+    pacing:    { on_track: 3, at_risk: 0 },
+  }
+  // 2 (active) and 3 (on_track) live in the pack → a sentence quoting them grounds.
+  assert.equal(verifyGrounding('We are actively working 2 issues and 3 goals are on track.', pack).grounded, true)
+  // A count absent from the pack is still rejected — grounding stays strict.
+  assert.equal(verifyGrounding('We are working 87 issues right now.', pack).grounded, false)
 })

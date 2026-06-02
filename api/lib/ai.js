@@ -124,6 +124,13 @@ function verifyGrounding(text, pack, allowedSet) {
 
 const money = n => `$${Math.round(Number(n) || 0).toLocaleString('en-US')}`
 
+// Join 1–3 metric labels into readable prose: "A" / "A and B" / "A, B and C".
+const joinLabels = (xs) =>
+  xs.length <= 1 ? (xs[0] || '')
+  : xs.length === 2 ? `${xs[0]} and ${xs[1]}`
+  : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`
+const capFirst = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s)
+
 // Build a tight 1–3 sentence recap purely from pack numbers. Grounded by
 // construction, so callers may skip the verifier for it.
 function templateRecap(pack) {
@@ -159,6 +166,25 @@ function templateRecap(pack) {
     parts.push(`You're at ${pack.goal.pct}% of the ${money(pack.goal.revenue_target)} monthly revenue goal.`)
   }
 
+  // Present-tense strategic posture, straight from the intelligence digest. Built
+  // from LABELS only (no digits), so it adds nothing the verifier must ground and
+  // cannot leak a candid efficacy stat — the digest already stripped those. Emitted
+  // only when there is genuine signal, so a quiet week reads exactly as before, and
+  // an old persisted pack with no `intelligence` block is silently unaffected.
+  const intel = pack.intelligence
+  if (intel) {
+    const clauses = []
+    const improved = (intel.improving?.areas || []).map(a => a.label).filter(Boolean)
+    if (improved.length) {
+      clauses.push(`${joinLabels(improved)} ${improved.length === 1 ? 'has' : 'have'} turned around`)
+    }
+    const adjusting = (intel.adjusting?.areas || []).map(a => a.label).filter(Boolean)
+    if (adjusting.length) {
+      clauses.push(`we're refining our approach on ${joinLabels(adjusting)}`)
+    }
+    if (clauses.length) parts.push(capFirst(clauses.join(', and ')) + '.')
+  }
+
   return parts.join(' ') || `Activity recorded for ${name} during ${label}.`
 }
 
@@ -188,6 +214,18 @@ const SYSTEM_PROMPT = [
   '- Write money with a dollar sign and the exact figure. Express ROAS as an',
   '  "N× return on ad spend" using the roas value. Omit metrics that are zero or',
   '  absent. Do not apologize for missing data.',
+  '',
+  'STRATEGIC POSTURE (only if a non-empty "intelligence" object is present):',
+  '- It summarises where things stand RIGHT NOW, not last week: `active` is the',
+  '  current count of open issues, `by_severity` splits it, `improving.areas` are',
+  '  metrics that have recovered, `adjusting.areas` are metrics where we are',
+  '  actively refining our approach, and `pacing` counts goals on track vs at risk.',
+  '- If — and only if — it carries something worth noting, add ONE closing sentence',
+  '  in the PRESENT tense: name an improving or adjusting area by its label, or give',
+  '  the on-track count. Frame "adjusting" as proactive refinement of our strategy,',
+  '  never as a failure or a tactic that "did not work".',
+  '- Use ONLY the labels and the integer counts inside that object — never invent a',
+  '  percentage or a success rate. If every count is zero, write nothing about posture.',
 ].join('\n')
 
 const USER_PREAMBLE =
