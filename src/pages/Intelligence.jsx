@@ -1452,6 +1452,21 @@ const RELIABILITY_TONE = {
   noisy:    { chip: 'bg-slate-100 text-slate-400 border-slate-200',      Icon: ShieldAlert, label: 'Noisy'    },
 }
 
+/* The third, FORESIGHT axis riding beside severity and reliability — the pulse's own
+   PREDICTIVE-PRECISION self-audit (lib/pulseAccuracy, attached by getClientPulse): of all
+   the times this client × metric's early warning fired N days before an ISO week closed,
+   how often did that week actually close adverse, and how far ahead did the call land. It
+   answers neither "how bad" (severity) nor "how often does this alarm hold up" (reliability)
+   but "when this sensor calls a week early, does the week prove it right." Given a target/
+   crosshair family in violet so it reads as a track record of the EARLY call and never
+   competes with the shield-family reliability chip or the rose/amber severity fill. Keyed by
+   the engine's accuracy label; absent (too thin a history to grade) → no chip at all. */
+const ACCURACY_TONE = {
+  proven:     { chip: 'bg-violet-50 text-violet-600 border-violet-200',  Icon: Target,    label: 'Proven'     },
+  developing: { chip: 'bg-violet-50/60 text-violet-500 border-violet-100', Icon: Crosshair, label: 'Developing' },
+  learning:   { chip: 'bg-slate-50 text-slate-400 border-slate-200',     Icon: Radar,     label: 'Learning'   },
+}
+
 function PulsePanel({ data }) {
   const roster = Array.isArray(data?.roster) ? data.roster : []
   if (roster.length === 0) return null              // nobody moving → degrade to no panel
@@ -1515,6 +1530,9 @@ function PulseRow({ r }) {
   // The pulse's own learned confidence for this client × metric (lib/pulseReliability,
   // attached by getClientPulse). null when the record was too thin to grade → no chip.
   const rel   = RELIABILITY_TONE[r.reliability_label] || null
+  // The pulse's own predictive-precision track record (lib/pulseAccuracy) — how often the
+  // early call proved out by week-close. Same null-safe contract: absent until gradeable.
+  const acc   = ACCURACY_TONE[r.accuracy_label] || null
 
   return (
     <div className="px-4 py-3">
@@ -1542,6 +1560,18 @@ function PulseRow({ r }) {
               >
                 <rel.Icon className="w-2.5 h-2.5" />
                 {rel.label}
+              </span>
+            )}
+            {/* FORESIGHT rides beside both: how often this early call has actually proven
+                out by week-close, and how far ahead. Hover for the grounded precision +
+                lead-days. Silent until there's enough graded history. */}
+            {acc && (
+              <span
+                title={r.accuracy_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', acc.chip)}
+              >
+                <acc.Icon className="w-2.5 h-2.5" />
+                {acc.label}
               </span>
             )}
           </div>
@@ -1656,6 +1686,7 @@ function ActTodayStrip({ data }) {
 function ActTodayRow({ r }) {
   const lane     = laneTone(r)
   const rel      = RELIABILITY_TONE[r.reliability_label] || null   // null when too thin to grade → no chip
+  const acc      = ACCURACY_TONE[r.accuracy_label] || null         // predictive track record; null until gradeable
   const delta    = Math.round(Number(r.delta_pct))
   const deltaStr = Number.isFinite(delta) ? `${delta >= 0 ? '+' : '−'}${Math.abs(delta)}%` : null
   const rank     = Number(r.priority_rank)
@@ -1686,6 +1717,17 @@ function ActTodayRow({ r }) {
               >
                 <rel.Icon className="w-2.5 h-2.5" />
                 {rel.label}
+              </span>
+            )}
+            {/* the FORESIGHT behind the reliability: has this early call actually proven out
+                by week-close, and how far ahead. Hover for precision + lead-days. */}
+            {acc && (
+              <span
+                title={r.accuracy_note || undefined}
+                className={cn('inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', acc.chip)}
+              >
+                <acc.Icon className="w-2.5 h-2.5" />
+                {acc.label}
               </span>
             )}
           </div>
