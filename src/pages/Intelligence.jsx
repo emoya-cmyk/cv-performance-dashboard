@@ -34,6 +34,7 @@ export default function Intelligence() {
   const [benchmarks, setBenchmarks] = useState(null)   // { period, cohort_size, metrics } — cross-client peer benchmarks
   const [recoveries, setRecoveries] = useState([])     // [{ client_name, recovery_reason, recovered_at, … }] — the win stream
   const [systemic, setSystemic] = useState(null)       // { portfolio_size, signals[] } — cross-client common-cause scan (agency-only)
+  const [trajectory, setTrajectory] = useState(null)   // { warnings[], count } — predictive early-warning roster (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -47,14 +48,14 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Five independent reads: the per-finding feed, the synthesized triage roster, the
-      // cross-client peer benchmarks, the "what we fixed" recovery stream, and the systemic
-      // common-cause scan. allSettled — not Promise.all — so a synthesis hiccup never blanks
-      // the feed. If any of the four synthesis reads stumbles its panel simply hides and the
-      // page degrades to exactly what it showed before that layer existed; only a feed
-      // failure is fatal.
-      const [feed, roster, bench, recov, sys] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(),
+      // Six independent reads: the per-finding feed, the synthesized triage roster, the
+      // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
+      // common-cause scan, and the predictive early-warning roster. allSettled — not
+      // Promise.all — so a synthesis hiccup never blanks the feed. If any of the five
+      // synthesis reads stumbles its panel simply hides and the page degrades to exactly
+      // what it showed before that layer existed; only a feed failure is fatal.
+      const [feed, roster, bench, recov, sys, traj] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -62,6 +63,7 @@ export default function Intelligence() {
       setBenchmarks(bench.status === 'fulfilled' && bench.value?.metrics ? bench.value : null)
       setRecoveries(recov.status === 'fulfilled' && Array.isArray(recov.value?.recoveries) ? recov.value.recoveries : [])
       setSystemic(sys.status === 'fulfilled' && Array.isArray(sys.value?.signals) ? sys.value : null)
+      setTrajectory(traj.status === 'fulfilled' && Array.isArray(traj.value?.warnings) ? traj.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -158,6 +160,13 @@ export default function Intelligence() {
           onPick={(id) => { if (id) setClientFilter(c => (c === id ? 'all' : id)) }}
         />
       )}
+
+      {/* heading for trouble — the PREDICTIVE companion to the triage roster. Triage ranks
+          who is worst TODAY; this ranks who is still inside a safe band but, by the slope of
+          their OWN recent health scores, projected to slide THROUGH a band floor within the
+          horizon. Read top-to-bottom the page goes "look here now" → "and here next". Agency-
+          only (names peers, like triage + systemic); hidden until at least one client slides. */}
+      {trajectory?.warnings?.length > 0 && <TrajectoryPanel data={trajectory} />}
 
       {/* systemic signals — the cross-client common-cause scan: the SAME adverse channel /
           metric / direction independently hitting ≥ minClients clients, collapsed into one
@@ -1111,6 +1120,153 @@ function SystemicRow({ s }) {
             </div>
             <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── early-warning trajectory — the PREDICTIVE roster ──────────────────────────
+   Triage ranks who is worst TODAY; this ranks who is still inside a safe band but, by
+   the slope of their OWN recent health scores, projected to slide THROUGH a band floor
+   within the horizon — "will churn unless you act this week," not "churned." The forward-
+   looking companion to the triage roster: read the page top-to-bottom and it goes "look
+   here now" (triage) → "and here next" (this). Each verdict is a Holt projection over one
+   client's score history alone (lib/trajectory.js) with a calibrated band, but the RANKED
+   roster names other clients and is therefore STRICTLY AGENCY-ONLY — the same cross-tenant
+   boundary triage and systemic respect; it never rides a per-client or shared-link payload.
+   Self-calibrating and operator-free: the series IS the per-sweep health history, the floors
+   ARE health.js's own band cutoffs, and every nightly sweep appends one more point — the
+   projections sharpen on their own as history deepens, no thresholds touched by hand. Hides
+   whole when nobody is sliding. */
+const TRAJECTORY_SHOWN = 6   // cap the rows so a sliding book stays a glance
+
+// crossing strength → chip. 'likely' = the central forecast itself falls through the floor
+// within the horizon (the stronger call, rose); 'possible' = only the pessimistic edge of
+// the prediction band reaches it (a softer maybe, amber). Mirrors trajectory.js's two kinds.
+const CROSSING_KIND = {
+  likely:   { label: 'Likely',   cls: 'bg-rose-50 text-rose-600 border-rose-200' },
+  possible: { label: 'Possible', cls: 'bg-amber-50 text-amber-600 border-amber-200' },
+}
+
+function TrajectoryPanel({ data }) {
+  const warnings = Array.isArray(data?.warnings) ? data.warnings : []
+  if (warnings.length === 0) return null            // nobody sliding → degrade to no panel
+  const shown  = warnings.slice(0, TRAJECTORY_SHOWN)
+  const hidden = warnings.length - shown.length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+          <TrendingDown className="w-4 h-4 text-amber-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Heading for trouble</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {warnings.length} client{warnings.length === 1 ? '' : 's'} projected to slide
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((w) => <TrajectoryRow key={w.client_id} w={w} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more sliding client{hidden === 1 ? '' : 's'}</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-amber-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A client lands here while still inside a safe band when the slope of its own recent health scores projects it
+          <span className="font-bold text-amber-600"> through the floor within the horizon</span> — runway to act before it
+          crosses, not after. Self-calibrating: the floors are the engine's own band cutoffs and every nightly sweep
+          sharpens the projection. Agency-only — clients never see the cross-account roster.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One sliding client: where its health sits today, the band it's projected to fall INTO,
+   how soon, and how sure. The left rail and the projected score read in the DESTINATION
+   band's color — the stakes, not the status quo. `current band → destination band` is the
+   heart of the row; the kind chip says how strong the call is (likely = the central forecast
+   crosses, possible = only the band's pessimistic edge does); the right rail is the runway
+   ("~N sweeps to the floor") over a confidence meter the engine WITHHOLDS until it has enough
+   history to trust the fit (confidence null → no meter, never a guessed bar). */
+function TrajectoryRow({ w }) {
+  const cur   = healthBandMeta(w.current_band)
+  const dest  = healthBandMeta(w.crossing?.to_band)
+  const kind  = CROSSING_KIND[w.crossing?.kind] || CROSSING_KIND.possible
+  const conf  = w.confidence == null ? null : Math.max(0, Math.min(100, Math.round(Number(w.confidence) * 100)))
+  const curScore  = Math.round(Number(w.current))
+  const projScore = Math.round(Number(w.projected))
+  const trend = Number(w.trend)
+  const cutoff = w.crossing?.cutoff
+  // 'likely' carries a central-line ETA; 'possible' only the band's earliest plausible step.
+  // crossing always sets eta_worst (it's the gate to even forming a crossing), so this is
+  // finite for every warning — the runway headline always renders.
+  const etaRaw = w.crossing?.eta != null ? w.crossing.eta : w.crossing?.eta_worst
+  const etaN   = Number.isFinite(Number(etaRaw)) ? Number(etaRaw) : null
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border', dest.chip)}>
+          <TrendingDown className="w-4 h-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{w.client_name || 'Unknown'}</span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', cur.chip)}>
+              {cur.label}
+            </span>
+            <span className="text-slate-300 text-xs font-black leading-none">→</span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', dest.chip)}>
+              {dest.label}
+            </span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', kind.cls)}>
+              {kind.label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span>Health <span className="tabular-nums font-bold text-slate-600">{curScore}</span></span>
+            <span className="text-slate-300">→</span>
+            <span className={cn('tabular-nums font-bold', dest.text)}>{projScore}</span>
+            {Number.isFinite(trend) && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span className="tabular-nums">{trend > 0 ? '+' : ''}{trend}/sweep</span>
+              </>
+            )}
+            {Number.isFinite(Number(cutoff)) && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>floor {cutoff}</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {etaN != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', dest.text)}>~{etaN}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">sweep{etaN === 1 ? '' : 's'} to floor</div>
+            </>
+          )}
+          {conf != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full', dest.dot)} style={{ width: `${conf}%` }} />
+              </div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
