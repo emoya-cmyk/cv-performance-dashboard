@@ -140,6 +140,16 @@ const { pulseAccuracy, narratePulseAccuracy } = require('./pulseAccuracy')
 // band returned verbatim ⇒ a provable no-op. narratePulseTuning is the agency-only
 // one-sentence "why" of an APPLIED adjustment. See lib/pulseTuning.js.
 const { tunePulseThresholds, narratePulseTuning } = require('./pulseTuning')
+// The SYNTHESIS capstone over the whole pulse loop (intel-v7 7): once every signal has
+// detected → diagnosed → graded → triaged → audited → self-tuned, there are still N chips
+// on the screen and a human deciding what the morning is ABOUT. pulseBriefing reads the
+// SAME reliability-weighted feed the triage already produced and answers one question —
+// "if you do one thing today, do this, and here's how much to trust that call." It never
+// re-ranks: the headline IS rankPulseSignals(roster,{adverseOnly})[0], i.e. act_today[0]
+// by construction, so it can't disagree with the list beneath it. summarizePortfolioPulse
+// (agency, keeps machinery → GET /pulse) and summarizeClientPulse (one calm client-toned
+// sentence, machinery-free → rides clientSafePulse untouched). See lib/pulseBriefing.js.
+const { summarizePortfolioPulse, summarizeClientPulse } = require('./pulseBriefing')
 
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
@@ -2545,7 +2555,19 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       ? { ...s, priority: t.priority, lane: t.lane, triage_reason: t.triage_reason, triage_client_reason: t.triage_client_reason }
       : s
   })
-  return { as_of: end, window, lookback_days: lookbackDays, signals: rankPulse(enriched) }
+  // The morning's ONE thing for THIS client, synthesised on top (intel-v7 7): a single
+  // calm, client-toned sentence + a machinery-free `focus`. Built from the SAME enriched
+  // signals; summarizeClientPulse re-derives the action order via rankPulseSignals, so the
+  // briefing's pick can't disagree with the per-metric list. It carries ONLY client-visible
+  // fields (no z / baseline / tuning_*), so it rides the clientSafePulse egress untouched —
+  // a top-level sibling that passes straight through whether or not a signal needs stripping.
+  return {
+    as_of: end,
+    window,
+    lookback_days: lookbackDays,
+    signals: rankPulse(enriched),
+    briefing: summarizeClientPulse(enriched),
+  }
 }
 
 // clientSafePulse(pulse) - the CLIENT-EGRESS projection of a getClientPulse result. getClientPulse
@@ -2605,7 +2627,15 @@ async function getPortfolioPulse({ asOf, lookbackDays = PULSE_LOOKBACK_DAYS, win
   // as pulseReliability regrades each metric's firing history. Additive — `roster` is
   // untouched, so existing readers are byte-identical.
   const act_today = rankPulseSignals(roster, { adverseOnly: true })
-  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster), act_today }
+  // The whole-book morning briefing synthesised on top (intel-v7 7): a one-word posture,
+  // a grounded headline, up to three supporting rows, and a confidence read on the day's
+  // call. It is fed the SAME raw `roster` `act_today` is, and re-derives the action feed
+  // with the SAME rankPulseSignals call — so briefing.headline === act_today[0] by
+  // construction (the headline can never disagree with the ranked feed). Agency-only and
+  // machinery-keeping (the headline row still carries tuning); rides GET /pulse, never the
+  // per-client egress. Additive — `roster` and `act_today` are byte-identical for readers.
+  const briefing = summarizePortfolioPulse(roster)
+  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster), act_today, briefing }
 }
 
 // Move one finding to a new lifecycle status and return the fresh row (null if the

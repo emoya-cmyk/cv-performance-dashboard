@@ -58,6 +58,11 @@ const { pulseAccuracy, narratePulseAccuracy } = require('../lib/pulseAccuracy')
 // firing signal, keeps the accuracy SURFACE canonical (non-circular), and never lets the
 // calibration machinery reach a client.
 const { tunePulseThresholds, narratePulseTuning } = require('../lib/pulseTuning')
+// The synthesis capstone (intel-v7 7a), unit-tested in full in insights.pulseBriefing.test.js.
+// Here we only assert the ENGINE published EXACTLY what the pure module computes over its own
+// roster/signals — the briefing is forwarded faithfully, never re-derived — and that the
+// client briefing is machinery-free at the wire and rides clientSafePulse untouched.
+const { summarizePortfolioPulse, summarizeClientPulse } = require('../lib/pulseBriefing')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -777,4 +782,105 @@ test('clientSafePulse over a PROVEN/sensitized client: the EFFECT (the tuned-ban
   // PURITY: the agency object the roster still reads is unharmed by the client projection.
   const agencyAfter = agencyPulse.signals.find(s => s.metric === 'leads')
   assert.ok(agencyAfter.tuning && agencyAfter.tuning_note, 'agency machinery intact after the strip')
+})
+
+// ── intel-v7 (7b): the morning briefing wired onto BOTH reads ───────────────────
+// pulseBriefing.js is unit-tested in full in insights.pulseBriefing.test.js (the helper
+// thresholds, the headline===act_today[0] invariant, the count phrasing, the confidence
+// split, and the machinery-free client guard). These wiring tests prove only that the
+// ENGINE forwards its REAL roster/signals through that module faithfully — the published
+// briefing is byte-identical to calling the pure synthesiser over the very roster/signals
+// the engine itself published — and that the agency headline can never disagree with the
+// act_today feed it sits atop, while the client briefing carries zero machinery and rides
+// clientSafePulse through untouched.
+
+test('getPortfolioPulse: publishes a briefing byte-identical to summarizePortfolioPulse over its own roster, whose headline IS act_today[0]', async () => {
+  await ready()
+  const bCollapse = await freshClient('Briefing Collapse Co')   // critical adverse leads drop
+  const bDip      = await freshClient('Briefing Dip Co')         // warning  adverse revenue dip
+  const bTailwind = await freshClient('Briefing Tailwind Co')    // leads SPIKE → a NON-adverse tailwind
+  await seedWeekly(bCollapse, 'leads',   [20, 90, 100, 110, 95, 105, 100, 98, 102])
+  await seedWeekly(bDip,      'revenue', [3500, 5000, 4000, 6000, 4500, 5500, 5000, 4800, 5200])
+  await seedWeekly(bTailwind, 'leads',   [220, 100, 98, 102, 99, 101, 100, 103, 97])
+
+  const out = await getPortfolioPulse({ asOf: ASOF })
+  assert.ok(out.briefing, 'a briefing rides the portfolio payload')
+
+  // FAITHFUL WIRE: the engine published EXACTLY what the pure synthesiser computes over the
+  // roster it ALSO published — not a parallel or stale derivation. summarizePortfolioPulse
+  // re-ranks internally (adverse-only, deterministic), so feeding it the published `roster`
+  // re-derives the identical briefing the engine built from the raw roster.
+  assert.deepEqual(out.briefing, summarizePortfolioPulse(out.roster))
+
+  // THE HEADLINE INVARIANT — the capstone of the whole loop: the "one thing" is, by
+  // construction, the top of the SAME reliability-weighted feed the agency already acts
+  // from, so the headline can never disagree with the list beneath it.
+  assert.deepEqual(out.briefing.headline, out.act_today[0])
+  assert.equal(out.briefing.counts.adverse, out.act_today.length)
+
+  // and the synthesis is substantive: my fixture guarantees a non-quiet book, so the
+  // briefing is a real 'briefing' with a valid posture, a grounded headline sentence that
+  // embeds the lead signal's own triage reason verbatim, and a confidence read on the day.
+  assert.equal(out.briefing.status, 'briefing')
+  assert.ok(['act', 'watch', 'steady'].includes(out.briefing.posture))
+  assert.ok(out.briefing.headline_text.includes(out.act_today[0].triage_reason),
+    'the headline sentence carries the lead signal\'s own triage reason')
+  assert.ok(['high', 'moderate', 'building', 'n/a'].includes(out.briefing.confidence.label))
+})
+
+test('getClientPulse: publishes a client briefing byte-identical to summarizeClientPulse over its own signals, machinery-free even for a tuned client', async () => {
+  await ready()
+  const c = await freshClient('Briefing Client Co')
+  // the PROVEN/sensitized fixture — its signal carries the full machinery (a `tuning` block
+  // and a `baseline`): the strongest case for the briefing's client-safety, since it must
+  // surface the same metric while leaking none of that dial.
+  await seedDaily(c, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  assert.ok(out.briefing, 'a briefing rides the per-client payload')
+
+  // the underlying signal genuinely carries machinery — else the leak guard below is vacuous.
+  const sig = out.signals.find(s => s.metric === 'leads')
+  assert.ok(sig.tuning && sig.baseline, 'the live signal carries the tuning dial and a baseline')
+
+  // FAITHFUL WIRE: byte-identical to the pure synthesiser over the published signals.
+  assert.deepEqual(out.briefing, summarizeClientPulse(out.signals))
+
+  // SHAPE: a real one-sentence briefing whose `focus` exposes EXACTLY the five client-visible
+  // fields — no z, no baseline, no tuning_* — the machinery-free contract by construction.
+  assert.equal(out.briefing.status, 'briefing')
+  assert.ok(out.briefing.headline_text.length > 0)
+  assert.deepEqual(Object.keys(out.briefing.focus).sort(),
+    ['delta_pct', 'direction', 'label', 'lane', 'metric'])
+
+  // LEAK GUARD: nowhere in the serialized client briefing does the machinery surface — not
+  // the tuning dial, not the raw baseline — even though the signal it summarises carries both.
+  const wire = JSON.stringify(out.briefing)
+  assert.equal(wire.includes('tuning'), false, 'no tuning machinery in the client briefing')
+  assert.equal(wire.includes('baseline'), false, 'no raw baseline in the client briefing')
+})
+
+test('clientSafePulse: carries the client briefing through untouched — same reference on both the strip and the no-strip path', async () => {
+  await ready()
+  // (1) a PROVEN/sensitized client → a strip happens (a new envelope is allocated); the
+  // briefing sibling must ride that {...pulse} spread through as the SAME object.
+  const cTuned = await freshClient('Briefing Egress Tuned Co')
+  await seedDaily(cTuned, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+  const tunedPulse = await getClientPulse(cTuned, { asOf: ASOF })
+  const tSig = tunedPulse.signals.find(s => s.metric === 'leads')
+  assert.ok(tSig.tuning, 'the tuned signal carries a dial → clientSafePulse will strip and re-allocate')
+  const safeTuned = clientSafePulse(tunedPulse)
+  assert.notEqual(safeTuned, tunedPulse, 'a strip happened — a new envelope')
+  assert.equal(safeTuned.briefing, tunedPulse.briefing, 'the briefing rides the spread as the SAME object')
+  assert.ok(safeTuned.briefing && safeTuned.briefing.status, 'and it is intact')
+
+  // (2) a plain collapse client → nothing to strip → clientSafePulse returns the SAME pulse
+  // reference, so the briefing is trivially preserved.
+  const cPlain = await freshClient('Briefing Egress Plain Co')
+  await seedWeekly(cPlain, 'leads', [20, 90, 100, 110, 95, 105, 100, 98, 102])
+  const plainPulse = await getClientPulse(cPlain, { asOf: ASOF })
+  assert.equal(plainPulse.signals.find(s => s.metric === 'leads').tuning, undefined, 'no dial to strip')
+  const safePlain = clientSafePulse(plainPulse)
+  assert.equal(safePlain, plainPulse, 'no strip → same pulse reference')
+  assert.equal(safePlain.briefing, plainPulse.briefing, 'briefing preserved on the no-strip path')
 })
