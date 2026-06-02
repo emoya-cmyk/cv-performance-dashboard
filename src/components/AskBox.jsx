@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Sparkles, CornerDownLeft, CornerDownRight, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus, LineChart, Users, CalendarRange, Sigma, ArrowLeftRight } from 'lucide-react'
+import { Sparkles, Lightbulb, CornerDownLeft, CornerDownRight, Loader2, AlertTriangle, ShieldCheck, X, TrendingUp, TrendingDown, Minus, LineChart, Users, CalendarRange, Sigma, ArrowLeftRight } from 'lucide-react'
 import { api } from '@/lib/api'
 import { weekLabel } from '@/lib/utils'
 
@@ -158,10 +158,110 @@ function FollowupChip({ followup, onPick }) {
   )
 }
 
-function AskResult({ result, onClear, onPick }) {
+// intel-v6 (5): the grounded "why did it change?" breakdown. Renders ONLY what the
+// server already computed and formatted (lib/contribution via runExplain) — the
+// one-line narration, then the exact per-client receipts. Every figure and sign is
+// read verbatim (delta_display, share_pct); the only thing this panel computes is
+// cosmetic bar width. Because the arithmetic is EXACT — named contributors + others
+// + unattributed sum to the true Δtotal — it carries the same "Verified" trust mark
+// as the figures, never the "AI-written" one: there is no model in this path to
+// hallucinate a driver.
+function WhyPanel({ explain }) {
+  const { narration, contributors, others, unattributed, moved, lead } = explain
+
+  // Eligible but washed out: the answer said it moved, the recomputed totals agree it
+  // didn't (a rare race). runExplain reports that honestly with moved:false; mirror
+  // it rather than drawing an empty breakdown.
+  if (!moved) return <p className="mt-2 text-sm text-slate-500 fade-in">{narration}</p>
+
+  // A contributor's SIGNED share is its delta as a fraction of the net change, so
+  // share > 0 means it pushed the figure the way the total actually went (a DRIVER)
+  // and share < 0 means it pulled the other way (a DRAG) — true whether the metric
+  // rose or fell, since share = delta / totalDelta folds the direction in. We colour
+  // by that, never by metric polarity: this panel explains the change, not whether
+  // the change is "good".
+  const kind = (share) => (share > 1e-9 ? 'driver' : share < -1e-9 ? 'drag' : 'flat')
+  const TONE = {
+    driver: { bar: 'bg-emerald-400', text: 'text-emerald-700' },
+    drag:   { bar: 'bg-rose-300',    text: 'text-rose-600' },
+    flat:   { bar: 'bg-slate-200',   text: 'text-slate-400' },
+  }
+
+  // Bars normalise to the largest |share| so the biggest mover reads full-width and
+  // the rest stay proportional. |share| can exceed 1 (a mover bigger than the net
+  // change, offset by a counter-mover), so normalise rather than assume a 0..1 range.
+  const maxAbs = Math.max(...contributors.map((c) => Math.abs(c.share)), 0) || 1
+  const barW   = (share) => `${Math.max(6, Math.round((Math.abs(share) / maxAbs) * 100))}%`
+
+  const Row = ({ label, deltaText, share, share_pct, emphasis }) => {
+    const tone = TONE[kind(share)]
+    return (
+      <div className="flex items-center gap-2.5 py-1">
+        <span className={`w-24 sm:w-28 shrink-0 truncate text-xs ${emphasis ? 'font-extrabold text-slate-800' : 'font-semibold text-slate-600'}`} title={label}>{label}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+          <div className={`h-full rounded-full ${tone.bar}`} style={{ width: barW(share) }} />
+        </div>
+        <span className={`w-20 shrink-0 text-right text-xs font-bold tabular-nums ${tone.text}`}>{deltaText}</span>
+        <span className="w-11 shrink-0 text-right text-[11px] tabular-nums text-slate-400">{share_pct != null ? `${share_pct}%` : ''}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-2 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5 mb-2">
+        <ShieldCheck className="w-3 h-3" /> Exact attribution
+      </span>
+      <p className="text-sm font-semibold text-slate-800 leading-relaxed mb-2.5">{narration}</p>
+      <div className="flex flex-col">
+        {contributors.map((c) => (
+          <Row key={c.key} label={c.label} deltaText={c.delta_display} share={c.share} share_pct={c.share_pct}
+               emphasis={!!lead && c.key === lead.key} />
+        ))}
+        {others && (
+          <Row label={`${others.count} other${others.count === 1 ? '' : 's'}`} deltaText={others.delta_display}
+               share={others.share} share_pct={others.share_pct} />
+        )}
+        {unattributed && (
+          <Row label="Unattributed" deltaText={unattributed.delta_display}
+               share={unattributed.share} share_pct={unattributed.share_pct} />
+        )}
+      </div>
+      <p className="mt-2.5 text-[10px] text-slate-400">
+        Each client’s share of the total change · <span className="text-emerald-600 font-semibold">drivers</span> pushed it, <span className="text-rose-500 font-semibold">drags</span> held it back
+      </p>
+    </div>
+  )
+}
+
+function AskResult({ result, clientId, onClear, onPick }) {
   const { answer, narrated, meta, columns, rows, followups } = result
   const hasBucket    = columns.includes('bucket')
   const bucketHeader = BUCKET_HEADER[meta.group_by] || 'Item'
+
+  // intel-v6 (5): the on-demand "why did it change?" sub-flow — its own little state
+  // machine (idle → loading → done | error) so the breakdown loads inline under the
+  // figure without disturbing the answer above. Reset whenever a NEW answer arrives so
+  // a prior breakdown never bleeds onto the next question (the parent also remounts us
+  // through its loading state, but this keeps the per-answer invariant explicit).
+  const [whyStatus, setWhyStatus] = useState('idle')
+  const [why, setWhy]             = useState(null)
+  const [whyErr, setWhyErr]       = useState(null)
+  useEffect(() => { setWhyStatus('idle'); setWhy(null); setWhyErr(null) }, [result])
+
+  async function runWhy() {
+    if (whyStatus === 'loading') return
+    setWhyStatus('loading'); setWhyErr(null)
+    try {
+      // Re-run the SAME spec the answer carried; the server scopes it by token and
+      // returns the exact per-client contributions (api.askExplain → POST /ask/explain).
+      const r = await api.askExplain(result.spec, clientId)
+      setWhy(r); setWhyStatus('done')
+    } catch (err) {
+      setWhyErr(friendlyError(err))
+      setWhyStatus('error')
+    }
+  }
 
   return (
     <div className="mt-4 border-t border-slate-100 pt-4 fade-in">
@@ -220,6 +320,37 @@ function AskResult({ result, onClear, onPick }) {
             {meta.comparison && <DeltaChip comparison={meta.comparison} />}
           </div>
           <span className="text-xs text-slate-400">{meta.metric} · {meta.time_label}</span>
+        </div>
+      )}
+
+      {/* intel-v6 (5): grounded "why did it change?" — offered ONLY when the server
+          flagged this exact figure decomposable (meta.explainable: an UNSCOPED,
+          additive single figure that moved vs its prior period). Clicking re-runs the
+          SAME spec through contribution.js for an EXACT per-client breakdown — no LLM,
+          so the receipts can never disagree with the figure above. A client-scoped
+          ask is never flagged (there is no cross-client "who" to show), so this chip
+          only appears on the agency whole-book view. */}
+      {meta.explainable && (
+        <div className="mt-3">
+          {(whyStatus === 'idle' || whyStatus === 'loading') && (
+            <button
+              onClick={runWhy}
+              disabled={whyStatus === 'loading'}
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:opacity-60 transition"
+            >
+              {whyStatus === 'loading'
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Lightbulb className="w-3.5 h-3.5" />}
+              {whyStatus === 'loading' ? 'Breaking it down…' : 'Why did it change?'}
+            </button>
+          )}
+          {whyStatus === 'error' && (
+            <p className="text-xs text-amber-700">
+              {whyErr?.body || 'Couldn’t break that down right now.'}{' '}
+              <button onClick={runWhy} className="font-semibold underline hover:no-underline">Try again</button>
+            </p>
+          )}
+          {whyStatus === 'done' && why && <WhyPanel explain={why} />}
         </div>
       )}
 
@@ -395,7 +526,7 @@ export default function AskBox({
       )}
 
       {/* Result */}
-      {status === 'done' && result && <AskResult result={result} onClear={reset} onPick={run} />}
+      {status === 'done' && result && <AskResult result={result} clientId={clientId} onClear={reset} onPick={run} />}
     </div>
   )
 }
