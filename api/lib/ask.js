@@ -180,17 +180,36 @@ function rollingWeeks(now, n) {
 // ── COMPILE — whitelist identifiers + bound params only ───────────────────────
 // Returns { sql, params, columns, metric, grouping, timeLabel }. `isPg` is taken
 // at call time so the same spec compiles correctly against either backend.
-function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL) {
+//
+// scopeClientId (4th arg) is the HARD client boundary for the /my-dashboard
+// surface. When present it is a server-trusted id (the authenticated client's
+// own, NOT anything the LLM produced) and it changes the compile in three ways,
+// all enforced HERE so the boundary can't be bypassed upstream:
+//   1. a bound `wr.client_id = $N` predicate is ALWAYS added — the row set is
+//      pinned to that one client no matter what the spec says;
+//   2. group_by:'client' is neutered to 'none' — a single client has no inter-
+//      client buckets, and this guarantees we never SELECT `c.name AS bucket`
+//      (so the scoped surface can't enumerate or name other clients);
+//   3. the LLM's free-text client_filter is IGNORED — a hallucinated or
+//      adversarial name can't redirect the scope to someone else's data.
+// When scopeClientId is null the path below is byte-identical to before, so the
+// agency "ask the whole book" behaviour is completely unchanged.
+function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL, scopeClientId = null) {
   const metric = METRICS[spec.metric]
   if (!metric) throw new SpecError(`unknown metric ${JSON.stringify(spec.metric)}`)  // defensive: callers must validate first
-  const gkey   = spec.group_by
+  const scoped = scopeClientId != null
+  // Pinning to one client collapses a cross-client ranking to that client's own
+  // single total; keep week/month trends (a client's own trend is safe + useful).
+  const gkey   = (scoped && spec.group_by === 'client') ? 'none' : spec.group_by
   const params = []
   const P = (v) => { params.push(v); return '$' + params.length }   // bind & return placeholder
 
   // SELECT: optional bucket column + the metric aggregate aliased `value`.
   const selects = []
   let groupSql = null
-  let joinClients = !!spec.client_filter
+  // The clients JOIN exists only to match/emit a client NAME; a scoped query
+  // filters by wr.client_id directly and must never reach for c.name.
+  let joinClients = !scoped && !!spec.client_filter
   if (gkey === 'client') {
     selects.push('c.name AS bucket'); groupSql = 'c.id, c.name'; joinClients = true
   } else if (gkey === 'week') {
@@ -203,12 +222,14 @@ function compileQuery(spec, now = new Date(), isPg = !!process.env.DATABASE_URL)
   let sql = `SELECT ${selects.join(', ')} FROM weekly_reports wr`
   if (joinClients) sql += ' JOIN clients c ON c.id = wr.client_id'
 
-  // WHERE: time-range params first, then the client filter — both bound. The
-  // placeholder order ($1,$2,…) therefore matches push order monotonically.
+  // WHERE: enforced client scope first (when set), then time-range params, then
+  // the client filter — all bound. The placeholder order ($1,$2,…) therefore
+  // matches push order monotonically.
   const wheres = []
+  if (scoped) wheres.push(`wr.client_id = ${P(scopeClientId)}`)
   const t = resolveTimeRange(spec, now)
   for (const w of t.wheres) wheres.push(w.sql.replace('%', P(w.value)))
-  if (spec.client_filter) wheres.push(`LOWER(c.name) = LOWER(${P(spec.client_filter)})`)
+  if (!scoped && spec.client_filter) wheres.push(`LOWER(c.name) = LOWER(${P(spec.client_filter)})`)
   if (wheres.length) sql += ` WHERE ${wheres.join(' AND ')}`
 
   if (groupSql) sql += ` GROUP BY ${groupSql}`
@@ -417,6 +438,9 @@ async function parseSpec(question) {
  * @param {boolean} [opts.narrate=true]  set false for the deterministic answer only
  * @param {Date}    [opts.now]           inject "now" (tests / fixed reporting clock)
  * @param {boolean} [opts.isPg]          override backend detection
+ * @param {string}  [opts.scopeClientId] HARD client boundary — pins every row to
+ *   this one client and strips any cross-client grouping/name (the /my-dashboard
+ *   surface). Must be a server-trusted id, never an LLM-derived value.
  * @returns {Promise<{question,spec,answer,narrated,template,columns,rows,meta}>}
  * @throws  Error with .code: NO_AI | EMPTY | PARSE_TRANSPORT | UNPARSEABLE
  */
@@ -427,11 +451,12 @@ async function runAsk(question, opts = {}) {
     throw codeErr('NO_AI', 'natural-language questions require ANTHROPIC_API_KEY')
   }
 
-  const now  = opts.now || new Date()
-  const isPg = opts.isPg != null ? opts.isPg : !!process.env.DATABASE_URL
+  const now   = opts.now || new Date()
+  const isPg  = opts.isPg != null ? opts.isPg : !!process.env.DATABASE_URL
+  const scope = opts.scopeClientId != null ? opts.scopeClientId : null
 
   const spec     = await parseSpec(q)
-  const compiled = compileQuery(spec, now, isPg)
+  const compiled = compileQuery(spec, now, isPg, scope)
 
   const { rows: rawRows } = await query(compiled.sql, compiled.params)
   // node-pg returns NUMERIC/BIGINT as STRINGS — coerce before grounding/format.

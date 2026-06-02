@@ -50,6 +50,32 @@ async function clientExists(clientId) {
   return rows.length > 0
 }
 
+// Derive the HARD client boundary for an ask from the authenticated token —
+// never from a body param a caller could forge to widen their own view. The
+// posture is an allow-list: only an explicit `agency` role may ever see across
+// clients; every other token is pinned to its own client_id or refused.
+//   agency role → may optionally narrow to one client via body.clientId
+//                 (must exist → 404); absent → the whole book (null scope).
+//   any other   → hard-pinned to its own token client_id; the body's clientId is
+//                 ignored. No client_id on a non-agency token is a broken account
+//                 that can't be safely scoped → 403.
+// lib/ask.js re-enforces this id at compile time, so even a spec that tries to
+// group_by:'client' or names a different client collapses to the scoped total —
+// this route check and that compile check are defence-in-depth for each other.
+async function resolveAskScope(req) {
+  const user = req.user || {}
+  if (user.role === 'agency') {
+    const wanted = req.body?.clientId
+    if (wanted != null && wanted !== '') {
+      if (!(await clientExists(wanted))) return { error: 'client not found', status: 404 }
+      return { scopeClientId: wanted }
+    }
+    return { scopeClientId: null }  // whole book
+  }
+  if (user.client_id) return { scopeClientId: user.client_id }
+  return { error: 'not authorized for portfolio queries', status: 403 }
+}
+
 // ── GET /api/ai/recap/:clientId ───────────────────────────────────────────────
 // Stored recap, generated-on-miss. Idempotent and cheap on repeat hits.
 router.get('/recap/:clientId', async (req, res) => {
@@ -89,8 +115,11 @@ router.post('/recap/:clientId', async (req, res) => {
 })
 
 // ── POST /api/ai/ask ──────────────────────────────────────────────────────────
-// Body: { question: string }. Returns the deterministic rows plus a grounded
-// one-line answer. runAsk tags failures with a .code we map to honest statuses:
+// Body: { question: string, clientId?: string }. Returns the deterministic rows
+// plus a grounded one-line answer, scoped to whatever the caller is allowed to
+// see (resolveAskScope): a client token only ever sees its own data; an agency
+// token sees the whole book, or one client when it passes clientId. runAsk tags
+// failures with a .code we map to honest statuses:
 //   NO_AI          → 503  (no ANTHROPIC_API_KEY configured)
 //   EMPTY          → 400  (blank question)
 //   UNPARSEABLE    → 422  (couldn't map the question onto the query schema)
@@ -104,7 +133,10 @@ router.post('/ask', async (req, res) => {
   }
 
   try {
-    const result = await runAsk(question)
+    const scope = await resolveAskScope(req)
+    if (scope.error) return res.status(scope.status).json({ error: scope.error })
+
+    const result = await runAsk(question, { scopeClientId: scope.scopeClientId })
     res.json(result)
   } catch (err) {
     const status = ASK_STATUS[err.code]
@@ -117,3 +149,6 @@ router.post('/ask', async (req, res) => {
 })
 
 module.exports = router
+// Exposed for unit tests — the route's hard client-scope boundary. Attaching it
+// to the exported router leaves the express mount (router-as-middleware) intact.
+module.exports.resolveAskScope = resolveAskScope

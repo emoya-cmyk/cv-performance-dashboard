@@ -195,6 +195,110 @@ test('group_by none emits no GROUP BY and no join when unfiltered', () => {
   assert.ok(!sql.includes('JOIN clients'))
 })
 
+// ── 2b. ENFORCED CLIENT SCOPE (the /my-dashboard boundary) ────────────────────
+// compileQuery's 4th arg pins every row to one server-trusted client id. These
+// prove the three guarantees that make the ask layer safe to expose per-client:
+// the scope is ALWAYS applied, cross-client grouping can't leak, and the LLM's
+// free-text client_filter can't redirect the scope — while the unscoped agency
+// path stays byte-identical.
+
+test('scoped compile always binds wr.client_id, regardless of spec', () => {
+  const { sql, params } = compileQuery(
+    validateSpec({ metric: 'revenue', time_range: 'all_time' }),
+    NOW, false, 'client-42'
+  )
+  // all_time has no time predicate, so the scope is the only WHERE term.
+  assert.ok(sql.includes('WHERE wr.client_id = $1'), sql)
+  assert.deepEqual(params, ['client-42'])
+})
+
+test('scoped compile neutralises group_by:client — no cross-client buckets or names', () => {
+  const { sql, params, columns, grouping } = compileQuery(
+    validateSpec({ metric: 'revenue', group_by: 'client', time_range: 'all_time', limit: 50 }),
+    NOW, false, 'client-7'
+  )
+  assert.equal(grouping, 'none')
+  assert.deepEqual(columns, ['value'])
+  assert.ok(!sql.includes('c.name'),       'must never SELECT another client name')
+  assert.ok(!sql.includes('JOIN clients'), 'no clients join when scoped')
+  assert.ok(!sql.includes('GROUP BY'),     'a single client has no inter-client grouping')
+  assert.ok(!/LIMIT/.test(sql),            'no ranking LIMIT when collapsed to one total')
+  assert.ok(sql.includes('wr.client_id = $1'))
+  assert.deepEqual(params, ['client-7'])
+})
+
+test('scoped compile ignores the LLM client_filter — it cannot redirect scope', () => {
+  const { sql, params } = compileQuery(
+    validateSpec({ metric: 'revenue', time_range: 'all_time', client_filter: 'Some Other Client' }),
+    NOW, false, 'client-9'
+  )
+  assert.ok(!sql.includes('LOWER(c.name)'),        'the free-text name filter is dropped when scoped')
+  assert.ok(!params.includes('Some Other Client'), 'and never bound')
+  assert.deepEqual(params, ['client-9'])              // only the enforced scope
+})
+
+test('scoped compile keeps the enforced id first, then binds the time range in order', () => {
+  const { sql, params } = compileQuery(
+    validateSpec({ metric: 'revenue', time_range: 'last_week' }),
+    NOW, false, 'client-3'
+  )
+  // client_id is $1 (pushed first), the week boundary is $2.
+  assert.ok(sql.includes('wr.client_id = $1'))
+  assert.ok(sql.includes('wr.week_start = $2'))
+  assert.deepEqual(params, ['client-3', '2026-05-18'])
+  const placeholders = (sql.match(/\$\d+/g) || []).length
+  assert.equal(placeholders, params.length)
+})
+
+test("scoped compile still allows a client's own week trend (no clients join)", () => {
+  const { sql, params, columns, grouping } = compileQuery(
+    validateSpec({ metric: 'revenue', group_by: 'week', time_range: 'all_time' }),
+    NOW, false, 'client-5'
+  )
+  assert.equal(grouping, 'week')
+  assert.deepEqual(columns, ['bucket', 'value'])
+  assert.ok(sql.includes('wr.client_id = $1'))
+  assert.ok(!sql.includes('JOIN clients'), 'week bucket comes from wr.week_start, no name needed')
+  assert.deepEqual(params, ['client-5'])
+})
+
+test('UNSCOPED compile is unchanged — agency path keeps client grouping + join + no client_id', () => {
+  // Regression guard: the 4th-arg addition must not perturb the whole-book path.
+  const { sql, params } = compileQuery(
+    validateSpec({ metric: 'revenue', group_by: 'client', time_range: 'all_time', limit: 3 }),
+    NOW, false   // no scope arg
+  )
+  assert.ok(!sql.includes('wr.client_id ='), 'no enforced scope when unscoped')
+  assert.ok(sql.includes('c.name AS bucket'))
+  assert.ok(sql.includes('JOIN clients c'))
+  assert.ok(sql.includes('GROUP BY c.id, c.name'))
+  assert.ok(sql.includes('LIMIT 3'))
+  assert.equal(params.length, 0)   // all_time + no filter → no bound params
+})
+
+test('scoped execution pins real rows to the one client and never leaks peers', async () => {
+  const { acme, beta } = await ensurePortfolio()
+
+  // Acme's own all-time revenue, scoped — equals Acme's total (22,000), not the book.
+  const aCompiled = compileQuery(
+    validateSpec({ metric: 'revenue', time_range: 'all_time' }), NOW, false, acme
+  )
+  const aRes = await db.query(aCompiled.sql, aCompiled.params)
+  assert.equal(aRes.rows.length, 1)
+  assert.equal(Number(aRes.rows[0].value), 22000)
+
+  // Even when the question asks to RANK clients, a Beta-scoped compile collapses
+  // to Beta's single total (13,000) — Acme/Gamma can't appear in the result.
+  const bCompiled = compileQuery(
+    validateSpec({ metric: 'revenue', group_by: 'client', time_range: 'all_time' }), NOW, false, beta
+  )
+  assert.equal(bCompiled.grouping, 'none')
+  const bRes = await db.query(bCompiled.sql, bCompiled.params)
+  assert.equal(bRes.rows.length, 1)
+  assert.equal(Number(bRes.rows[0].value), 13000)
+  assert.equal(bRes.rows[0].bucket, undefined)   // no client-name column at all
+})
+
 // ── 3. TIME RANGES (pure, injected now = 2026-05-30) ──────────────────────────
 test('resolveTimeRange computes exact windows for a fixed now', () => {
   const vals = (spec) => resolveTimeRange(spec, NOW).wheres.map(w => w.value)

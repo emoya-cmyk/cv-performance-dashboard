@@ -66,8 +66,13 @@ export async function post(path, body) {
  * failure modes of POST /api/ai/ask:
  *   NO_AI (503) → key not configured · UNPARSEABLE (422) → couldn't map the
  *   question · PARSE_TRANSPORT (502) → model unreachable · else → generic.
+ *
+ * `clientId` (optional) narrows the answer to one client. It is only honoured for
+ * an agency token; for a client token the server hard-pins the scope to that
+ * user's own client and ignores this hint — so the client surface can pass its
+ * own id freely without it ever being able to widen access.
  */
-export async function ask(question) {
+export async function ask(question, clientId) {
   const token = getToken()
   const res = await fetch(`${BASE}/api/ai/ask`, {
     method:  'POST',
@@ -75,7 +80,7 @@ export async function ask(question) {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(clientId ? { question, clientId } : { question }),
   })
   if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
   const data = await res.json().catch(() => ({}))
