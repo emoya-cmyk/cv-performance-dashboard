@@ -183,6 +183,13 @@ export const api = {
     const q = qs.toString()
     return get(`/api/insights/trajectory${q ? `?${q}` : ''}`)
   },
+  // getPacing() → portfolio GOAL-PACING roster: month-to-date actual vs. each client's human-set
+  // monthly GOAL by linear run-rate — every client who, at today's pace, will MISS a goal, worst
+  // first ("on pace for 60% of leads goal, must run 2× to still hit it"). The save before the month
+  // closes, not the post-mortem after. AGENCY-ONLY: the roster names other clients, so (like
+  // getSystemic/getTrajectory) it never rides getClientInsights() — a client's OWN pace rides
+  // inside getClientInsights() (.pacing), own numbers only. No params (current month, clock = now).
+  getPacing:          ()         => get('/api/insights/pacing'),
   getClientInsights:  (clientId) => get(`/api/insights/${clientId}`),
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),

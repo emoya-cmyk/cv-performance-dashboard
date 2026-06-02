@@ -116,6 +116,16 @@ const { detectSystemicSignals } = require('./systemic')
 // though each verdict is computed from that client's OWN scores alone. See lib/trajectory.js.
 const { rankEarlyWarnings } = require('./trajectory')
 
+// Goal-pacing (PURE): the one yardstick none of the layers above can see — the human-set
+// monthly GOAL (client_goals: revenue / leads / jobs). A client can look healthy by every
+// internal baseline and still be quietly walking toward a missed target; classifyPacing reads
+// month-to-date actual against that target by plain linear run-rate ("on pace for 88% of goal")
+// and bands it ahead/on_track/behind/at_risk, withholding the alarm while the month is too young
+// to trust ('early'). rankPacing is the agency ROSTER — who will MISS goal, worst-first — but a
+// single verdict leaks nothing cross-tenant, so it's also safe to show a client about themselves.
+// See lib/pacing.js — numbers in, verdict out (the engine supplies the real clock below).
+const { classifyPacing, rankPacing } = require('./pacing')
+
 // ── metric catalogue ─────────────────────────────────────────────────────────
 // One entry per KPI the engine watches. `col` is the derived-row key from
 // metricsCore.derive(); `unit` + `dp` drive formatting AND the rounding used to
@@ -1985,6 +1995,108 @@ async function getClientStanding(clientId, { asOf, weeks = 4 } = {}) {
   }
 }
 
+// PORTFOLIO GOAL-PACING ROSTER (agency-only): every client that will MISS a monthly goal
+// at its current run-rate, worst-first — the predictive grain pointed at the one number the
+// client and agency shook hands on. Two whole-fleet reads + the name map (getPortfolioTrajectory's
+// shape, never an N+1 per-client loop): (1) sum each client's raw columns over the MONTH-TO-DATE
+// window [monthFirst … asOf] and derive() to the friendly metric vector — byte-identical to
+// detectPacing's per-week reduce because revenue/leads/jobs are additive passthroughs of summed
+// columns, so the actual a client reads here equals the one the feed's forecast already shows;
+// (2) read every client's current-month goal row; (3) id→name. Iterate the GOALS (only a client
+// with a target this month can pace), default a missing actual to 0 so a client doing literally
+// nothing toward a goal still surfaces as at_risk rather than vanishing, and let rankPacing keep +
+// order only the goals that need a human (behind / at_risk). Self-calibrating: a client appears the
+// instant a goal is set, drops off when the month rolls or the goal is hit.
+//
+// AGENCY-ONLY by contract — the roster names other clients, the same cross-tenant boundary
+// /benchmarks · /systemic · /trajectory respect: the caller mounts it behind requireAuth and must
+// NEVER let it ride a per-client or shared-link payload (a SINGLE client's own verdict is
+// per-client-safe — getClientPacing — this whole-book ranking is not). No goals anywhere / cold
+// start → a clean { roster: [] }, rendering exactly as before this layer. asOf optional (the
+// scheduler/route pass none → today; tests pin a fixed clock).
+async function getPortfolioPacing(opts = {}) {
+  const day = String(opts.asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const { day: daysElapsed, daysInMonth, monthFirst } = monthBounds(day)
+
+  const [actuals, goals, clients] = await Promise.all([
+    query(
+      `SELECT client_id, ${AGG}
+         FROM weekly_reports
+        WHERE week_start >= $1 AND week_start <= $2
+        GROUP BY client_id`,
+      [monthFirst, day]
+    ),
+    query(
+      `SELECT client_id, revenue_target, leads_target, jobs_target
+         FROM client_goals
+        WHERE month = $1`,
+      [monthFirst]
+    ),
+    query(`SELECT id, name FROM clients`),
+  ])
+
+  const nameById = new Map()
+  for (const c of clients.rows) nameById.set(String(c.id), c.name)
+
+  // derived MTD metric vector per client (absent → all-zero downstream, so a no-data client
+  // with a goal still paces at actual 0 — consistent with getClientPacing's empty-month reduce).
+  const derivedById = new Map()
+  for (const row of actuals.rows) derivedById.set(String(row.client_id), derive(row))
+
+  const rows = []
+  for (const g of goals.rows) {
+    const id = String(g.client_id)
+    const d  = derivedById.get(id) || null
+    for (const { metric, target } of goalTargets(g)) {
+      if (!(target > 0)) continue
+      rows.push({
+        client_id:   id,
+        client_name: nameById.get(id) || null,
+        metric, target,
+        actual:      d ? d[METRIC_META[metric].col] : 0,
+        daysElapsed, daysInMonth,
+      })
+    }
+  }
+
+  return {
+    as_of: day, month: monthFirst,
+    days_elapsed: daysElapsed, days_in_month: daysInMonth,
+    roster: rankPacing(rows),
+  }
+}
+
+// One client's OWN pace-to-goal — a verdict per metric that carries a target this month,
+// computed from that client's own MTD actual vs. its human-set monthly goal and NOTHING
+// cross-tenant (no peers, no book share). Like trajectory's per-client warning and benchmark's
+// clientStanding, that makes it safe to fold into a payload the client sees. Returns EVERY metric
+// with a target — ahead / on_track / behind / at_risk / early — not just the at-risk ones, so the
+// client gets the good news too. The MTD actual is computed exactly as detectPacing / monthProjections
+// compute it (same monthFirst … asOf weekly filter, same reduce, same friendly-keyed derive), so the
+// number shown here equals the one the feed's pacing finding already carries. No goal this month, or
+// a data-less client → an empty metrics list, never a throw. asOf optional (tests pin a clock; prod → today).
+async function getClientPacing(clientId, { asOf, weeks = 26 } = {}) {
+  const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const { day: daysElapsed, daysInMonth, monthFirst } = monthBounds(day)
+
+  const goal = await loadGoal(clientId, monthFirst)
+  if (!goal) {
+    return { as_of: day, month: monthFirst, days_elapsed: daysElapsed, days_in_month: daysInMonth, metrics: [] }
+  }
+
+  const series  = await loadWeeklySeries(clientId, { weeks })
+  const inMonth = series.filter(r => r.week_start >= monthFirst && r.week_start <= day)
+
+  const metrics = []
+  for (const { metric, target } of goalTargets(goal)) {
+    if (!(target > 0)) continue
+    const actual = inMonth.reduce((a, r) => a + (Number(r[metric]) || 0), 0)
+    metrics.push(classifyPacing({ metric, target, actual, daysElapsed, daysInMonth }))
+  }
+
+  return { as_of: day, month: monthFirst, days_elapsed: daysElapsed, days_in_month: daysInMonth, metrics }
+}
+
 // Move one finding to a new lifecycle status and return the fresh row (null if the
 // id doesn't exist → the route answers 404). Two portable statements rather than
 // UPDATE … RETURNING, which the SQLite shim doesn't surface. The engine's
@@ -2070,4 +2182,6 @@ module.exports = {
   getPortfolioSystemic,
   // predictive early-warning (agency-only): per-sweep health snapshot + forward-looking roster
   snapshotPortfolioHealth, getPortfolioTrajectory,
+  // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)
+  getPortfolioPacing, getClientPacing,
 }

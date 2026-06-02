@@ -57,6 +57,9 @@ const {
   getPortfolioSystemic,
   // predictive early-warning (agency-only): persist the per-sweep health series, read it forward.
   snapshotPortfolioHealth, getPortfolioTrajectory,
+  // goal-pacing: agency roster (who will MISS goal, worst-first) + a client's OWN per-metric
+  // pace-to-goal (no peers) — the two reads that put the human-set monthly target into the engine.
+  getPortfolioPacing, getClientPacing,
 } = require('../lib/insights')
 
 const approx = (a, b, eps = 1e-9) =>
@@ -1851,4 +1854,150 @@ test('benchmark: getClientStanding returns a client OWN anonymous standing — a
   approx(myRoas.value, 7)
   assert.equal(myRoas.percentile, agencyEntry.percentile)
   assert.equal(myRoas.rank, agencyEntry.rank)
+})
+
+// ============================================================
+// 7. GOAL-PACING — the one yardstick the rest of the stack can't see: the human-set
+//    monthly GOAL. Two reads sit on lib/pacing.js's pure classifier: getPortfolioPacing
+//    (agency roster — who will MISS goal at today's run-rate, worst-first, NAMES peers)
+//    and getClientPacing (a client's OWN per-metric pace, no peers — safe to fold into
+//    the client payload). The engine supplies the real clock; tests pin a fixed asOf.
+//    Sited in JULY/AUGUST 2026 — months no other test touches — so the agency roster is
+//    clean (only our own goal'd clients), letting us assert exact membership AND order.
+// ============================================================
+
+test('pacing: getPortfolioPacing ranks the at-risk goals worst-first, surfaces a goal-but-no-data client, and drops the on-track/ahead ones', async () => {
+  await ready()
+  // asOf 2026-07-13 → 13 of 31 days gone (elapsed 0.419, well past the early-month guard).
+  // Two in-month Mondays land inside the MTD window [2026-07-01 … 2026-07-13]: Jul 6 + Jul 13.
+  const ASOF = '2026-07-13', MONTH = '2026-07-01'
+  const wkA = '2026-07-06', wkB = '2026-07-13'
+
+  // five clients, each with ONE leads goal this month (revenue/jobs left null → skipped),
+  // so every client contributes exactly one pacing row and the roster reads cleanly.
+  const worst  = await freshClient('Pace Worst Co')    // 10 leads → projects 24 / 100 = at_risk
+  const behind = await freshClient('Pace Behind Co')   // 35 leads → projects 83 / 100 = behind
+  const onTrk  = await freshClient('Pace OnTrack Co')  // 40 leads → projects 95 / 100 = on_track (out)
+  const ahead  = await freshClient('Pace Ahead Co')    // 50 leads → projects 119 / 100 = ahead (out)
+  const nodata = await freshClient('Pace NoData Co')   // goal set, ZERO weekly rows → actual 0 = at_risk
+  for (const id of [worst, behind, onTrk, ahead]) await seedGoal(id, MONTH, { leads_target: 100 })
+  await seedGoal(nodata, MONTH, { leads_target: 80 })   // goal set, but we deliberately seed NO weekly rows
+
+  await seedWeek(worst,  wkA, { raw_leads: 6 });  await seedWeek(worst,  wkB, { raw_leads: 4 })   // 10
+  await seedWeek(behind, wkA, { raw_leads: 20 }); await seedWeek(behind, wkB, { raw_leads: 15 })  // 35
+  await seedWeek(onTrk,  wkA, { raw_leads: 25 }); await seedWeek(onTrk,  wkB, { raw_leads: 15 })  // 40
+  await seedWeek(ahead,  wkA, { raw_leads: 30 }); await seedWeek(ahead,  wkB, { raw_leads: 20 })  // 50
+  // nodata: no weekly_reports at all — it must STILL surface (engine defaults its actual to 0,
+  // symmetric with getClientPacing's empty-month reduce), not silently vanish from the JOIN.
+
+  const out = await getPortfolioPacing({ asOf: ASOF })
+
+  // top-level clock echo (the route adds `count`; the engine returns the roster itself).
+  assert.equal(out.as_of, ASOF)
+  assert.equal(out.month, MONTH)
+  assert.equal(out.days_elapsed, 13)
+  assert.equal(out.days_in_month, 31)
+
+  // clean month → exactly our three goals that need a human, ordered most-urgent-first:
+  // both at_risk (no-data 0.00 < worst 0.24) ahead of the lone behind. on_track/ahead gone.
+  assert.deepEqual(out.roster.map(r => r.client_id), [nodata, worst, behind])
+  assert.equal(out.roster.some(r => r.client_id === onTrk), false, 'on_track is not on the roster')
+  assert.equal(out.roster.some(r => r.client_id === ahead), false, 'ahead is not on the roster')
+
+  // the no-data client: a real at_risk verdict (actual 0), not a no-op — the asymmetry fix.
+  const r0 = out.roster[0]
+  assert.equal(r0.client_id, nodata)
+  assert.equal(r0.client_name, 'Pace NoData Co')   // the JOINed name rides along
+  assert.equal(r0.metric, 'leads')
+  assert.equal(r0.status, 'at_risk')
+  assert.equal(r0.actual, 0)
+  assert.equal(r0.attainment, 0)
+
+  // the worst data-bearing client, hand-traced: 10 leads in 13 days → 10·31/13 ≈ 24 vs 100.
+  const w = out.roster.find(r => r.client_id === worst)
+  assert.equal(w.client_name, 'Pace Worst Co')
+  assert.equal(w.actual, 10)
+  assert.equal(w.projected, 24)
+  assert.equal(w.attainment, 0.24)
+  assert.equal(w.status, 'at_risk')
+
+  // the behind client sits last (worse status ranks ahead of it), still correctly banded.
+  const b = out.roster[2]
+  assert.equal(b.client_id, behind)
+  assert.equal(b.status, 'behind')
+  assert.equal(b.actual, 35)
+  assert.equal(b.projected, 83)
+
+  // ── DERIVE-ADDITIVITY PROOF: the agency roster's `actual` (one GROUP BY client_id MTD sum
+  // → derive) is byte-identical to getClientPacing's `actual` (per-week loadWeeklySeries →
+  // reduce). leads is an additive pass-through, so Σ derive(week) == derive(Σ weeks). The two
+  // code paths must agree to the digit, which is the whole reason a client's own card and the
+  // agency roster never disagree about the same number. ──
+  const cp = await getClientPacing(worst, { asOf: ASOF })
+  assert.equal(cp.metrics.length, 1)                 // only the leads goal carries a target
+  const cm = cp.metrics[0]
+  assert.equal(cm.metric, 'leads')
+  assert.equal(cm.actual,     w.actual)              // 10 === 10
+  assert.equal(cm.projected,  w.projected)           // 24 === 24
+  assert.equal(cm.attainment, w.attainment)          // 0.24 === 0.24
+  assert.equal(cm.status,     w.status)              // 'at_risk' === 'at_risk'
+
+  // pure read: the same persisted month yields an identical roster on a second call.
+  const again = await getPortfolioPacing({ asOf: ASOF })
+  assert.deepEqual(again.roster, out.roster)
+})
+
+test('pacing: getClientPacing returns EVERY goal metric this month — the good news (ahead) alongside the alarms (behind / at_risk), own numbers only', async () => {
+  await ready()
+  // asOf 2026-08-12 → 12 of 31 days; in-month Mondays Aug 3 + Aug 10. A different month from the
+  // roster test so the two cohorts never share a goal table — own-client read, no cross-tenant.
+  const ASOF = '2026-08-12', MONTH = '2026-08-01'
+  const wkA = '2026-08-03', wkB = '2026-08-10'
+
+  const c = await freshClient('Pace Full-Slate Co')
+  await seedGoal(c, MONTH, { revenue_target: 10000, leads_target: 100, jobs_target: 50 })
+  // revenue pacing AHEAD (5000 → ~12917), leads BEHIND (33 → 85), jobs AT_RISK (5 → 13).
+  await seedWeek(c, wkA, { projected_revenue: 3000, raw_leads: 18, closed_won: 3 })
+  await seedWeek(c, wkB, { projected_revenue: 2000, raw_leads: 15, closed_won: 2 })
+
+  const out = await getClientPacing(c, { asOf: ASOF })
+
+  assert.equal(out.as_of, ASOF)
+  assert.equal(out.month, MONTH)
+  assert.equal(out.days_elapsed, 12)
+  assert.equal(out.days_in_month, 31)
+
+  // EVERY metric with a target is returned — and in the canonical goalTargets order — so the
+  // client sees the win, not only the problems (unlike the agency roster, which keeps only alarms).
+  assert.equal(out.metrics.length, 3)
+  assert.deepEqual(out.metrics.map(m => m.metric), ['revenue', 'leads', 'jobs'])
+  const by = Object.fromEntries(out.metrics.map(m => [m.metric, m]))
+
+  assert.equal(by.revenue.actual, 5000)
+  assert.equal(by.revenue.status, 'ahead')           // the good-news verdict survives (not filtered)
+  assert.equal(by.revenue.attainment, 1.29)
+
+  assert.equal(by.leads.actual, 33)
+  assert.equal(by.leads.status, 'behind')
+
+  assert.equal(by.jobs.actual, 5)
+  assert.equal(by.jobs.status, 'at_risk')
+
+  // self-only: a client's own pace verdict never carries a peer identity or a roster.
+  for (const m of out.metrics) {
+    assert.ok(!('client_id' in m),   'a client pace verdict leaks no client_id')
+    assert.ok(!('client_name' in m), 'a client pace verdict leaks no client_name')
+  }
+})
+
+test('pacing: getClientPacing with no goal this month → a quiet empty list, never a throw (renders exactly as before the layer)', async () => {
+  await ready()
+  const c = await freshClient('Pace No-Goal Co')
+  // a real in-month week, but NO goal for the month → nothing to pace against.
+  await seedWeek(c, '2026-08-10', { raw_leads: 12, projected_revenue: 4000 })
+
+  const out = await getClientPacing(c, { asOf: '2026-08-12' })
+  assert.equal(out.as_of, '2026-08-12')
+  assert.equal(out.month, '2026-08-01')
+  assert.deepEqual(out.metrics, [])                  // no goal → no verdicts, the no-op path
 })

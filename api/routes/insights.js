@@ -38,11 +38,19 @@
 //        THROUGH a floor within the horizon — "will churn unless you act," not "churned."
 //        Agency surface ONLY (the roster names other clients); never per-client payload.
 //
+//   GET  /api/insights/pacing
+//        Portfolio GOAL-PACING ROSTER: month-to-date actual vs. the human-set monthly GOAL
+//        (client_goals) by linear run-rate — every client who, at today's pace, will MISS a
+//        goal, worst-first ("on pace for 60% of leads goal"). The save before the month closes.
+//        Agency surface ONLY (the roster names other clients); a client's OWN pace rides inside
+//        GET /:clientId (.pacing), own numbers only.
+//
 //   GET  /api/insights/:clientId[?limit=]
 //        One client's active feed — the per-client Insights card — plus that
 //        client's own health verdict (same pure synthesis as the roster), its
 //        privacy-safe peer STANDING (own percentile vs the anonymous distribution),
-//        and its recent RECOVERIES (the "what we fixed lately" win list).
+//        its recent RECOVERIES (the "what we fixed lately" win list), and its own
+//        PACING (pace-to-goal per metric this month). All own-numbers-only — no peers.
 //
 //   POST /api/insights/:id/ack
 //   POST /api/insights/:id/resolve
@@ -70,6 +78,7 @@ const {
   getRecentRecoveries, getPortfolioRecoveries,
   getPortfolioSystemic,
   getPortfolioTrajectory,
+  getPortfolioPacing, getClientPacing,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
 } = require('../lib/insights')
@@ -271,6 +280,27 @@ router.get('/trajectory', async (req, res) => {
   }
 })
 
+// ── GET /api/insights/pacing ──────────────────────────────────────────────────
+// Portfolio GOAL-PACING ROSTER: the predictive grain pointed at the monthly GOAL. Every other
+// endpoint measures a client against itself or its peers; this one measures month-to-date actual
+// against the human-set target (client_goals) by plain linear run-rate and returns only the clients
+// who, at today's pace, will MISS a goal — worst-first ("on pace for 60% of the leads goal, must run
+// 2× the current rate to still hit it"). The save you can still make, days before the month closes,
+// instead of the post-mortem after. AGENCY-ONLY: the roster names other clients, the same cross-tenant
+// boundary /benchmarks · /systemic · /trajectory respect, so it lives here and never rides the
+// per-client GET /:clientId (or shared-link) payload — a client sees only its OWN pace, folded in
+// below. Declared before the :clientId route so the literal "pacing" can never be captured as a
+// client id. No params: the window is the current calendar month, the clock is "now".
+router.get('/pacing', async (_req, res) => {
+  try {
+    const out = await getPortfolioPacing()
+    res.json({ ...out, count: out.roster.length })
+  } catch (err) {
+    console.error('[insights] GET pacing error', err.message)
+    res.status(500).json({ error: 'Failed to load pacing roster' })
+  }
+})
+
 // ── POST /api/insights/run ────────────────────────────────────────────────────
 // On-demand full-portfolio sweep. Body may pin { asOf, weeks } (the scheduler
 // passes neither → "now", 26 weeks). Declared before the param routes so the
@@ -345,12 +375,15 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const [insights, standing, recoveries] = await Promise.all([
+    const [insights, standing, recoveries, pacing] = await Promise.all([
       getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
       getClientStanding(clientId),
       // recent WINS for this client — problems the engine flagged that then cleared.
       // Folded in beside the active feed so /my-dashboard can lead with the good news.
       getRecentRecoveries(clientId, { limit: 10, days: 30 }),
+      // this client's OWN pace-to-goal this month (per metric with a target) — computed
+      // from its own MTD actual vs. target alone, NO peers, so it's safe in the client view.
+      getClientPacing(clientId),
     ])
     res.json({
       client_id: clientId,
@@ -366,6 +399,9 @@ router.get('/:clientId', async (req, res) => {
       benchmark: standing,
       // "what we fixed lately" — recovered findings, newest first (may be empty).
       recoveries,
+      // "will you hit your goal?" — this client's own pace-to-goal per metric this month
+      // (ahead/on_track/behind/at_risk/early, or empty when no goal is set). Own numbers only.
+      pacing,
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)
