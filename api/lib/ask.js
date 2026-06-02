@@ -44,6 +44,11 @@ const { verifyGrounding, collectAllowedNumbers }  = require('./ai')
 // agency move into exact per-client contributions. Pure (no DB/clock/LLM) and
 // require-free, so a plain top-level require is cycle-safe.
 const { contributionBreakdown, narrateContribution, isAdditive: isAdditiveMetric } = require('./contribution')
+// intel-v6 (6): the DRIVER "why" for a RATIO metric (roas/cpl/close_rate) — split its
+// move into the exact signed log-shares of its numerator vs denominator
+// (roas=revenue/spend, cpl=spend/leads, close_rate=jobs/leads). Also pure + require-
+// free, so a plain top-level require stays cycle-safe.
+const { ratioAttribution, narrateRatio, isRatioMetric, RATIO_IDENTITIES } = require('./ratioAttribution')
 
 // ── METRIC WHITELIST ──────────────────────────────────────────────────────────
 // Aggregate fragments over weekly_reports (alias wr). Each SUM is COALESCEd so a
@@ -650,43 +655,51 @@ async function runAsk(question, opts = {}) {
       time_label: compiled.timeLabel,
       row_count:  formatted.length,
       comparison: meta.comparison || null,   // period-over-period for a single figure (2c chip)
-      // intel-v6 (5): is there a grounded "why did it change?" the caller can ask?
+      // intel-v6 (5)+(6): is there a grounded "why did it change?" the caller can ask?
       // True only for the exact shape runExplain can decompose — an UNSCOPED (whole-
-      // book) single figure of an ADDITIVE metric that actually moved vs its prior
-      // period. We compute the predicate HERE so the UI never re-derives the rules:
-      // it just shows the "Why?" affordance when this is true and calls askExplain.
+      // book) single figure of an ADDITIVE metric (→ the by-client "who" split) or a
+      // RATIO metric (→ the numerator-vs-denominator "which lever" split) that actually
+      // moved vs its prior period. We compute the predicate HERE so the UI never
+      // re-derives the rules: it shows the "Why?" affordance iff this is true.
       explainable: scope == null && compiled.grouping === 'none'
-        && isAdditiveMetric(spec.metric)
+        && (isAdditiveMetric(spec.metric) || isRatioMetric(spec.metric))
         && !!meta.comparison && meta.comparison.direction !== 'flat',
     },
   }
 }
 
-// ── GROUNDED "WHY DID IT CHANGE?" (intel-v6 (5): entity attribution) ──────────
+// ── GROUNDED "WHY DID IT CHANGE?" (intel-v6 (5) entity + (6) driver) ──────────
 // runAsk answers "revenue rose $24k vs the prior week" and flags it `explainable`.
-// This is the click-through: WHO drove that move. It re-validates the SAME spec the
-// answer carried, recomputes both windows' totals AND the per-client splits through
-// the EXACT scope+whitelist compile path (so no number can drift from the answer),
-// and hands the rows to contribution.js for exact additive arithmetic — no LLM.
+// This is the click-through: WHAT drove that move. It re-validates the SAME spec the
+// answer carried and recomputes everything through the EXACT scope+whitelist compile
+// path (so no number can drift from the answer), with NO LLM. There are two exact
+// decompositions, chosen by the metric and tagged in the payload as `basis`:
+//
+//   basis:'client' — an ADDITIVE metric (revenue/leads/jobs/spend). Δtotal is exactly
+//     the SUM of each client's Δ, so we recompute the per-client splits and hand them
+//     to contribution.js → WHO drove it (the ENTITY split).
+//   basis:'driver' — a RATIO metric (roas/cpl/close_rate). A ratio of sums is not a
+//     sum, so it has no per-client decomposition; instead its move splits exactly, in
+//     log space, into its numerator's vs its denominator's contribution. We recompute
+//     the two drivers' totals (each is itself an additive metric) and hand them to
+//     ratioAttribution.js → WHICH LEVER drove it (the DRIVER split).
 //
 // ELIGIBILITY (returns null → the route 422s; the UI only offers the chip when
 // meta.explainable was true, so a null here is the rare race, not the norm):
-//   • UNSCOPED only — a per-client "who drove it" makes sense for the whole book,
-//     not for a single client already pinned to itself (scope != null → null).
+//   • UNSCOPED only — a per-client/per-lever "why" is a whole-book question, not one
+//     for a single client already pinned to itself (scope != null → null).
 //   • group_by:'none' — a single agency figure, not an already-broken-down ranking.
-//   • an ADDITIVE metric — revenue/leads/jobs/spend decompose exactly into a SUM
-//     over clients; ratios (roas/cpl/close_rate) do not (that's the DRIVER "why",
-//     attribution.js, layered later).
+//   • an ADDITIVE *or* RATIO metric — the two bases above; nothing else decomposes.
 //   • a COMPARABLE range — there must be an honest equal-length prior window.
 //
-// EXACTNESS: we pass the authoritative single-figure totals (totalFrom/totalTo,
-// the very numbers the answer showed) AND the LIMIT-capped per-client rows;
-// contribution.js reconciles any gap into an explicit `unattributed` remainder, so
-// named + others + unattributed always sum to the true Δtotal. Display strings are
-// formatted HERE (server-side, grounded by construction) so the UI renders text it
-// never had to compute. A spec that's eligible but DIDN'T actually move returns a
-// graceful { moved:false } payload rather than null (the answer said it moved, but
-// a rounding-thin or since-changed total can disagree — say so honestly).
+// EXACTNESS: both paths pass the authoritative single-figure totals (the very numbers
+// the answer showed). The entity path reconciles any beyond-LIMIT gap into an explicit
+// `unattributed` remainder (named + others + unattributed = the true Δtotal); the
+// driver path's two signed shares sum to exactly 1. Display strings are formatted HERE
+// (server-side, grounded by construction) so the UI renders text it never had to
+// compute. A spec that's eligible but DIDN'T actually move returns a graceful
+// { moved:false } payload rather than null (the answer said it moved, but a rounding-
+// thin or since-changed total can disagree — say so honestly).
 //
 // @param {object}  rawSpec               the spec runAsk answered (re-validated here)
 // @param {object}  [opts]
@@ -706,10 +719,15 @@ async function runExplain(rawSpec, opts = {}) {
 
   const cmp = comparisonRange(spec, now)
   // Same eligibility predicate the UI saw as meta.explainable — re-checked server-
-  // side so the route is safe even if called directly with an off-shape spec.
-  if (scope != null || spec.group_by !== 'none' || !isAdditiveMetric(spec.metric) || !cmp) return null
+  // side so the route is safe even if called directly with an off-shape spec. Either
+  // an additive metric (entity/by-client basis) or a ratio metric (driver basis) qualifies.
+  if (scope != null || spec.group_by !== 'none' || !cmp) return null
+  if (!isAdditiveMetric(spec.metric) && !isRatioMetric(spec.metric)) return null
 
   const metricDef = METRICS[spec.metric]
+  // Grounded, unit-aware display helpers — used by BOTH bases below.
+  const fmt    = (v) => formatValue(v, metricDef)
+  const signed = (d) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d))
 
   // Authoritative agency totals — the single-figure numbers, both windows, via the
   // SAME group_by:'none' compile the answer used (current + the 5th-arg baseline seam).
@@ -722,6 +740,70 @@ async function runExplain(rawSpec, opts = {}) {
   const totalTo   = Number(curTotRes.rows[0]  && curTotRes.rows[0].value)  || 0
   const totalFrom = Number(baseTotRes.rows[0] && baseTotRes.rows[0].value) || 0
 
+  // ── DRIVER basis (intel-v6 (6)): RATIO metrics ────────────────────────────────
+  // A ratio of sums has no per-client decomposition, so its "why" is which LEVER
+  // moved the quotient — numerator vs denominator. roas=revenue/spend,
+  // cpl=spend/leads, close_rate=jobs/leads; each driver is itself an additive metric,
+  // so recompute its two-window totals through the SAME group_by:'none' compile and
+  // hand the four numbers to ratioAttribution for the exact signed log-share split.
+  if (isRatioMetric(spec.metric)) {
+    const ident = RATIO_IDENTITIES[spec.metric]
+    const driverTotals = async (driverKey) => {
+      const dSpec = { ...spec, metric: driverKey }
+      const cur  = compileQuery(dSpec, now, isPg, null)
+      const base = compileQuery(dSpec, now, isPg, null, () => cmp)
+      const [c, b] = await Promise.all([query(cur.sql, cur.params), query(base.sql, base.params)])
+      return { to: Number(c.rows[0] && c.rows[0].value) || 0, from: Number(b.rows[0] && b.rows[0].value) || 0 }
+    }
+    const [numT, denT] = await Promise.all([driverTotals(ident.num), driverTotals(ident.den)])
+    const ratio = ratioAttribution(
+      spec.metric,
+      { [ident.num]: numT.from, [ident.den]: denT.from },
+      { [ident.num]: numT.to,   [ident.den]: denT.to },
+    )
+
+    // Flat, or a non-positive driver (the log is undefined) → honest "unchanged",
+    // the SAME { moved:false } shape as the entity flat case (reported-unit totals we
+    // already queried). basis stays 'driver' so the UI labels the empty state right.
+    if (!ratio) {
+      return {
+        metric: spec.metric, label: metricDef.label, unit: metricDef.unit,
+        window_label: noneCur.timeLabel, baseline_label: cmp.label, moved: false,
+        total_from: totalFrom, total_to: totalTo, total_delta: totalTo - totalFrom,
+        narration: `${metricDef.label} was unchanged vs ${cmp.label}.`,
+        contributors: [], lead: null, others: null, unattributed: null, basis: 'driver',
+      }
+    }
+
+    // Map each driver onto the SAME contributor contract the entity path emits, so the
+    // shared WhyPanel renders both bases identically. delta_display is the driver's OWN
+    // move as a signed % (the split is multiplicative, and the two drivers can live in
+    // different units — e.g. spend $ vs leads # — so an absolute Δ can't share a bar);
+    // share/share_pct are the SIGNED log-shares, which sum to exactly 1.
+    const pctStr = (p) => (p >= 0 ? '+' : '−') + trim(Math.abs(p), 1) + '%'
+    const contributors = ratio.drivers.map((d) => ({
+      key: d.metric, label: METRICS[d.metric].label, role: d.role,
+      from: d.from, to: d.to, delta: d.to - d.from, pct: d.pct,
+      delta_display: pctStr(d.pct), share: d.share, share_pct: d.share_pct,
+    }))
+
+    return {
+      metric: spec.metric, label: metricDef.label, unit: metricDef.unit,
+      window_label: noneCur.timeLabel, baseline_label: cmp.label, moved: true,
+      direction: ratio.direction,
+      total_from: totalFrom, total_to: totalTo,
+      total_delta: totalTo - totalFrom, total_delta_display: signed(totalTo - totalFrom),
+      pct: ratio.pct,
+      narration: narrateRatio(ratio, {
+        label: metricDef.label, numLabel: METRICS[ident.num].label, denLabel: METRICS[ident.den].label,
+      }),
+      contributors,
+      lead: contributors.find((c) => c.key === ratio.lead) || null,
+      others: null, unattributed: null, basis: 'driver',
+    }
+  }
+
+  // ── ENTITY basis (intel-v6 (5)): ADDITIVE metrics ─────────────────────────────
   // Per-client splits, both windows — the same compile, grouped by client, ranked,
   // capped at 50 (the LIMIT; the unattributed remainder reconciles anything beyond).
   const clientSpec = { ...spec, group_by: 'client', order: 'desc', limit: 50 }
@@ -735,9 +817,6 @@ async function runExplain(rawSpec, opts = {}) {
   const fromRows = baseRows.rows.map(r => ({ key: r.bucket, label: r.bucket, value: Number(r.value) }))
 
   const result = contributionBreakdown(spec.metric, fromRows, toRows, { totalFrom, totalTo, limit: 5 })
-
-  const fmt    = (v) => formatValue(v, metricDef)
-  const signed = (d) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d))
   const noun   = metricDef.label.toLowerCase()
 
   // Eligible but flat (or thinner than MOVE_EPS): the answer's comparison said it
@@ -750,7 +829,7 @@ async function runExplain(rawSpec, opts = {}) {
       window_label: noneCur.timeLabel, baseline_label: cmp.label, moved: false,
       total_from: totalFrom, total_to: totalTo, total_delta: totalTo - totalFrom,
       narration: `${metricDef.label} was unchanged vs ${cmp.label}.`,
-      contributors: [], lead: null, others: null, unattributed: null,
+      contributors: [], lead: null, others: null, unattributed: null, basis: 'client',
     }
   }
 
@@ -771,6 +850,7 @@ async function runExplain(rawSpec, opts = {}) {
       ? { ...result.others, delta_display: signed(result.others.delta) } : null,
     unattributed: result.unattributed
       ? { ...result.unattributed, delta_display: signed(result.unattributed.delta) } : null,
+    basis: 'client',
   }
 }
 

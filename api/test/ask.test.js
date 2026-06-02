@@ -642,13 +642,53 @@ test('runExplain decomposes a moved single additive figure into exact per-client
   )
 })
 
+test('runExplain decomposes a moved RATIO figure into exact numerator-vs-denominator drivers', async () => {
+  await ensurePortfolio()
+  // A ratio of sums has no per-client "who" — its "why" is which LEVER moved the quotient.
+  // roas = Σrevenue / Σspend. WEEK_A 18,000/3,000 = 6.0×; WEEK_B 20,000/3,500 = 5.714×.
+  // Revenue rose 11.1% but spend rose 16.7% — spend outran revenue, so roas FELL ~4.8%.
+  const r = await runExplain({ metric: 'roas', group_by: 'none', time_range: 'last_week' }, { now: NOW2 })
+
+  assert.ok(r, 'a ratio that moved is explainable (by driver)')
+  assert.equal(r.basis, 'driver')                            // ratio → DRIVER basis, never 'client'
+  assert.equal(r.moved, true)
+  assert.equal(r.metric, 'roas')
+  assert.equal(r.label, 'ROAS')
+  assert.equal(r.unit, 'ratio')
+  assert.equal(r.window_label, 'the week of 2026-05-11')
+  assert.equal(r.baseline_label, 'the prior week')
+  assert.equal(r.direction, 'down')
+  assert.ok(Math.abs(r.total_from - 6) < 1e-9)               // 18,000 / 3,000
+  assert.ok(Math.abs(r.total_to - 20000 / 3500) < 1e-9)      // 5.714…
+  assert.ok(Math.abs(r.total_delta - (20000 / 3500 - 6)) < 1e-9)
+  assert.equal(r.total_delta_display, '−0.29×')              // U+2212 minus, ratio unit, dp 2
+  assert.equal(r.pct, -4.8)
+
+  // exactly two drivers, in presentation order: numerator (revenue) then denominator (spend).
+  assert.deepEqual(r.contributors.map((c) => c.key), ['revenue', 'spend'])
+  assert.deepEqual(r.contributors.map((c) => c.role), ['numerator', 'denominator'])
+  assert.deepEqual(r.contributors.map((c) => c.delta_display), ['+11.1%', '+16.7%'])  // each driver's OWN signed %
+  // signed log-shares sum to exactly 1 (revenue −2.159 drag + spend +3.159 driver).
+  assert.ok(Math.abs(r.contributors.reduce((s, c) => s + c.share, 0) - 1) < 1e-9)
+  const rev = r.contributors.find((c) => c.key === 'revenue')
+  const sp  = r.contributors.find((c) => c.key === 'spend')
+  assert.ok(rev.share < 0, 'rising revenue pushed roas UP, against the fall → a drag (share < 0)')
+  assert.ok(sp.share > 1, 'rising spend drove the fall and overshoots 1 to offset the drag')
+
+  // the dominant aligned lever is spend; the ratio path carries no others/unattributed.
+  assert.equal(r.lead.key, 'spend')
+  assert.equal(r.others, null)
+  assert.equal(r.unattributed, null)
+
+  // grounded one-liner — every number copied from the computed decomposition, no LLM.
+  assert.equal(r.narration, 'ROAS fell 4.8% — revenue rose 11.1% and ad spend rose 16.7%.')
+})
+
 test('runExplain returns null for every non-decomposable shape', async () => {
   const { acme } = await ensurePortfolio()
 
-  // a RATIO metric — roas/cpl/close_rate are NOT additive over clients (that "why" is
-  // the driver decomposition, attribution.js), so there is no exact per-client split.
-  assert.equal(
-    await runExplain({ metric: 'roas', group_by: 'none', time_range: 'last_week' }, { now: NOW2 }), null)
+  // (A ratio metric like roas IS decomposable — by DRIVER, not by client — so it's
+  // asserted positively in the ratio e2e test above, not here.)
   // already GROUPED — a ranking is not a single figure to attribute.
   assert.equal(
     await runExplain({ metric: 'revenue', group_by: 'client', time_range: 'last_week' }, { now: NOW2 }), null)
@@ -678,12 +718,12 @@ test('runAsk flags meta.explainable for exactly the decomposable shape', async (
   onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'client', time_range: 'last_week' })
   assert.equal((await runAsk('top clients last week', { now: NOW2 })).meta.explainable, false)
 
-  // NO — a ratio metric. It DOES carry a comparison (a single roas figure vs the prior
-  // week), but it isn't additive over clients, so the additive gate keeps the chip off.
+  // YES — a ratio metric now decomposes too: not by client, but by DRIVER (numerator vs
+  // denominator). roas carries a single-figure comparison AND is a ratio, so the chip is on.
   onParse = () => JSON.stringify({ metric: 'roas', group_by: 'none', time_range: 'last_week' })
   const ratio = await runAsk('roas last week', { now: NOW2 })
   assert.ok(ratio.meta.comparison, 'a ratio single figure still carries a comparison')
-  assert.equal(ratio.meta.explainable, false)
+  assert.equal(ratio.meta.explainable, true)
 
   // NO — an open-ended range carries no comparison at all.
   onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'all_time' })
