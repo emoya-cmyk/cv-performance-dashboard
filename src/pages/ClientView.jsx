@@ -10,7 +10,7 @@ import {
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, healthBandMeta, metricLabel, recoveryMeta, timeAgo } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, escalationView, healthBandMeta, metricLabel, recoveryMeta, timeAgo } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -309,6 +309,16 @@ function ClientInsights({ insights }) {
           // worked for problems like this" — the self-improving loop made visible as honest
           // credibility. Null → no line, exactly as before.
           const efficacy = item.efficacy_note
+          // Auto-escalation, softened for the client (escalationView). When lib/escalation.js has
+          // PROVEN the usual play ineffective it bumps the urgency AND rewrites recommended_action.text
+          // with a CANDID, agency-facing clause ("cleared the problem only X% of the time (s of n) —
+          // escalate…"). That sentence is right for /intelligence but must NEVER reach the client: it
+          // exposes a failure statistic and internal ops language. So here we render escalation.clientText
+          // INSTEAD — a calm "we're changing our approach" — and (below) SUPPRESS the efficacy_note, which
+          // would otherwise brag about a track record this very escalation just declared insufficient.
+          // Non-escalated findings are untouched: escalation is null and the original advice renders as before.
+          const escalation = escalationView(item)
+          const recommendationText = escalation?.clientText || action?.text
           return (
             <div
               key={item.id}
@@ -384,8 +394,10 @@ function ClientInsights({ insights }) {
                 </div>
               </div>
 
-              {/* Recommendation — what we'll do about it */}
-              {action?.text && (
+              {/* Recommendation — what we'll do about it. When escalated, recommendationText is
+                  the softened escalation.clientText (the candid agency text is suppressed); otherwise
+                  it's the engine's original advice. */}
+              {recommendationText && (
                 <div className="mt-3 rounded-lg bg-white border border-slate-100 px-3 py-2.5">
                   <div className="flex items-center gap-1.5 mb-1.5">
                     {urg && (
@@ -395,12 +407,15 @@ function ClientInsights({ insights }) {
                     )}
                     <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">Our Recommendation</span>
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed font-medium">{action.text}</p>
+                  <p className="text-xs text-slate-600 leading-relaxed font-medium">{recommendationText}</p>
                   {/* Earned-credibility line — the recommendation's own proven success rate, in
                       plain English (efficacy_note.text). Sits UNDER the advice, divided off, as a
                       quiet "and it tends to work" — never a claim the client must act on. The text
-                      is the engine's, peer-free; null → nothing renders, exactly as before. */}
-                  {efficacy?.text && (
+                      is the engine's, peer-free; null → nothing renders, exactly as before.
+                      SUPPRESSED when escalated: an escalation means this very play's record proved
+                      INSUFFICIENT, so bragging "it tends to work" right under "we're changing approach"
+                      would directly contradict itself. The two are mutually exclusive by design. */}
+                  {!escalation && efficacy?.text && (
                     <div className="mt-2 pt-2 border-t border-slate-50 flex items-start gap-1.5">
                       <Award className="w-3.5 h-3.5 text-brand-600 shrink-0 mt-0.5" />
                       <p className="text-xs text-slate-500 leading-relaxed font-medium">{efficacy.text}</p>
