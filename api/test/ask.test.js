@@ -429,3 +429,100 @@ test('runAsk surfaces UNPARSEABLE after one corrective retry', async () => {
 
   delete process.env.ANTHROPIC_API_KEY
 })
+
+// ── 6. PERIOD-OVER-PERIOD COMPARISON (intel-v6 2b) ────────────────────────────
+// A single overall figure (group_by none) over a COMPLETE, equal-length range
+// also carries a baseline from the period immediately before it. A second fixed
+// clock puts "last week" on WEEK_B (the seeded 20,000 total) and its baseline on
+// WEEK_A (18,000), so the delta math is exact: +2,000 = +11.1%, an improvement for
+// the up-good revenue metric. The baseline comes from the SAME compile+query path,
+// never the LLM, and its numbers are folded into the grounding allow-list so a
+// comparison-aware narration can survive the verifier.
+const NOW2 = new Date('2026-05-20T00:00:00Z')   // Wed; current week's Monday = 2026-05-18
+
+test('runAsk attaches an exact period-over-period comparison to a single figure', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'Revenue was $20,000, up 11.1% from $18,000 the prior week.'
+
+  const res = await runAsk('how much revenue last week?', { now: NOW2 })
+  assert.deepEqual(res.rows[0], { value: 20000, display: '$20,000' })   // WEEK_B is the primary
+
+  const c = res.meta.comparison
+  assert.ok(c, 'a comparable single figure must carry a comparison')
+  assert.equal(c.label, 'the prior week')
+  assert.equal(c.baseline_value, 18000)        // WEEK_A baseline, via the scoped compile seam
+  assert.equal(c.baseline_display, '$18,000')
+  assert.equal(c.delta, 2000)
+  assert.equal(c.delta_display, '$2,000')
+  assert.ok(Math.abs(c.pct_change - (2000 / 18000) * 100) < 1e-9)
+  assert.equal(c.pct_display, '11.1%')
+  assert.equal(c.direction, 'up')
+  assert.equal(c.improved, true)
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('the deterministic template always states the comparison clause', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'totally ungrounded $999,999 nonsense'   // force fallback to the template
+
+  const res = await runAsk('revenue last week', { now: NOW2 })
+  assert.equal(res.narrated, false)
+  assert.equal(res.answer, res.template)
+  assert.equal(
+    res.template,
+    'Revenue for the week of 2026-05-11 was $20,000 — up 11.1% vs the prior week ($18,000).'
+  )
+  assert.ok(!res.answer.includes('999'))   // the hallucination never survives
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('a narration that cites the baseline + %-change stays grounded', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'Revenue reached $20,000 last week, up 11.1% from $18,000 the week before.'
+
+  const res = await runAsk('revenue last week', { now: NOW2 })
+  // every figure the narrator used — 20,000 / 11.1 / 18,000 — is in the allow-list,
+  // so the comparison-aware narration survives the grounding gate.
+  assert.equal(res.narrated, true)
+  assert.ok(res.answer.includes('11.1%'))
+  assert.ok(res.answer.includes('$18,000'))
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('no comparison for a grouped (non-single-figure) query', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'client', time_range: 'last_week' })
+  onNarrate = () => 'Acme led at $12,000.'
+
+  const res = await runAsk('top clients last week', { now: NOW2 })
+  assert.equal(res.meta.group_by, 'client')
+  assert.equal(res.meta.comparison, null)   // a ranking has no single baseline
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('no comparison for an open-ended range (all_time / this_month)', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onNarrate = () => 'Revenue total noted.'
+
+  onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'all_time' })
+  const all = await runAsk('total revenue ever', { now: NOW2 })
+  assert.equal(all.meta.comparison, null)
+
+  onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'this_month' })
+  const tm = await runAsk('revenue this month', { now: NOW2 })
+  assert.equal(tm.meta.comparison, null)
+
+  delete process.env.ANTHROPIC_API_KEY
+})
