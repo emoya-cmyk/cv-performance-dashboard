@@ -17,6 +17,7 @@ import SharedReport   from '@/pages/SharedReport'
 import Settings       from '@/pages/Settings'
 import Explore        from '@/pages/Explore'
 import Intelligence   from '@/pages/Intelligence'
+import PulseDiagnosisPreview from '@/pages/PulseDiagnosisPreview'   // design preview only — /pulse-preview, no auth
 import { useStore }      from '@/data/useStore'
 import { getUser }       from '@/lib/auth'
 import { USE_API }       from '@/lib/api'
@@ -61,6 +62,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/pulse-preview" element={<PulseDiagnosisPreview />} />
           <Route path="/*" element={<RequireAuth><AuthenticatedApp /></RequireAuth>} />
         </Routes>
       </BrowserRouter>
