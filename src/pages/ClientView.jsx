@@ -10,7 +10,7 @@ import {
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
 import { USE_API, api } from '@/lib/api'
-import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, escalationView, healthBandMeta, metricLabel, recoveryMeta, timeAgo } from '@/lib/insightMeta'
+import { severityMeta, kindMeta, urgencyMeta, isClientFacing, forecastRange, fmtMetricValue, attributionView, correlateView, escalationView, healthBandMeta, metricLabel, recoveryMeta, timeAgo, recapPosture } from '@/lib/insightMeta'
 import { useCountUp } from '@/lib/useCountUp'
 import BudgetSimulator from '@/components/BudgetSimulator'
 import GoalRing from '@/components/GoalRing'
@@ -575,6 +575,80 @@ function AccountHealth({ health }) {
   )
 }
 
+// ── Your Week in Review — the grounded weekly recap, in the client's own inbox words ──
+// lib/recap.js writes one plain-English narration of each client's most recently completed
+// week, grounded so every number in it was checked against the same verified facts the rest
+// of this page is scored from, and ships it in the Monday email. This surfaces that exact
+// recap in-app so the client can reread it any day — first the story of the week, then a
+// compact "where things stand now" coda built from the recap's own CLIENT-SAFE intelligence
+// digest (recapPosture → counts and area names only, never a severity statistic, a failure
+// percentage, or another client). Like the rest of this surface the operator machinery stays
+// backstage: no "regenerate", no model name, and no verification badge (the client view
+// deliberately omits it — the grounding still happens, it just isn't chrome the client needs
+// to see). Self-hides when there's no recap text yet.
+function WeeklyRecap({ recap }) {
+  const text = (recap?.recap_text || '').trim()
+  if (!text) return null
+  const period  = recap?.evidence_pack?.period?.label || recap?.week_start || ''
+  const posture = recapPosture(recap.evidence_pack)
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.065s' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your Week in Review</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      {period && (
+        <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-400 mb-3">
+          <Clock className="w-3 h-3" /> {period}
+        </div>
+      )}
+      <p className="text-sm text-slate-600 leading-relaxed font-medium whitespace-pre-line">{text}</p>
+      {posture && <RecapPostureCoda p={posture} />}
+      <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
+        The same recap that opens your Monday email — written by your account&rsquo;s AI analyst from your
+        verified numbers, and reviewed by your team every week.
+      </p>
+    </div>
+  )
+}
+
+// The recap's compact "where things stand now" coda — the client-safe intelligence digest
+// (recapPosture) rendered as a row of calm chips. Severity jargon is dropped (no critical /
+// warning split, unlike the agency strip) and the labels are softened ("being watched",
+// "refining") so it reassures rather than alarms. Each chip is conditional and the set
+// mirrors recapPosture's own signal test, so a quiet week that carries, say, only pacing
+// signal still renders the right chips and never an empty row.
+function RecapPostureCoda({ p }) {
+  return (
+    <div className="mt-4 pt-3 border-t border-slate-50">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Where things stand now</p>
+      <div className="flex flex-wrap gap-1.5">
+        {p.active > 0 && <RecapChip icon={Activity} tone="slate" label={`${p.active} being watched`} />}
+        {p.adjustingCount > 0 && <RecapChip icon={SlidersHorizontal} tone="amber" label={`Refining ${p.adjusting.join(', ') || 'approach'}`} />}
+        {p.improvingCount > 0 && <RecapChip icon={TrendingUp} tone="emerald" label={`Improving ${p.improving.join(', ')}`} />}
+        {p.onTrack > 0 && <RecapChip icon={Target} tone="emerald" label={`${p.onTrack} on pace`} />}
+        {p.atRisk > 0 && <RecapChip icon={AlertCircle} tone="rose" label={`${p.atRisk} need${p.atRisk === 1 ? 's' : ''} a push`} />}
+      </div>
+    </div>
+  )
+}
+
+const RECAP_CHIP_TONES = {
+  slate:   'text-slate-600 bg-slate-50 border-slate-200',
+  amber:   'text-amber-700 bg-amber-50 border-amber-200',
+  emerald: 'text-emerald-700 bg-emerald-50 border-emerald-200',
+  rose:    'text-rose-700 bg-rose-50 border-rose-200',
+}
+function RecapChip({ icon: Icon, tone, label }) {
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold ${RECAP_CHIP_TONES[tone] || RECAP_CHIP_TONES.slate}`}>
+      <Icon className="w-3 h-3 shrink-0" /> {label}
+    </span>
+  )
+}
+
 // ── How You Compare — the client's own peer standing, fully anonymized ─────────
 // The same cross-client benchmark the agency sees on /intelligence (lib/benchmark.js),
 // reduced to ONLY this client's placement against the anonymous portfolio — never a
@@ -847,6 +921,7 @@ export default function ClientView({ store }) {
   const [standing,     setStanding]    = useState(null)   // { period, cohort_size, standing } — anonymized peer benchmark
   const [recoveries,   setRecoveries]  = useState([])     // recently RECOVERED findings — the "what we fixed" win list
   const [pacing,       setPacing]      = useState(null)   // { metrics[] } — this client's OWN pace to each monthly goal (own numbers only)
+  const [recap,        setRecap]       = useState(null)   // grounded weekly recap row — the same narration that opens this client's Monday email
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -887,6 +962,13 @@ export default function ClientView({ store }) {
         setPacing(d?.pacing && Array.isArray(d.pacing.metrics) ? d.pacing : null)
       })
       .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null) })
+    // Weekly recap — the grounded, plain-English narration of the most recently completed
+    // week (lib/recap.js), the very same text that opens this client's Monday email. The
+    // recap layer degrades to a deterministic template even with no API key, so this is
+    // always safe to request; any failure simply hides the in-app card.
+    api.getRecap(clientObj.id)
+      .then(r => setRecap(r || null))
+      .catch(() => setRecap(null))
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -1081,6 +1163,15 @@ export default function ClientView({ store }) {
               the synthesis is a vacuous "100 healthy" (no findings), which would read
               as a fiction rather than a verdict, so we defer to the checklist above. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <AccountHealth health={health} />}
+
+          {/* ── Your Week in Review — the grounded weekly recap, in plain English ──
+              The very same narration that opens this client's Monday email (lib/recap.js),
+              surfaced in-app so they can reread it any day: the story of the week, then a
+              compact "where things stand now" coda built from the recap's own CLIENT-SAFE
+              intelligence digest (counts and area names only — never a severity statistic
+              or another client). Same activity gate as the health badge; self-hides when
+              there's no recap text yet. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <WeeklyRecap recap={recap} />}
 
           {/* ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──
               The agency's "Off goal pace" roster (insights/pacing) reduced to ONLY this
