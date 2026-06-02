@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
-  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles,
+  Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -10,7 +10,7 @@ import {
   severityMeta, kindMeta, directionIcon, metricLabel, urgencyMeta,
   precisionMeta, hasLearnedPrecision, precisionTooltip,
   forecastRange, FORECAST_RANGE_KEYS, fmtMetricValue, attributionView,
-  correlateView, impactsView,
+  correlateView, impactsView, escalationView,
   healthBandMeta, recoveryMeta, timeAgo,
 } from '@/lib/insightMeta'
 
@@ -552,6 +552,14 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
   const cause   = correlateView(insight)
   const impacts = impactsView(insight)
 
+  // Escalation (lib/escalation.js, read-time): present only once the pooled efficacy
+  // ledger has PROVEN this play ineffective (band 'low' on n ≥ ESCALATE_MIN_N decided
+  // outcomes). When set, the engine already rewrote `action.text` to switch levers and
+  // bumped `action.urgency` a lane — both render through the blocks below automatically.
+  // This view drives the at-a-glance signals unique to the agency surface: the candid
+  // "Escalated" chip and the reason banner with the recovery statistic. null → no-op.
+  const escalation = escalationView(insight)
+
   // The band's three keys are surfaced as the prominent range line below, so they're
   // filtered OUT of the raw evidence chips here — shown once, not twice.
   const evidenceEntries = Object.entries(insight.evidence || {})
@@ -600,6 +608,16 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
               title={`Traced to ${cause.channelLabel} going dark${cause.daysDark != null ? ` ${cause.daysDark}d ago` : ''}`}
             >
               <Plug className="w-3 h-3" /> Root cause
+            </span>
+          )}
+          {escalation && (
+            <span
+              className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-orange-600 bg-orange-50 border border-orange-200 rounded-full px-1.5 py-0.5"
+              title={escalation.hasStat
+                ? `Auto-escalated — this play has cleared the problem only ${escalation.pct}% of the time (${escalation.successes ?? '?'} of ${escalation.n}); urgency raised and lever switched`
+                : 'Auto-escalated — the usual fix hasn’t been recovering this; urgency raised and lever switched'}
+            >
+              <ArrowUpCircle className="w-3 h-3" /> Escalated
             </span>
           )}
         </div>
@@ -718,6 +736,37 @@ function InsightCard({ insight, busy, onAck, onResolve }) {
                 </span>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* auto-escalation (lib/escalation.js, read-time) — surfaces ONLY once the pooled
+            efficacy ledger has PROVEN this play ineffective (band 'low' on n ≥ ESCALATE_MIN_N
+            decided outcomes). The engine has already bumped action.urgency one lane and rewritten
+            action.text to switch levers — both render in the block below automatically. This banner
+            is the agency/internal-only WHY: the candid recovery statistic (pct% cleared, s of n)
+            and the lane the urgency was raised to. The client surface shows escalation.client_text
+            instead, never the failure number. null → renders nothing (the keystone no-op). */}
+        {escalation && (
+          <div className="mt-2 rounded-xl border border-orange-200 bg-gradient-to-br from-orange-50 to-white px-2.5 py-2">
+            <div className="flex items-center gap-1.5 mb-1">
+              <ArrowUpCircle className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+              <span className="text-[9px] font-bold uppercase tracking-wider text-orange-700">Auto-escalated — the usual fix isn’t working</span>
+            </div>
+            <p className="text-xs leading-relaxed font-medium text-orange-800/90">
+              {escalation.hasStat
+                ? `This play has cleared the problem only ${escalation.pct}% of the time (${escalation.successes ?? '?'} of ${escalation.n} tracked) — switching levers rather than repeating it.`
+                : 'This play hasn’t been recovering the metric across tracked attempts — switching levers rather than repeating it.'}
+            </p>
+            {escalation.bumped && (
+              <div className="flex items-center gap-1.5 mt-1.5 text-[10px] font-semibold text-orange-700">
+                <span className="uppercase tracking-wider text-orange-400">Urgency raised</span>
+                <span className="inline-flex items-center gap-1 tabular-nums">
+                  <span className="text-orange-500/80">{urgencyMeta(escalation.fromUrgency).label}</span>
+                  <span className="text-orange-400">→</span>
+                  <span className="font-bold text-orange-700">{urgencyMeta(escalation.toUrgency).label}</span>
+                </span>
+              </div>
+            )}
           </div>
         )}
 

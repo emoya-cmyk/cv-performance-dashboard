@@ -292,6 +292,39 @@ export function impactsView(insight) {
   return metrics.length ? metrics : null
 }
 
+// ── escalation → the ACT half of the efficacy loop, made legible ───────────────
+// lib/efficacy.js LEARNS, per play archetype, how often the recommended fix actually
+// clears the problem; lib/escalation.js turns a PROVEN-ineffective verdict (band 'low'
+// on n ≥ ESCALATE_MIN_N decided outcomes) into a revised recommendation — urgency
+// bumped one lane, the advice rewritten to "try a different lever" — and attachEscalations
+// (read-time) hoists the structured facts onto the finding as `escalation`. This view
+// pulls them back out for rendering. ONE source object, read in two registers:
+//   • agency (candid): the statistic is the point — pct% cleared, s of n, the lane bump.
+//   • client (softened): clientText only — states the change, never the failure number.
+// Returns null whenever the finding wasn't escalated (the keystone no-op: a card whose
+// play still works renders byte-for-byte as it did before the loop existed). Numbers are
+// re-coerced defensively — a malformed escalation degrades to the lane/clientText it can
+// still trust rather than printing NaN.
+export function escalationView(insight) {
+  const e = insight && insight.escalation
+  if (!e || e.reason !== 'play_ineffective') return null
+  const pct       = Number.isFinite(Number(e.pct))       ? Math.round(Number(e.pct)) : null
+  const successes = Number.isFinite(Number(e.successes)) ? Math.trunc(Number(e.successes)) : null
+  const n         = Number.isFinite(Number(e.n))         ? Math.trunc(Number(e.n)) : null
+  const fromUrgency = e.from_urgency || null
+  const toUrgency   = e.to_urgency || null
+  return {
+    pct,
+    successes,
+    n,
+    hasStat: pct != null && n != null,
+    fromUrgency,
+    toUrgency,
+    bumped: !!(fromUrgency && toUrgency && fromUrgency !== toUrgency),
+    clientText: typeof e.client_text === 'string' && e.client_text.trim() ? e.client_text : null,
+  }
+}
+
 // The three evidence keys forecastRange() consumes. The collapsed evidence list on
 // each surface filters these OUT — they read as one "likely range" line instead of
 // three lonely raw numbers — but they STAY in evidence as the grounded data layer the
