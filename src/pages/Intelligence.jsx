@@ -35,6 +35,7 @@ export default function Intelligence() {
   const [recoveries, setRecoveries] = useState([])     // [{ client_name, recovery_reason, recovered_at, … }] — the win stream
   const [systemic, setSystemic] = useState(null)       // { portfolio_size, signals[] } — cross-client common-cause scan (agency-only)
   const [trajectory, setTrajectory] = useState(null)   // { warnings[], count } — predictive early-warning roster (agency-only)
+  const [pacing, setPacing]   = useState(null)         // { roster[], month, days_elapsed, days_in_month } — goal-pacing roster (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -48,14 +49,14 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Six independent reads: the per-finding feed, the synthesized triage roster, the
+      // Seven independent reads: the per-finding feed, the synthesized triage roster, the
       // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
-      // common-cause scan, and the predictive early-warning roster. allSettled — not
-      // Promise.all — so a synthesis hiccup never blanks the feed. If any of the five
-      // synthesis reads stumbles its panel simply hides and the page degrades to exactly
-      // what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(),
+      // common-cause scan, the predictive early-warning roster, and the goal-pacing roster.
+      // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
+      // of the six synthesis reads stumbles its panel simply hides and the page degrades to
+      // exactly what it showed before that layer existed; only a feed failure is fatal.
+      const [feed, roster, bench, recov, sys, traj, pace] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -64,6 +65,7 @@ export default function Intelligence() {
       setRecoveries(recov.status === 'fulfilled' && Array.isArray(recov.value?.recoveries) ? recov.value.recoveries : [])
       setSystemic(sys.status === 'fulfilled' && Array.isArray(sys.value?.signals) ? sys.value : null)
       setTrajectory(traj.status === 'fulfilled' && Array.isArray(traj.value?.warnings) ? traj.value : null)
+      setPacing(pace.status === 'fulfilled' && Array.isArray(pace.value?.roster) ? pace.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -167,6 +169,14 @@ export default function Intelligence() {
           horizon. Read top-to-bottom the page goes "look here now" → "and here next". Agency-
           only (names peers, like triage + systemic); hidden until at least one client slides. */}
       {trajectory?.warnings?.length > 0 && <TrajectoryPanel data={trajectory} />}
+
+      {/* off goal pace — the GOAL-anchored companion to trajectory. Trajectory reads the slope
+          of a client's health; this reads month-to-date actual against the human-set monthly
+          GOAL by linear run-rate, and lists everyone who at today's pace will MISS — worst
+          first ("on pace for 24% of the leads goal, must run 4× to still hit it"). The save
+          before the month closes, not the post-mortem after. Agency-only (names peers + their
+          targets, like triage + systemic + trajectory); hidden until at least one goal is off pace. */}
+      {pacing?.roster?.length > 0 && <PacingPanel data={pacing} />}
 
       {/* systemic signals — the cross-client common-cause scan: the SAME adverse channel /
           metric / direction independently hitting ≥ minClients clients, collapsed into one
@@ -1265,6 +1275,153 @@ function TrajectoryRow({ w }) {
                 <div className={cn('h-full rounded-full', dest.dot)} style={{ width: `${conf}%` }} />
               </div>
               <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Goal pacing (agency roster) ─────────────────────────────────────────────
+   Forward-looking like trajectory, but anchored to the human-set monthly GOAL rather than the
+   slope of health. Only the off-pace verdicts reach here (engine's rankPacing keeps behind /
+   at_risk, worst-first), so the panel is the agency's "who will miss their number this month,
+   and how hard must they push to still hit it" — runway to act before the month closes. */
+const PACE_SHOWN = 6   // cap the rows so an off-pace book stays a glance
+
+// pacing status → chip + accent. Only at_risk / behind ever reach the roster (rankPacing drops
+// ahead / on_track / early), but the map is total so an unexpected status still renders a sane
+// neutral row rather than crashing. at_risk = the run-rate misses the goal outright (rose, the
+// sharper alarm); behind = tracking under pace but still reachable (amber). Mirrors pacing.js.
+const PACE_STATUS_META = {
+  at_risk: { label: 'At risk', chip: 'bg-rose-50 text-rose-600 border-rose-200',   text: 'text-rose-600',  dot: 'bg-rose-500' },
+  behind:  { label: 'Behind',  chip: 'bg-amber-50 text-amber-600 border-amber-200', text: 'text-amber-600', dot: 'bg-amber-500' },
+  none:    { label: 'No goal', chip: 'bg-slate-50 text-slate-500 border-slate-200', text: 'text-slate-500', dot: 'bg-slate-400' },
+}
+const paceStatusMeta = (s) => PACE_STATUS_META[s] || PACE_STATUS_META.none
+
+const PACE_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+// 'YYYY-MM-01' → 'July 2026'. String-sliced, never `new Date('YYYY-MM-01')` (that parses as UTC
+// midnight and renders the prior month in negative-offset zones — the same trap the engine avoids).
+function fmtMonthLabel(monthFirst) {
+  if (typeof monthFirst !== 'string') return null
+  const m = monthFirst.match(/^(\d{4})-(\d{2})/)
+  if (!m) return null
+  const name = PACE_MONTH_NAMES[Number(m[2]) - 1]
+  return name ? `${name} ${m[1]}` : null
+}
+// catchup multiplier → "4.2×" / "2×". The engine already rounds to 2 dp; show 1 dp and drop a
+// trailing .0 so the "push this much harder" headline reads clean. null when there's no catchup
+// (already at/over pace, which can't reach this roster anyway) → caller hides the clause.
+function fmtCatchup(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return null
+  const r = Math.round(v * 10) / 10
+  return (Number.isInteger(r) ? String(r) : r.toFixed(1)) + '×'
+}
+
+function PacingPanel({ data }) {
+  const roster = Array.isArray(data?.roster) ? data.roster : []
+  if (roster.length === 0) return null               // nobody off pace → degrade to no panel
+  const shown   = roster.slice(0, PACE_SHOWN)
+  const hidden  = roster.length - shown.length
+  const monthLabel = fmtMonthLabel(data?.month)
+  const daysLeft   = Number(data?.days_in_month) - Number(data?.days_elapsed)
+  const runway = Number.isFinite(daysLeft) && daysLeft >= 0 ? ` · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ''
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center shrink-0">
+          <Target className="w-4 h-4 text-rose-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Off goal pace</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {roster.length} goal{roster.length === 1 ? '' : 's'} projected to miss{monthLabel ? ` · ${monthLabel}` : ''}{runway}
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <PacingRow key={`${r.client_id}:${r.metric}`} r={r} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more off-pace goal{hidden === 1 ? '' : 's'}</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-rose-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A goal lands here when its month-to-date actual, projected to month-end at the
+          <span className="font-bold text-rose-600"> current run-rate</span>, falls short of the target — ranked by how
+          far. The multiplier is how much harder the remaining days must run to still hit it. Early in the month the
+          engine withholds the call until enough of it has elapsed to trust. Agency-only — clients never see the
+          cross-account roster, only their own pace.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One off-pace goal: whose, which metric, how far behind, and the push needed to recover. The
+   left rail + projected value read in the status color (the stakes); the metric line walks
+   actual-so-far → projected → target so the gap is legible at a glance, with the catchup
+   multiplier as the call to action; the right rail is the headline "% of goal pace" over a
+   confidence meter that fills with how much of the month has elapsed (more month = surer call). */
+function PacingRow({ r }) {
+  const meta    = paceStatusMeta(r.status)
+  const pct     = Number.isFinite(Number(r.attainment)) ? Math.round(Number(r.attainment) * 100) : null
+  const conf    = r.confidence == null ? null : Math.max(0, Math.min(100, Math.round(Number(r.confidence) * 100)))
+  const catchup = fmtCatchup(r.catchup)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border', meta.chip)}>
+          <Target className="w-4 h-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{r.client_name || 'Unknown'}</span>
+            <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+              {metricLabel(r.metric)}
+            </span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', meta.chip)}>
+              {meta.label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span className="tabular-nums font-bold text-slate-600">{fmtMetricValue(r.metric, r.actual)}</span>
+            <span className="text-slate-300">so far →</span>
+            <span className={cn('tabular-nums font-bold', meta.text)}>{fmtMetricValue(r.metric, r.projected)}</span>
+            <span className="text-slate-300">proj. vs</span>
+            <span className="tabular-nums font-bold text-slate-600">{fmtMetricValue(r.metric, r.target)} goal</span>
+            {catchup && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>needs <span className="tabular-nums font-bold text-slate-600">{catchup}</span> the pace</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {pct != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', meta.text)}>{pct}%</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">of goal pace</div>
+            </>
+          )}
+          {conf != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${conf}%` }} />
+              </div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">month {conf}% in</div>
             </div>
           )}
         </div>

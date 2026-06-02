@@ -650,6 +650,113 @@ function fmtBench(metric, v) {
   return fmtMetricValue(metric, n)
 }
 
+// ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──────
+// The same goal-pacing the agency sees as the "Off goal pace" roster on /intelligence
+// (lib/pacing.js), reduced to ONLY this client's own numbers — no peers, no roster, no
+// book-wide share. Unlike the agency view, which lists only the goals about to MISS, the
+// client sees EVERY goal they set this month — the ahead and on-track ones too — because the
+// honest answer to "will I hit my number?" includes the good news, not just the alarms. Each
+// metric reads as banked-so-far against the target with where today's pace lands it, framed
+// encouragingly: the agency's "At risk" becomes "Needs a push", never an operator alarm. Empty
+// metrics (no goal set this month, or too early to call) → the card hides; the parent also
+// gates it behind real activity so a brand-new account doesn't get a wall of "behind".
+const GOAL_PACE_SHOWN = 4
+
+// pacing status → a friendly, honest placement, client-toned. The agency panel paints only
+// behind / at_risk; here all five verdicts can appear, so the good news leads in green and the
+// soft spots read as "needs a push" / "behind pace" — encouragement, not an operator severity.
+// Drives the row's chip, bar, and accent so this card and the agency roster never disagree on
+// what a given pace MEANS, only on how loudly they say it.
+function paceClientTier(status) {
+  switch (status) {
+    case 'ahead':    return { label: 'Ahead of pace', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', bar: 'bg-emerald-500', text: 'text-emerald-600', Icon: Award }
+    case 'on_track': return { label: 'On track',      chip: 'bg-sky-50 text-sky-700 border-sky-200',             bar: 'bg-sky-500',     text: 'text-sky-600',     Icon: CheckCircle }
+    case 'behind':   return { label: 'Behind pace',   chip: 'bg-amber-50 text-amber-700 border-amber-200',       bar: 'bg-amber-400',   text: 'text-amber-600',   Icon: ArrowUpRight }
+    case 'at_risk':  return { label: 'Needs a push',  chip: 'bg-rose-50 text-rose-600 border-rose-200',          bar: 'bg-rose-500',    text: 'text-rose-600',    Icon: AlertCircle }
+    case 'early':    return { label: 'Early days',    chip: 'bg-slate-100 text-slate-500 border-slate-200',      bar: 'bg-slate-400',   text: 'text-slate-500',   Icon: Clock }
+    default:         return { label: 'Tracking',      chip: 'bg-slate-100 text-slate-500 border-slate-200',      bar: 'bg-slate-400',   text: 'text-slate-500',   Icon: Activity }
+  }
+}
+
+function GoalPace({ pacing }) {
+  const metrics = Array.isArray(pacing?.metrics) ? pacing.metrics : []
+  if (metrics.length === 0) return null               // no goal this month / too early → hide
+  const shown    = metrics.slice(0, GOAL_PACE_SHOWN)
+  const daysLeft = Number(pacing?.days_in_month) - Number(pacing?.days_elapsed)
+  const hasRunway = Number.isFinite(daysLeft) && daysLeft >= 0
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.10s' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Will You Hit Your Goal?</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
+        Where each goal you set this month stands today, and where your current pace lands it
+        {hasRunway ? <> — <span className="font-bold text-slate-700">{daysLeft} day{daysLeft === 1 ? '' : 's'} to go</span></> : ''}.
+      </p>
+
+      <div className="space-y-4">
+        {shown.map(m => <GoalPaceRow key={m.metric} m={m} />)}
+      </div>
+
+      <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
+        Measured against the goal set for this month, projected at your current run-rate. We refresh it every day —
+        it&rsquo;s a forecast from today&rsquo;s pace, not a final number.
+      </p>
+    </div>
+  )
+}
+
+// One goal's pace: how much you've banked toward it, where today's run-rate lands you, and —
+// when you're behind — what's left to close. The track runs 0 → goal: the solid fill is what's
+// banked so far, the tick is where the projection ends (at the far right once it reaches goal).
+// Natural units throughout (revenue in $, leads/jobs as counts) via the shared fmtMetricValue.
+function GoalPaceRow({ m }) {
+  const t   = paceClientTier(m.status)
+  const Ico = t.Icon
+  const target    = Number(m.target)
+  const actual    = Number(m.actual)
+  const projected = Number(m.projected)
+  const remaining = Number(m.remaining)
+  // 0 → goal track. Fill = banked-so-far; the tick = where today's pace ends (clamped to the
+  // track so an ahead projection parks at the goal line rather than overflowing the bar).
+  const pctBanked = target > 0 ? Math.max(0, Math.min(100, Math.round((actual / target) * 100))) : 0
+  const pctProj   = target > 0 ? Math.max(0, Math.min(100, Math.round((projected / target) * 100))) : 0
+  const aheadish  = m.status === 'ahead' || m.status === 'on_track'
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-black text-slate-800 truncate">{metricLabel(m.metric)}</span>
+          <span className={`inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 border shrink-0 ${t.chip}`}>
+            <Ico className="w-3 h-3" /> {t.label}
+          </span>
+        </div>
+        <span className="text-[11px] font-bold text-slate-400 tabular-nums shrink-0">
+          <span className="text-slate-800">{fmtMetricValue(m.metric, actual)}</span> of {fmtMetricValue(m.metric, target)}
+        </span>
+      </div>
+
+      {/* 0 → goal track: solid fill = banked so far, the tick = where today's pace ends */}
+      <div className="relative h-2.5 w-full rounded-full bg-slate-100 overflow-hidden">
+        <div className={`h-full rounded-full transition-all duration-700 ${t.bar}`} style={{ width: `${pctBanked}%` }} />
+        <div className="absolute top-0 bottom-0 w-0.5 bg-slate-400/80" style={{ left: `calc(${pctProj}% - 1px)` }} />
+      </div>
+
+      <div className="flex items-center justify-between text-[10px] mt-1">
+        <span className={`font-semibold ${t.text}`}>On pace for {fmtMetricValue(m.metric, projected)}</span>
+        <span className="font-semibold text-slate-400 tabular-nums">
+          {aheadish || !(remaining > 0) ? 'on track to goal' : `${fmtMetricValue(m.metric, remaining)} to go`}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── Sparkline ─────────────────────────────────────────────────────────────────
 function Sparkline({ data }) {
   if (!data?.length) return null
@@ -706,6 +813,7 @@ export default function ClientView({ store }) {
   const [health,       setHealth]      = useState(null)   // one-number verdict from api.getClientInsights()
   const [standing,     setStanding]    = useState(null)   // { period, cohort_size, standing } — anonymized peer benchmark
   const [recoveries,   setRecoveries]  = useState([])     // recently RECOVERED findings — the "what we fixed" win list
+  const [pacing,       setPacing]      = useState(null)   // { metrics[] } — this client's OWN pace to each monthly goal (own numbers only)
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -743,8 +851,9 @@ export default function ClientView({ store }) {
         setHealth(d?.health || null)
         setStanding(d?.benchmark || null)
         setRecoveries(Array.isArray(d?.recoveries) ? d.recoveries : [])
+        setPacing(d?.pacing && Array.isArray(d.pacing.metrics) ? d.pacing : null)
       })
-      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]) })
+      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null) })
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -939,6 +1048,14 @@ export default function ClientView({ store }) {
               the synthesis is a vacuous "100 healthy" (no findings), which would read
               as a fiction rather than a verdict, so we defer to the checklist above. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <AccountHealth health={health} />}
+
+          {/* ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──
+              The agency's "Off goal pace" roster (insights/pacing) reduced to ONLY this
+              account's own numbers — no peers, no book share — and widened to show EVERY
+              goal, the ahead and on-track ones too, not just the misses. Same activity gate
+              as the health badge so a brand-new account doesn't open on a wall of "behind";
+              the card also self-hides when there's no goal set or it's too early to call. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <GoalPace pacing={pacing} />}
 
           {/* ── How You Compare — this client's own anonymized peer standing ──
               The cross-client benchmark reduced to this account's placement only
