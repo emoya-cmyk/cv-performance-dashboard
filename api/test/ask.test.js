@@ -57,7 +57,7 @@ const reply = (text) => ({ data: { content: [{ type: 'text', text }] } })
 const db = require('../db')
 const { AGG, derive } = require('../lib/metricsCore')
 const {
-  runAsk, validateSpec, compileQuery, resolveTimeRange, SpecError,
+  runAsk, runExplain, validateSpec, compileQuery, resolveTimeRange, SpecError,
 } = require('../lib/ask')
 // The PURE follow-up core is exhaustively proven in test/followups.test.js; here we
 // only assert runAsk WIRES it correctly — the right spec + the right scope/comparison
@@ -582,6 +582,127 @@ test('a client-scoped ask never offers a cross-client follow-up', async () => {
     res.followups,
     suggestFollowups(res.spec, { hasComparison: !!res.meta.comparison, allowClientBreakdown: false })
   )
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+// ── 8. GROUNDED "WHY DID IT CHANGE?" (intel-v6 5: entity attribution) ─────────
+// runExplain decomposes an UNSCOPED single additive figure's period-over-period
+// move into EXACT per-client contributions — no LLM, pure DB arithmetic through the
+// SAME compile path runAsk uses, so no number can drift from the answer. Under NOW2,
+// revenue "last week" is WEEK_B (20,000) vs the WEEK_A baseline (18,000): Δ +2,000
+// decomposes exactly into Acme +2,000, Beta −3,000, Gamma +3,000 (Σ = +2,000). The
+// STRONG property proven here: the two biggest |moves| TIE at 3,000 (Beta down, Gamma
+// up), so the "lead" must be chosen by ALIGNMENT with the rise (Gamma) — never by raw
+// magnitude, which would wrongly crown the tie-broken-first Beta. Every emitted display
+// string is grounded by construction (read straight from the breakdown, formatted here).
+
+test('runExplain decomposes a moved single additive figure into exact per-client contributions', async () => {
+  await ensurePortfolio()
+  // No LLM hop — runExplain is pure DB arithmetic. No API key, no axios responders set.
+  const r = await runExplain({ metric: 'revenue', group_by: 'none', time_range: 'last_week' }, { now: NOW2 })
+
+  assert.ok(r, 'an eligible figure that moved is explainable')
+  assert.equal(r.moved, true)
+  assert.equal(r.metric, 'revenue')
+  assert.equal(r.label, 'Revenue')
+  assert.equal(r.unit, 'money')
+  assert.equal(r.window_label, 'the week of 2026-05-11')   // WEEK_B, the primary window
+  assert.equal(r.baseline_label, 'the prior week')          // WEEK_A baseline
+  assert.equal(r.direction, 'up')
+  assert.equal(r.total_from, 18000)
+  assert.equal(r.total_to, 20000)
+  assert.equal(r.total_delta, 2000)
+  assert.equal(r.total_delta_display, '+$2,000')
+  assert.equal(r.pct, 11.1)
+
+  // lead = the most-ALIGNED client, not the biggest |move|. Beta and Gamma both moved
+  // $3,000, but Beta moved DOWN (a cushion) and Gamma UP (the driver) — so the lead is
+  // Gamma. This is the discriminating case for share-by-alignment over raw magnitude.
+  assert.equal(r.lead.key, 'Gamma')
+  assert.equal(r.lead.delta, 3000)
+  assert.equal(r.lead.delta_display, '+$3,000')
+  assert.equal(r.lead.share_pct, 150)
+
+  // contributors ranked by |delta| desc, ties broken by label asc → Beta, Gamma, Acme.
+  assert.deepEqual(r.contributors.map((c) => c.key), ['Beta', 'Gamma', 'Acme'])
+  assert.deepEqual(r.contributors.map((c) => c.delta), [-3000, 3000, 2000])
+  assert.deepEqual(r.contributors.map((c) => c.delta_display), ['−$3,000', '+$3,000', '+$2,000'])  // U+2212 minus
+  // signed shares sum to exactly 1 (Beta −1.5 + Gamma +1.5 + Acme +1.0).
+  assert.ok(Math.abs(r.contributors.reduce((s, c) => s + c.share, 0) - 1) < 1e-9)
+
+  // every client is named (3 ≤ limit 5), so nothing folds into others / unattributed.
+  assert.equal(r.others, null)
+  assert.equal(r.unattributed, null)
+
+  // the grounded one-liner reads from the breakdown verbatim — no invented number.
+  assert.equal(
+    r.narration,
+    'Revenue rose $2,000 (+11.1%). Gamma drove the most — +$3,000 (150% of the change); Beta −$3,000, Acme +$2,000.'
+  )
+})
+
+test('runExplain returns null for every non-decomposable shape', async () => {
+  const { acme } = await ensurePortfolio()
+
+  // a RATIO metric — roas/cpl/close_rate are NOT additive over clients (that "why" is
+  // the driver decomposition, attribution.js), so there is no exact per-client split.
+  assert.equal(
+    await runExplain({ metric: 'roas', group_by: 'none', time_range: 'last_week' }, { now: NOW2 }), null)
+  // already GROUPED — a ranking is not a single figure to attribute.
+  assert.equal(
+    await runExplain({ metric: 'revenue', group_by: 'client', time_range: 'last_week' }, { now: NOW2 }), null)
+  // OPEN-ENDED range — no honest equal-length prior window to compare against.
+  assert.equal(
+    await runExplain({ metric: 'revenue', group_by: 'none', time_range: 'all_time' }, { now: NOW2 }), null)
+  // a SCOPED (single-client) caller — a per-client view has no cross-client "who".
+  assert.equal(
+    await runExplain({ metric: 'revenue', group_by: 'none', time_range: 'last_week' }, { now: NOW2, scopeClientId: acme }), null)
+})
+
+// meta.explainable is the SERVER-SIDE predicate the UI reads to decide whether to
+// offer the "Why?" chip — so the client never re-derives the eligibility rules. It
+// must be true for EXACTLY the shape runExplain can decompose, and false otherwise.
+test('runAsk flags meta.explainable for exactly the decomposable shape', async () => {
+  await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onNarrate = () => 'ok'
+
+  // YES — an unscoped additive single figure that moved vs its prior week.
+  onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  const yes = await runAsk('revenue last week', { now: NOW2 })
+  assert.ok(yes.meta.comparison, 'precondition: it carried a period-over-period comparison')
+  assert.equal(yes.meta.explainable, true)
+
+  // NO — grouped (a ranking, not one figure): comparison is null, so explainable false.
+  onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'client', time_range: 'last_week' })
+  assert.equal((await runAsk('top clients last week', { now: NOW2 })).meta.explainable, false)
+
+  // NO — a ratio metric. It DOES carry a comparison (a single roas figure vs the prior
+  // week), but it isn't additive over clients, so the additive gate keeps the chip off.
+  onParse = () => JSON.stringify({ metric: 'roas', group_by: 'none', time_range: 'last_week' })
+  const ratio = await runAsk('roas last week', { now: NOW2 })
+  assert.ok(ratio.meta.comparison, 'a ratio single figure still carries a comparison')
+  assert.equal(ratio.meta.explainable, false)
+
+  // NO — an open-ended range carries no comparison at all.
+  onParse = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'all_time' })
+  assert.equal((await runAsk('revenue all time', { now: NOW2 })).meta.explainable, false)
+
+  delete process.env.ANTHROPIC_API_KEY
+})
+
+test('a client-scoped single figure is never flagged explainable', async () => {
+  const { acme } = await ensurePortfolio()
+  process.env.ANTHROPIC_API_KEY = 'test-key'
+  onParse   = () => JSON.stringify({ metric: 'revenue', group_by: 'none', time_range: 'last_week' })
+  onNarrate = () => 'ok'
+
+  // The figure moved (Acme 12,000 vs 10,000) and the metric is additive, but a per-
+  // client surface has no cross-client "who" to attribute to — so the chip stays off.
+  const res = await runAsk('how much revenue last week?', { now: NOW2, scopeClientId: acme })
+  assert.ok(res.meta.comparison, 'it still carries its own period-over-period comparison')
+  assert.equal(res.meta.explainable, false)
 
   delete process.env.ANTHROPIC_API_KEY
 })

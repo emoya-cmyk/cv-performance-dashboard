@@ -40,6 +40,10 @@ const { query }                                  = require('../db')
 const { weekStartOf }                             = require('./rollup')
 const { callMessages, DEFAULT_MODEL }             = require('./anthropic')
 const { verifyGrounding, collectAllowedNumbers }  = require('./ai')
+// intel-v6 (5): the ENTITY "why" — split an additive metric's period-over-period
+// agency move into exact per-client contributions. Pure (no DB/clock/LLM) and
+// require-free, so a plain top-level require is cycle-safe.
+const { contributionBreakdown, narrateContribution, isAdditive: isAdditiveMetric } = require('./contribution')
 
 // ── METRIC WHITELIST ──────────────────────────────────────────────────────────
 // Aggregate fragments over weekly_reports (alias wr). Each SUM is COALESCEd so a
@@ -646,7 +650,127 @@ async function runAsk(question, opts = {}) {
       time_label: compiled.timeLabel,
       row_count:  formatted.length,
       comparison: meta.comparison || null,   // period-over-period for a single figure (2c chip)
+      // intel-v6 (5): is there a grounded "why did it change?" the caller can ask?
+      // True only for the exact shape runExplain can decompose — an UNSCOPED (whole-
+      // book) single figure of an ADDITIVE metric that actually moved vs its prior
+      // period. We compute the predicate HERE so the UI never re-derives the rules:
+      // it just shows the "Why?" affordance when this is true and calls askExplain.
+      explainable: scope == null && compiled.grouping === 'none'
+        && isAdditiveMetric(spec.metric)
+        && !!meta.comparison && meta.comparison.direction !== 'flat',
     },
+  }
+}
+
+// ── GROUNDED "WHY DID IT CHANGE?" (intel-v6 (5): entity attribution) ──────────
+// runAsk answers "revenue rose $24k vs the prior week" and flags it `explainable`.
+// This is the click-through: WHO drove that move. It re-validates the SAME spec the
+// answer carried, recomputes both windows' totals AND the per-client splits through
+// the EXACT scope+whitelist compile path (so no number can drift from the answer),
+// and hands the rows to contribution.js for exact additive arithmetic — no LLM.
+//
+// ELIGIBILITY (returns null → the route 422s; the UI only offers the chip when
+// meta.explainable was true, so a null here is the rare race, not the norm):
+//   • UNSCOPED only — a per-client "who drove it" makes sense for the whole book,
+//     not for a single client already pinned to itself (scope != null → null).
+//   • group_by:'none' — a single agency figure, not an already-broken-down ranking.
+//   • an ADDITIVE metric — revenue/leads/jobs/spend decompose exactly into a SUM
+//     over clients; ratios (roas/cpl/close_rate) do not (that's the DRIVER "why",
+//     attribution.js, layered later).
+//   • a COMPARABLE range — there must be an honest equal-length prior window.
+//
+// EXACTNESS: we pass the authoritative single-figure totals (totalFrom/totalTo,
+// the very numbers the answer showed) AND the LIMIT-capped per-client rows;
+// contribution.js reconciles any gap into an explicit `unattributed` remainder, so
+// named + others + unattributed always sum to the true Δtotal. Display strings are
+// formatted HERE (server-side, grounded by construction) so the UI renders text it
+// never had to compute. A spec that's eligible but DIDN'T actually move returns a
+// graceful { moved:false } payload rather than null (the answer said it moved, but
+// a rounding-thin or since-changed total can disagree — say so honestly).
+//
+// @param {object}  rawSpec               the spec runAsk answered (re-validated here)
+// @param {object}  [opts]
+// @param {Date}    [opts.now]            inject "now" (tests / fixed clock)
+// @param {boolean} [opts.isPg]           override backend detection
+// @param {string}  [opts.scopeClientId]  a non-null scope → null (per-client view
+//                                         has no cross-client "who"); null = whole book
+// @returns {Promise<object|null>}        null when not decomposable; else the breakdown
+async function runExplain(rawSpec, opts = {}) {
+  let spec
+  try { spec = validateSpec(rawSpec) }
+  catch (e) { throw codeErr('UNPARSEABLE', e instanceof SpecError ? e.message : 'invalid spec') }
+
+  const now   = opts.now || new Date()
+  const isPg  = opts.isPg != null ? opts.isPg : !!process.env.DATABASE_URL
+  const scope = opts.scopeClientId != null ? opts.scopeClientId : null
+
+  const cmp = comparisonRange(spec, now)
+  // Same eligibility predicate the UI saw as meta.explainable — re-checked server-
+  // side so the route is safe even if called directly with an off-shape spec.
+  if (scope != null || spec.group_by !== 'none' || !isAdditiveMetric(spec.metric) || !cmp) return null
+
+  const metricDef = METRICS[spec.metric]
+
+  // Authoritative agency totals — the single-figure numbers, both windows, via the
+  // SAME group_by:'none' compile the answer used (current + the 5th-arg baseline seam).
+  const noneCur  = compileQuery(spec, now, isPg, null)
+  const noneBase = compileQuery(spec, now, isPg, null, () => cmp)
+  const [curTotRes, baseTotRes] = await Promise.all([
+    query(noneCur.sql,  noneCur.params),
+    query(noneBase.sql, noneBase.params),
+  ])
+  const totalTo   = Number(curTotRes.rows[0]  && curTotRes.rows[0].value)  || 0
+  const totalFrom = Number(baseTotRes.rows[0] && baseTotRes.rows[0].value) || 0
+
+  // Per-client splits, both windows — the same compile, grouped by client, ranked,
+  // capped at 50 (the LIMIT; the unattributed remainder reconciles anything beyond).
+  const clientSpec = { ...spec, group_by: 'client', order: 'desc', limit: 50 }
+  const curC  = compileQuery(clientSpec, now, isPg, null)
+  const baseC = compileQuery(clientSpec, now, isPg, null, () => cmp)
+  const [curRows, baseRows] = await Promise.all([
+    query(curC.sql,  curC.params),
+    query(baseC.sql, baseC.params),
+  ])
+  const toRows   = curRows.rows.map(r  => ({ key: r.bucket, label: r.bucket, value: Number(r.value) }))
+  const fromRows = baseRows.rows.map(r => ({ key: r.bucket, label: r.bucket, value: Number(r.value) }))
+
+  const result = contributionBreakdown(spec.metric, fromRows, toRows, { totalFrom, totalTo, limit: 5 })
+
+  const fmt    = (v) => formatValue(v, metricDef)
+  const signed = (d) => (d >= 0 ? '+' : '−') + fmt(Math.abs(d))
+  const noun   = metricDef.label.toLowerCase()
+
+  // Eligible but flat (or thinner than MOVE_EPS): the answer's comparison said it
+  // moved, but the recomputed totals didn't — report honestly instead of inventing
+  // a driver. (contributionBreakdown returns null on |Δtotal| < eps or a non-additive
+  // metric; metric is additive here, so a null means the move washed out.)
+  if (!result) {
+    return {
+      metric: spec.metric, label: metricDef.label, unit: metricDef.unit,
+      window_label: noneCur.timeLabel, baseline_label: cmp.label, moved: false,
+      total_from: totalFrom, total_to: totalTo, total_delta: totalTo - totalFrom,
+      narration: `${metricDef.label} was unchanged vs ${cmp.label}.`,
+      contributors: [], lead: null, others: null, unattributed: null,
+    }
+  }
+
+  // Decorate every contributor with a signed, unit-aware display string so the UI
+  // renders grounded text verbatim (it never re-derives a number or a sign).
+  const decorate = (e) => (e ? { ...e, delta_display: signed(e.delta) } : null)
+  return {
+    metric: spec.metric, label: metricDef.label, unit: metricDef.unit,
+    window_label: noneCur.timeLabel, baseline_label: cmp.label, moved: true,
+    direction: result.direction,
+    total_from: result.total_from, total_to: result.total_to,
+    total_delta: result.total_delta, total_delta_display: signed(result.total_delta),
+    pct: result.pct,
+    narration: narrateContribution(result, { fmt, noun }),
+    contributors: result.contributors.map(decorate),
+    lead: decorate(result.lead),
+    others: result.others
+      ? { ...result.others, delta_display: signed(result.others.delta) } : null,
+    unattributed: result.unattributed
+      ? { ...result.unattributed, delta_display: signed(result.unattributed.delta) } : null,
   }
 }
 
@@ -706,7 +830,7 @@ async function runSuggestions(opts = {}) {
 }
 
 module.exports = {
-  runAsk, runSuggestions, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
+  runAsk, runSuggestions, runExplain, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
   templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,

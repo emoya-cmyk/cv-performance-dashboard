@@ -93,6 +93,42 @@ export async function ask(question, clientId) {
   return data
 }
 
+/**
+ * Grounded "why did it change?" — the click-through on an answer that carried
+ * `meta.explainable`. Hands the SAME typed `spec` the answer returned back to the
+ * server, which decomposes that figure's period-over-period move into exact
+ * per-client contributions (no LLM, pure arithmetic). Returns the breakdown
+ * (lead client, ranked signed contributors, server-formatted display strings, a
+ * grounded narration) — or, if the figure turned out flat on recompute, a graceful
+ * `{ moved:false }` payload. Mirrors ask()'s error contract so the UI can tell the
+ * honest failure modes apart; NOT_EXPLAINABLE (422) means this spec isn't
+ * decomposable (the rare race where the affordance showed but the shape changed).
+ *
+ * `clientId` is honoured only for an agency token (same posture as ask()); a client
+ * token is hard-pinned server-side, and a scoped caller gets null back anyway since
+ * a single-client view has no cross-client "who" to attribute.
+ */
+export async function askExplain(spec, clientId) {
+  const token = getToken()
+  const res = await fetch(`${BASE}/api/ai/ask/explain`, {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(clientId ? { spec, clientId } : { spec }),
+  })
+  if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err  = new Error(data.error || `API /api/ai/ask/explain → ${res.status}`)
+    err.status = res.status
+    err.code   = data.code || null
+    throw err
+  }
+  return data
+}
+
 export const api = {
   clients:       ()               => get('/api/clients'),
   createClient:  (body)           => post('/api/clients', body),
@@ -142,6 +178,12 @@ export const api = {
   getLatestReport: (clientId)     => get(`/api/reports/${clientId}/latest`),
   // Ask-your-data (Sprint 2): natural-language portfolio questions
   ask,
+  // askExplain (intel-v6 (5)): the grounded "why did it change?" click-through. Pass
+  // the SAME spec a prior ask() answer carried (result.spec) when its meta.explainable
+  // was true; the server splits that figure's period-over-period move into exact
+  // per-client contributions. Same scope rules as ask(). Throws with .code/.status on
+  // the honest failure modes (NOT_EXPLAINABLE 422 = this spec isn't decomposable).
+  askExplain,
   // askSuggestions (intel-v6): dynamic opening chips for the Ask box — the biggest
   // period-over-period movers for whatever the caller is allowed to see, each a
   // click-to-run question. Same scope rules as ask(): a client token only ever gets

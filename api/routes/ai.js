@@ -27,7 +27,7 @@ const express = require('express')
 const { query } = require('../db')
 const { weekStartOf } = require('../lib/rollup')
 const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
-const { runAsk, runSuggestions } = require('../lib/ask')
+const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
 
@@ -146,6 +146,42 @@ router.post('/ask', async (req, res) => {
     }
     console.error('[ai] POST ask error', err.message)
     res.status(500).json({ error: 'Failed to answer question' })
+  }
+})
+
+// ── POST /api/ai/ask/explain ──────────────────────────────────────────────────
+// Body: { spec: <the spec runAsk returned>, clientId?: string }. The grounded
+// "why did it change?" click-through: given the SAME typed spec a prior /ask
+// answer carried, decompose its period-over-period agency move into exact
+// per-client contributions (lib/ask.runExplain → lib/contribution). No LLM, pure
+// DB arithmetic, so no ANTHROPIC_API_KEY needed. Scoped by the SAME resolveAskScope
+// boundary as /ask — a client token only ever explains its own (and runExplain
+// returns null for a scoped caller, since a per-client view has no cross-client
+// "who"). A spec that isn't decomposable (non-additive metric, already grouped, or
+// no comparable prior window) → 422 NOT_EXPLAINABLE; the UI only offers the chip
+// when runAsk flagged meta.explainable, so that 422 is the rare race, not the norm.
+router.post('/ask/explain', async (req, res) => {
+  const spec = req.body?.spec
+  if (spec == null || typeof spec !== 'object' || Array.isArray(spec)) {
+    return res.status(400).json({ error: 'spec is required' })
+  }
+
+  try {
+    const scope = await resolveAskScope(req)
+    if (scope.error) return res.status(scope.status).json({ error: scope.error })
+
+    const result = await runExplain(spec, { scopeClientId: scope.scopeClientId })
+    if (!result) {
+      return res.status(422).json({ error: 'this question cannot be broken down by client', code: 'NOT_EXPLAINABLE' })
+    }
+    res.json(result)
+  } catch (err) {
+    const status = ASK_STATUS[err.code]
+    if (status) {
+      return res.status(status).json({ error: err.message, code: err.code })
+    }
+    console.error('[ai] POST ask/explain error', err.message)
+    res.status(500).json({ error: 'Failed to explain change' })
   }
 })
 
