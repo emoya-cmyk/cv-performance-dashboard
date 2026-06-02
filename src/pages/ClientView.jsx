@@ -920,6 +920,67 @@ function orderClientPulse(signals) {
   )
 }
 
+// ── your pulse in one sentence (intel-v7 layer 7 / 7d) — the client synthesis capstone ──
+// The consumer cut of the morning briefing. lib/pulseBriefing.summarizeClientPulse collapses
+// THIS client's own ranked pulse into ONE calm sentence — the top signal's client-toned triage
+// line plus a soft "also watching N others" tail — anchored by a single focus chip naming the
+// one metric that matters. It SUBTRACTS surface area: it replaces the generic "N numbers are
+// moving" intro with the actual one thing, framing the per-metric rows below as the detail. The
+// briefing arrives as a machinery-free sibling on the client-safe pulse payload (focus carries
+// ONLY label/direction/delta_pct/lane; the sentence is the engine's own client_reason), so it
+// honors the ClientPulseRow TRIPWIRE — no z, baseline, reliability, accuracy, or tuning_* ever
+// reaches this surface. posture in the client's voice, never the agency-internal act/watch words.
+const PULSE_POSTURE_CLIENT = {
+  act:    { dot: 'bg-rose-500',    text: 'text-rose-600',    label: 'Needs a look'  },
+  watch:  { dot: 'bg-amber-500',   text: 'text-amber-600',   label: 'Worth a glance' },
+  steady: { dot: 'bg-emerald-500', text: 'text-emerald-600', label: 'Looking good'  },
+}
+function ClientPulseHeadline({ briefing, adverse }) {
+  const b = briefing
+  // No synthesis available → fall back to the original generic count intro, unchanged.
+  if (!b || !b.headline_text) {
+    return (
+      <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
+        {adverse > 0
+          ? <>An early read on the week in progress — {adverse === 1 ? 'one number is' : `${adverse} numbers are`} moving outside your usual range, days before your Monday recap.</>
+          : <>An early read on the week in progress — everything below is running <span className="font-bold text-emerald-600">ahead of your usual week</span>.</>}
+      </p>
+    )
+  }
+  const posture = PULSE_POSTURE_CLIENT[b.posture] || PULSE_POSTURE_CLIENT.steady
+  const f       = b.focus
+  const lane    = f ? (PULSE_LANE_CLIENT[f.lane] || null) : null
+  const dpct    = f && Number.isFinite(Number(f.delta_pct)) ? Number(f.delta_pct) : null
+  return (
+    <div className="mb-4">
+      {/* the one sentence — posture-toned, the engine's own client-voiced synthesis */}
+      <div className="flex items-start gap-2">
+        <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${posture.dot}`} />
+        <p className="text-sm font-bold text-slate-800 leading-snug">{b.headline_text}</p>
+      </div>
+      {/* the one metric that matters — focus chip, machinery-free (label + lane + own delta) */}
+      {f && (
+        <div className="mt-2 ml-4 flex items-center gap-1.5 flex-wrap">
+          <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">{f.label}</span>
+          {lane && (
+            <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${lane.chip}`}>
+              <lane.Icon className="w-2.5 h-2.5" /> {lane.label}
+            </span>
+          )}
+          {dpct !== null && (
+            <span className={`inline-flex items-center text-[10px] font-black tabular-nums ${posture.text}`}>
+              {dpct >= 0 ? '+' : '−'}{Math.abs(Math.round(dpct))}%
+            </span>
+          )}
+          {b.also_count > 0 && (
+            <span className="text-[10px] font-semibold text-slate-400">· +{b.also_count} more watched</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ClientPulse({ pulse }) {
   const signals = Array.isArray(pulse?.signals) ? pulse.signals : []
   if (signals.length === 0) return null                 // nothing out of band this week → hide
@@ -934,11 +995,9 @@ function ClientPulse({ pulse }) {
           <Sparkles className="w-3 h-3" /> AI Analyst
         </span>
       </div>
-      <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
-        {adverse > 0
-          ? <>An early read on the week in progress — {adverse === 1 ? 'one number is' : `${adverse} numbers are`} moving outside your usual range, days before your Monday recap.</>
-          : <>An early read on the week in progress — everything below is running <span className="font-bold text-emerald-600">ahead of your usual week</span>.</>}
-      </p>
+      {/* the one sentence first — synthesised briefing (7d) replaces the generic count intro;
+          falls back to that exact count line when no briefing rides along. Frames the rows below. */}
+      <ClientPulseHeadline briefing={pulse?.briefing} adverse={adverse} />
 
       <div className="space-y-3">
         {ordered.map(s => <ClientPulseRow key={s.metric} s={s} />)}

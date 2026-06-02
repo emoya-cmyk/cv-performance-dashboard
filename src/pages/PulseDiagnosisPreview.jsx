@@ -504,6 +504,64 @@ const CLIENT = [
     triage_client_reason: 'Your close rate is pacing ahead — nice momentum.' },
 ]
 
+// ── client "your pulse in one sentence" (layer 7 / 7d) — the consumer synthesis capstone ──
+// Mirror of ClientView.jsx ClientPulseHeadline: lib/pulseBriefing.summarizeClientPulse collapses
+// THIS client's ranked pulse into ONE calm sentence + a single focus chip, replacing the generic
+// "an early read…" intro. Machinery-free by construction — focus carries only label/direction/
+// delta_pct/lane and the sentence is the engine's own client_reason — so no z/baseline/tuning ever
+// reaches the consumer surface. posture in the client's voice. CLIENT_BRIEFING below is computed by
+// running that module over the CLIENT deck: the adverseOnly triage floats revenue (priority .60)
+// above the louder-but-noisy leads dip (.40), so revenue is the focus; posture 'watch' (no act_now
+// lane in play); also_count 1 (the leads drop rides just beneath, named only as "1 other metric").
+const PULSE_POSTURE_CLIENT = {
+  act:    { dot: 'bg-rose-500',    text: 'text-rose-600',    label: 'Needs a look'  },
+  watch:  { dot: 'bg-amber-500',   text: 'text-amber-600',   label: 'Worth a glance' },
+  steady: { dot: 'bg-emerald-500', text: 'text-emerald-600', label: 'Looking good'  },
+}
+const CLIENT_BRIEFING = {
+  status: 'briefing',
+  posture: 'watch',
+  headline_text: "Your revenue is worth a look this week. We're also keeping an eye on 1 other metric.",
+  focus: { metric: 'revenue', label: 'Revenue', direction: 'down', delta_pct: -24, lane: 'worth_a_look' },
+  also_count: 1,
+}
+function ClientPulseHeadlinePreview({ briefing }) {
+  const b = briefing
+  if (!b || !b.headline_text) return null
+  const posture = PULSE_POSTURE_CLIENT[b.posture] || PULSE_POSTURE_CLIENT.steady
+  const f       = b.focus
+  const lane    = f ? (PULSE_LANE_CLIENT[f.lane] || null) : null
+  const dpct    = f && Number.isFinite(Number(f.delta_pct)) ? Number(f.delta_pct) : null
+  return (
+    <div className="mb-4">
+      {/* the one sentence — posture-toned, the engine's own client-voiced synthesis */}
+      <div className="flex items-start gap-2">
+        <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${posture.dot}`} />
+        <p className="text-sm font-bold text-slate-800 leading-snug">{b.headline_text}</p>
+      </div>
+      {/* the one metric that matters — focus chip, machinery-free (label + lane + own delta) */}
+      {f && (
+        <div className="mt-2 ml-4 flex items-center gap-1.5 flex-wrap">
+          <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">{f.label}</span>
+          {lane && (
+            <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${lane.chip}`}>
+              <lane.Icon className="w-2.5 h-2.5" /> {lane.label}
+            </span>
+          )}
+          {dpct !== null && (
+            <span className={`inline-flex items-center text-[10px] font-black tabular-nums ${posture.text}`}>
+              {dpct >= 0 ? '+' : '−'}{Math.abs(Math.round(dpct))}%
+            </span>
+          )}
+          {b.also_count > 0 && (
+            <span className="text-[10px] font-semibold text-slate-400">· +{b.also_count} more watched</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -634,10 +692,9 @@ export default function PulseDiagnosisPreview() {
                   <Sparkles className="w-3 h-3" /> AI Analyst
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium mb-4 leading-relaxed">
-                An early read on the week in progress — with the reason behind each move, in your own numbers,{' '}
-                <span className="font-semibold text-slate-600">ordered by what&rsquo;s most worth your attention first</span>.
-              </p>
+              {/* the one sentence first (7d) — the synthesised briefing replaces the generic
+                  "early read" intro; the per-metric rows below become its supporting detail. */}
+              <ClientPulseHeadlinePreview briefing={CLIENT_BRIEFING} />
               <div className="space-y-3">
                 {orderClientPulse(CLIENT).map((s, i) => <PreviewClientPulseRow key={`${s.metric}:${i}`} s={s} />)}
               </div>
