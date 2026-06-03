@@ -201,6 +201,20 @@ export const api = {
   // model / week_start / evidence_pack), not wrapped in an envelope.
   getRecap:        (clientId, week) => get(`/api/ai/recap/${clientId}${week ? `?week=${week}` : ''}`),
   regenerateRecap: (clientId, week) => post(`/api/ai/recap/${clientId}`, week ? { week } : {}),
+  // AI Morning Brief (intel-v7 9): the DAILY analog of the weekly recap — a grounded,
+  // verifier-checked narration of ONE day's pulse, generated-on-miss then served cheaply
+  // from the cached row (one LLM call per scope per day). Two audiences, one table:
+  //   getPortfolioBrief()  → the agency book's whole-pulse brief (AGENCY-ONLY; the prose
+  //       names other clients, so a client token is refused). regeneratePortfolioBrief()
+  //       force-renarrates — the agency "Regenerate" button.
+  //   getClientBrief(id)   → one client's own morning brief (own numbers only).
+  //       regenerateClientBrief(id) force-renarrates — the client card's "Regenerate".
+  // `asOf` is an optional 'YYYY-MM-DD'; omit for today (UTC). Each returns the brief row
+  // DIRECTLY ({ brief_text, grounded, model, as_of, audience, pack }), like getRecap().
+  getPortfolioBrief:        (asOf)       => get(`/api/ai/brief${asOf ? `?as_of=${asOf}` : ''}`),
+  regeneratePortfolioBrief: (asOf)       => post('/api/ai/brief', asOf ? { as_of: asOf } : {}),
+  getClientBrief:           (clientId, asOf) => get(`/api/ai/brief/${clientId}${asOf ? `?as_of=${asOf}` : ''}`),
+  regenerateClientBrief:    (clientId, asOf) => post(`/api/ai/brief/${clientId}`, asOf ? { as_of: asOf } : {}),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

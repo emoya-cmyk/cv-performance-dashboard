@@ -159,6 +159,13 @@ export default function Intelligence() {
     <div className="space-y-4">
       <Hero running={running} onRun={runSweep} />
 
+      {/* morning brief — the spoken capstone, read this first. The DAILY, portfolio-wide
+          plain-English narration of the whole book (GET /api/ai/brief), grounded against
+          the same daily pulse every panel below is scored from. Self-fetching with its own
+          load/error/done; gated on USE_API so it stays absent in the demo (like every other
+          agency read here), and degrades to a calm template when no AI key is configured. */}
+      {USE_API && <MorningBriefPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -401,6 +408,138 @@ function StatCard({ label, value, tone, active, onClick }) {
       </div>
       <p className={cn('mt-1.5 text-3xl font-black tabular-nums leading-none', value > 0 ? t.v : 'text-slate-300')}>{value}</p>
     </button>
+  )
+}
+
+/* ── morning brief — the agency's DAILY plain-English read of the whole book ────
+   The daily, portfolio-wide analog of the weekly recap below: where WeeklyRecapPanel
+   narrates one client's closed week, this narrates every client's TODAY off the same
+   daily-pulse evidence the briefing banner + roster lower on the page are scored from.
+   It reads GET /api/ai/brief (agency-only — the prose names peers): a grounded,
+   verifier-checked "good morning, here's where the book stands," generated-on-miss and
+   cheap on repeat hits. Degrades to a deterministic template when no API key is set, and
+   reads a quiet book calmly ("all steady this morning"), so there's no empty/missing-key
+   state — only load / error / done. Self-fetching so the page stays a clean set of
+   independent reads; a "Regenerate" forces a fresh narration + re-verify in place.
+   Grounded means every number in the prose traced back to that same verified pulse pack.
+   Sits at the very top because it's the spoken capstone — read this, then read the page. */
+function MorningBriefPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [brief, setBrief]   = useState(null)
+  const [error, setError]   = useState('')
+  const [busy, setBusy]     = useState(false)        // a Regenerate in flight
+
+  const fetchBrief = useCallback(async (regen) => {
+    if (regen) { setBusy(true) } else { setStatus('loading'); setError('') }
+    try {
+      const b = regen ? await api.regeneratePortfolioBrief() : await api.getPortfolioBrief()
+      setBrief(b); setStatus('done'); setError('')
+    } catch (e) {
+      if (regen) setError(e?.message || 'Regenerate failed')
+      else { setError(e?.message || 'Could not load the brief'); setStatus('error') }
+    } finally { setBusy(false) }
+  }, [])
+
+  useEffect(() => { fetchBrief(false) }, [fetchBrief])
+
+  const text       = (brief?.brief_text || '').trim()
+  const grounded   = !!brief?.grounded
+  const asOf       = brief?.pack?.period?.label || brief?.as_of || ''
+  const confidence = brief?.pack?.confidence || null
+  const showConf   = status === 'done' && confidence && confidence.label && confidence.label !== 'n/a'
+
+  // "2026-05-18" → "Mon, May 18" for the morning-brief header; raw string on any parse miss.
+  const dayLabel = (() => {
+    if (!asOf) return ''
+    const d = new Date(`${asOf}T00:00:00`)
+    if (Number.isNaN(d.getTime())) return asOf
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  })()
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Brain className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Good morning — your book today</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            The whole portfolio, in plain English{dayLabel ? ` · ${dayLabel}` : ''}
+          </p>
+        </div>
+        {showConf && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-600"
+            title={confidence.note || undefined}
+          >
+            <Gauge className="w-3 h-3" /> {confidence.label} confidence
+          </span>
+        )}
+        {status === 'done' && (
+          grounded ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+              <ShieldCheck className="w-3 h-3" /> AI-verified
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+              <AlertTriangle className="w-3 h-3" /> Unverified draft
+            </span>
+          )
+        )}
+        <button
+          onClick={() => fetchBrief(true)}
+          disabled={busy || status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Regenerate
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Reading the book…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load the brief'}</p>
+            <button
+              onClick={() => fetchBrief(false)}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && (
+          <>
+            {text ? (
+              <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-line">{text}</p>
+            ) : (
+              <p className="text-sm text-slate-400 italic">No brief for today yet.</p>
+            )}
+            {error && (
+              <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-rose-500">
+                <AlertTriangle className="w-3 h-3" /> {error}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Written by the analyst from the same verified daily pulse the rest of this page is scored from.
+          {brief?.model ? ` Model ${brief.model}.` : ''}
+        </p>
+      </div>
+    </section>
   )
 }
 
