@@ -1612,3 +1612,189 @@ test('18d — the engagement guard is load-bearing: a lone rate, a board, a smug
     'the 👍 own-vote must pass clean',
   )
 })
+
+// ============================================================
+// 19d — ENGAGEMENT-EMPHASIS CONFINEMENT: the cap the reception earned re-shapes,
+// never leaks.
+// ------------------------------------------------------------
+// intel-v9 layer 19 closes the engagement loop: the portfolio reception grade
+// (layer 18's aggregate 👍/👎) flexes the supporting-cast breadth of TOMORROW's
+// brief — a well_received book earns a wider cast (cap 3→4), a poorly_received or
+// fading one tightens to the essentials (3→2→1), and the headline is NEVER touched
+// (briefEngagementLearning.deriveBriefEmphasis). That knob is AGENCY-ONLY telemetry:
+// the portfolio pack carries the full emphasis object under `engagement_policy`
+// (brief.js:425, gated on status !== 'abstained'); the CLIENT pack must carry NONE
+// of it. The consumer only ever experiences the EFFECT — a tighter or richer brief —
+// never the machinery (the cap quartet, the helpful_rate that drove it, the
+// widen/tighten direction, the reason). This is the exact precedent of 13d (lead
+// policy) and 18d (the engagement aggregate): a deliberate audience SPLIT, not a
+// blanket suppression that would also blind the agency.
+//
+// We exercise the REAL 19a controller (deriveBriefEmphasis) on synthetic grades and,
+// for the split test, stub ONLY the engine boundary getPortfolioEngagement reaches —
+// same module-object idiom as Section D / Section E — so a deterministic well_received
+// reception drives a genuine `tuned` widen through generatePortfolioBrief with no DB
+// replay. briefEngagementLearning.test.js (19a) proves the derivation in isolation.
+const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngagementLearning')
+const briefEngagementEngineMod = require('../lib/briefEngagementEngine')
+const realGetPortfolioEngagement = briefEngagementEngineMod.getPortfolioEngagement
+test.after(() => { briefEngagementEngineMod.getPortfolioEngagement = realGetPortfolioEngagement })
+
+// The emphasis object ALWAYS carries the cap quartet — guarding those four keys is a
+// COMPLETE structural guard: delta/direction/reason cannot ride along without them.
+// Plus the portfolio wrapper key itself. NOT bare `delta`/`direction`/`also` — those
+// are legit client vocabulary (focus trend, the supporting-cast array `also`), proven
+// disjoint below; `helpful_rate`/`well_received`/`poorly_received` are already the
+// 18d set, enforced by delegating to assertNoEngagementAggregate.
+const FORBIDDEN_EMPHASIS_KEYS = ['also_cap', 'base_cap', 'min_cap', 'max_cap', 'engagement_policy']
+// Distinctive emphasis tokens only — the cap quartet + wrapper as strings, and the two
+// reason VALUES not already covered by the 18d sweep (well_received/poorly_received are).
+const FORBIDDEN_EMPHASIS_TOKENS =
+  /also_cap|base_cap|min_cap|max_cap|engagement_policy|reception_declining|steady_reception/
+
+function assertNoEmphasis(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_EMPHASIS_KEYS.includes(k),
+          `${where}: client egress must not carry engagement-emphasis field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_EMPHASIS_TOKENS.test(JSON.stringify(pack)),
+    `${where}: engagement-emphasis vocabulary leaked into the serialized client egress`
+  )
+  // Belt-and-suspenders: the emphasis grade also carries the 18d aggregate vocabulary
+  // (helpful_rate, the label words), so a clean emphasis egress must clear that sweep too.
+  assertNoEngagementAggregate(pack, where)
+}
+
+// Real controller outputs from synthetic grades — one per corner of the knob's range.
+const EMPH_WIDEN   = deriveBriefEmphasis({ status: 'graded', helpful_rate: 0.85, label: 'well_received',   trend: 'improving', n: 10 })
+const EMPH_TIGHTEN = deriveBriefEmphasis({ status: 'graded', helpful_rate: 0.40, label: 'poorly_received', trend: 'declining', n: 10 })
+const EMPH_IDLE    = deriveBriefEmphasis({ status: 'graded', helpful_rate: 0.60, label: 'fair',            trend: 'steady',    n: 10 })
+const EMPH_ABSTAIN = deriveBriefEmphasis({ status: 'insufficient', helpful_rate: null, label: null, trend: null, n: 1 })
+
+test('19d — narrateBriefEmphasis is silent for the CLIENT across widen/tighten/idle/abstained; the agency hears only the moves', () => {
+  // Sanity: the real controller landed each fixture on the intended corner — a tuned
+  // widen (3→4), a doubly-tightened poor+declining (3→1), a held-neutral fair, an abstain.
+  assert.deepEqual(
+    { s: EMPH_WIDEN.status, d: EMPH_WIDEN.direction, c: EMPH_WIDEN.also_cap }, { s: 'tuned', d: 'widen', c: 4 },
+    'well_received + improving → a tuned widen to cap 4')
+  assert.deepEqual(
+    { s: EMPH_TIGHTEN.status, d: EMPH_TIGHTEN.direction, c: EMPH_TIGHTEN.also_cap }, { s: 'tuned', d: 'tighten', c: 1 },
+    'poorly_received + declining → tighten two steps to the floor cap 1')
+  assert.deepEqual(
+    { s: EMPH_IDLE.status, d: EMPH_IDLE.direction, c: EMPH_IDLE.also_cap }, { s: 'idle', d: 'neutral', c: 3 },
+    'fair + steady → held at the neutral base 3')
+  assert.equal(EMPH_ABSTAIN.status, 'abstained', 'a thin/ungraded reception abstains')
+
+  // THE INVARIANT: the consumer never hears the knob, for ANY policy — moved or held.
+  for (const [name, p] of [['widen', EMPH_WIDEN], ['tighten', EMPH_TIGHTEN], ['idle', EMPH_IDLE], ['abstained', EMPH_ABSTAIN]]) {
+    assert.equal(narrateBriefEmphasis(p, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  // The agency DOES hear the two MOVES — verbatim, grounded in the grade that drove them —
+  // proving the client silence is a deliberate split, not a dead feature.
+  assert.equal(
+    narrateBriefEmphasis(EMPH_WIDEN, { audience: 'agency' }),
+    "Reception has been strong (~85% of readers found the brief useful), so it's carrying a little more of the supporting picture (4 items, up from 3).")
+  assert.equal(
+    narrateBriefEmphasis(EMPH_TIGHTEN, { audience: 'agency' }),
+    "Reception has been mixed and slipping (~40% of readers found the brief useful), so it's leading tighter — just the essentials (1 item, down from 3).")
+  // …but stays mute when nothing moved — idle and abstained change nothing for the reader.
+  assert.equal(narrateBriefEmphasis(EMPH_IDLE, { audience: 'agency' }), '', 'an idle (held-neutral) grade is narrated to no one')
+  assert.equal(narrateBriefEmphasis(EMPH_ABSTAIN, { audience: 'agency' }), '', 'an abstained grade is narrated to no one')
+
+  // Even the candid agency sentences carry no machine identifier — they could not seed a
+  // leak even if mis-routed (mirrors 18d: 'found the brief useful', never 'helpful_rate').
+  for (const sentence of [narrateBriefEmphasis(EMPH_WIDEN, { audience: 'agency' }), narrateBriefEmphasis(EMPH_TIGHTEN, { audience: 'agency' })]) {
+    assert.ok(!FORBIDDEN_EMPHASIS_TOKENS.test(sentence), 'agency emphasis sentence carries no emphasis identifier')
+    assert.ok(!FORBIDDEN_ENGAGEMENT_TOKENS.test(sentence), 'agency emphasis sentence carries no aggregate identifier')
+  }
+})
+
+test('19d — generatePortfolioBrief carries the full engagement_policy while generateClientBrief carries none: a split, not suppression', async () => {
+  await ready()
+  // Drive a deterministic well_received reception → the REAL deriveBriefEmphasis turns it
+  // into a tuned widen, so brief.js attaches engagement_policy to the PORTFOLIO pack.
+  briefEngagementEngineMod.getPortfolioEngagement =
+    async () => ({ status: 'graded', helpful_rate: 0.85, label: 'well_received', trend: 'improving', n: 10 })
+
+  // AGENCY surface: the machinery the client is denied — proof the egress is an audience
+  // split, not a blanket suppression that would also blind the agency.
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok('engagement_policy' in port.pack, 'portfolio pack must carry engagement_policy')
+  assert.equal(port.pack.engagement_policy.status, 'tuned')
+  assert.equal(port.pack.engagement_policy.direction, 'widen')
+  assert.equal(port.pack.engagement_policy.also_cap, 4)
+  assert.equal(port.pack.engagement_policy.base_cap, 3)
+  // The persisted agency read-back keeps the machinery too.
+  const portRow = await getPortfolioBrief(AS_OF)
+  assert.ok('engagement_policy' in portRow.pack, 'persisted portfolio pack keeps engagement_policy')
+  // That very object is dense with emphasis machinery → the client guard MUST trip on it,
+  // confirming the client cleanliness below is a real split, not a vacuous pass.
+  assert.throws(
+    () => assertNoEmphasis(port.pack.engagement_policy, 'portfolio-emphasis-probe'),
+    /engagement-emphasis field|engagement-emphasis vocabulary/,
+    'the portfolio emphasis object is dense with machinery — the client guard MUST trip on it')
+
+  // CLIENT surface: even with reception tuned, the client pack carries NONE of the knob.
+  const c = await freshClient('Engagement Emphasis Confinement Roofing Co')
+  const cli = await generateClientBrief(c, AS_OF)
+  assert.equal(cli.grounded, true)
+  assert.match(cli.brief_text, /^Good morning\./)
+  assert.ok(!('engagement_policy' in cli.pack), 'client pack must not carry engagement_policy')
+  assertNoEmphasis(cli.pack, 'generateClientBrief')
+  // The persisted read-back — the row a client actually fetches — is just as clean.
+  const cliRow = await getClientBrief(c, AS_OF)
+  assertNoEmphasis(cliRow.pack, 'getClientBrief read-back')
+})
+
+test('19d — the emphasis guard is load-bearing: a smuggled cap, wrapper, or reason value trips it; legit client fields never do', () => {
+  // a lone supporting-cast cap is caught BY NAME, however deeply nested.
+  assert.throws(
+    () => assertNoEmphasis({ cap: { also_cap: 4 } }, 'lone-cap-probe'),
+    /engagement-emphasis field/,
+    'a lone also_cap in a client egress must be rejected by name')
+  // the portfolio wrapper key is caught by name.
+  assert.throws(
+    () => assertNoEmphasis({ wrap: { engagement_policy: {} } }, 'wrapper-probe'),
+    /engagement-emphasis field/,
+    'the engagement_policy wrapper in a client egress must be rejected by name')
+  // a reason VALUE smuggled in as a plain string is caught by the token sweep.
+  assert.throws(
+    () => assertNoEmphasis({ note: 'the cap moved: reception_declining today' }, 'reason-token-probe'),
+    /engagement-emphasis vocabulary/,
+    "a reason identifier ('reception_declining') leaked as a string must be rejected by the token sweep")
+  assert.throws(
+    () => assertNoEmphasis({ note: 'held at steady_reception' }, 'steady-token-probe'),
+    /engagement-emphasis vocabulary/,
+    "the 'steady_reception' reason leaked as a string must be rejected by the token sweep")
+  // the whole derived emphasis object trips (cap quartet present).
+  assert.throws(
+    () => assertNoEmphasis(EMPH_WIDEN, 'full-emphasis-probe'),
+    /engagement-emphasis field|engagement-emphasis vocabulary/,
+    'the full emphasis object is dense with machinery and must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   focus.direction (metric trend) + delta_pct — Section D's established client fields,
+  //   provably disjoint from the emphasis tokens (no `also_cap`/`base_cap`/… substring).
+  assert.doesNotThrow(
+    () => assertNoEmphasis({ focus: { direction: 'down', delta_pct: -40, label: 'Leads', lane: 'act_now', metric: 'leads' } }, 'client-focus-probe'),
+    'the client focus (direction + delta_pct) is legit and must pass clean')
+  //   the supporting-cast array key `also` is what the cap SHAPES — and `also` is not a
+  //   substring match for `also_cap`, so the EFFECT the client sees must pass clean.
+  assert.doesNotThrow(
+    () => assertNoEmphasis({ briefing: { also: [{ metric: 'leads', label: 'Leads' }, { metric: 'revenue', label: 'Revenue' }] } }, 'supporting-cast-probe'),
+    "the supporting-cast array `also` must pass — it is the knob's EFFECT, not the knob")
+  //   the consumer's own engagement vote — the only engagement bytes they ever receive.
+  assert.doesNotThrow(
+    () => assertNoEmphasis({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+})
