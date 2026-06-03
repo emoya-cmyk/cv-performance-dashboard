@@ -2326,6 +2326,61 @@ function BriefEngagementClientRowPreview({ client, watched }) {
   )
 }
 
+// intel-v9 layer 19c — the engagement loop's RESPONSE, by direction. Everything above is the GRADE
+// (did the reader find the brief useful); this dresses what the grade EARNED for tomorrow's brief —
+// the supporting-cast breadth carried beneath the one headline. widen = the brief earned room to say
+// a little more (emerald, Sparkles); tighten = landing flat, lead with the essentials (amber, Scissors
+// — the safe direction); neutral = graded but held at the usual depth (slate, Minus).
+const BRIEF_EMPHASIS_TONE = {
+  widen:   { wrap: 'border-emerald-100 bg-emerald-50/50', chip: 'bg-emerald-100 text-emerald-700', accent: 'text-emerald-700', icon: Sparkles, verb: 'Carrying a little more' },
+  tighten: { wrap: 'border-amber-100 bg-amber-50/50',     chip: 'bg-amber-100 text-amber-700',     accent: 'text-amber-700',   icon: Scissors, verb: 'Leading tighter' },
+  neutral: { wrap: 'border-slate-100 bg-slate-50/60',     chip: 'bg-slate-100 text-slate-600',     accent: 'text-slate-600',   icon: Minus,    verb: 'Holding steady' },
+}
+// Mirrors the live BriefEmphasisStrip: reads the emphasis object the engine folds into the
+// /brief-engagement payload (deriveBriefEmphasis: { status, direction, also_cap, base_cap, ... }) plus
+// the agency narrator sentence — no second fetch. 'tuned' = the cap moved (widen/tighten); 'idle' =
+// graded but held at the neutral base. The headline NEVER flexes — only the supporting tail — so
+// reception can make the brief richer or leaner but can never bury what matters most. The narrator is
+// '' for the client audience AND for idle, so the strip synthesizes a calm steady-state line when held.
+function BriefEmphasisStripPreview({ emphasis, narrative }) {
+  if (!emphasis || emphasis.status === 'abstained') return null
+  const dir  = emphasis.direction === 'widen' || emphasis.direction === 'tighten' ? emphasis.direction : 'neutral'
+  const tone = BRIEF_EMPHASIS_TONE[dir]
+  const Icon = tone.icon
+  const cap  = emphasis.also_cap
+  const base = emphasis.base_cap
+  const item = (n) => (n === 1 ? 'item' : 'items')
+  const line = (narrative || '').trim() ||
+    `Reception is steady, so tomorrow's brief keeps its usual depth — ${cap} supporting ${item(cap)} beneath the headline.`
+  return (
+    <div className={`mt-3 rounded-xl border px-3 py-2.5 ${tone.wrap}`}>
+      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5 flex items-center gap-1">
+        <SlidersHorizontal className="w-3 h-3" /> What reception earns tomorrow's brief
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${tone.chip}`}>
+          <Icon className="w-3 h-3" /> {tone.verb}
+        </span>
+        {dir === 'neutral' ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+            <span className={`tabular-nums font-black ${tone.accent}`}>{cap}</span>
+            <span className="text-slate-400">supporting {item(cap)} · unchanged</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+            <span className="tabular-nums text-slate-400">{base}</span>
+            <span className={`font-black ${tone.accent}`}>→</span>
+            <span className={`tabular-nums font-black ${tone.accent}`}>{cap}</span>
+            <span className="text-slate-400">supporting {item(cap)}</span>
+          </span>
+        )}
+        <span className="ml-auto text-[10px] font-medium text-slate-400">headline never moves</span>
+      </div>
+      <p className="mt-2 text-[12px] text-slate-500 leading-relaxed">{line}</p>
+    </div>
+  )
+}
+
 // Shaped EXACTLY like GET /api/ai/brief-engagement over a 30-day window graded at 3+ votes/client:
 // 72 ratings across 6 clients, 52 were 👍 (~72% → 'fair'), and reception is improving (recent 80% vs
 // older 64%). The board sums back to the portfolio (52/72) and arrives worst-reception-first: Pioneer
@@ -2354,6 +2409,16 @@ const BRIEF_ENGAGEMENT = {
   ],
   requested: { as_of: null, days: 30 },
   narrative: 'Clients found the morning brief useful 52 of 72 times recently (~72%) — a fair reception. Reception has been improving lately.',
+  // emphasis is deriveBriefEmphasis(this grade) verbatim: a 'fair' portfolio (neither well- nor
+  // poorly-received) sits in the neutral dead-band, and an 'improving' trend never widens (only a
+  // proven LEVEL earns more attention) — so the cap holds at the base 3 and the loop stays idle.
+  // emphasis_narrative is narrateBriefEmphasis(emphasis, { audience: 'agency' }) — '' when held.
+  emphasis: {
+    status: 'idle', also_cap: 3, base_cap: 3, min_cap: 1, max_cap: 5,
+    delta: 0, direction: 'neutral', helpful_rate: 52 / 72, label: 'fair', trend: 'improving', n: 72,
+    reason: 'steady_reception',
+  },
+  emphasis_narrative: '',
 }
 
 function BriefEngagementPanelPreview({ data }) {
@@ -2439,6 +2504,8 @@ function BriefEngagementPanelPreview({ data }) {
             </div>
           </div>
         )}
+
+        <BriefEmphasisStripPreview emphasis={data.emphasis} narrative={data.emphasis_narrative} />
       </div>
 
       <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
@@ -2808,7 +2875,7 @@ export default function PulseDiagnosisPreview() {
           <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Consumer engagement</p>
           <BriefEngagementPanelPreview data={BRIEF_ENGAGEMENT} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
-            The one rung that faces <span className="font-bold text-slate-600">outward</span>. Every panel above is the system grading itself — reliability, editorial precision, the self-tuning policy and its governance. This is the only place the <span className="font-bold text-slate-600">human reader</span> grades the system: a 👍 / 👎 on the morning brief, folded agency-side into a reception score, with the clients it is <span className="font-bold text-rose-600">landing flat</span> with surfaced to watch. Graded only past 3+ votes, so a thin record abstains rather than swing on noise. <span className="font-bold text-emerald-600">The aggregate is agency-only</span> — a client only ever sees their own vote, never this surface. <span className="font-bold text-slate-600">Agency-only</span>.
+            The one rung that faces <span className="font-bold text-slate-600">outward</span>. Every panel above is the system grading itself — reliability, editorial precision, the self-tuning policy and its governance. This is the only place the <span className="font-bold text-slate-600">human reader</span> grades the system: a 👍 / 👎 on the morning brief, folded agency-side into a reception score, with the clients it is <span className="font-bold text-rose-600">landing flat</span> with surfaced to watch. Graded only past 3+ votes, so a thin record abstains rather than swing on noise. And now the loop <span className="font-bold text-slate-600">closes</span>: that reception score feeds the strip below, flexing how much of the supporting picture tomorrow's brief carries — <span className="font-bold text-emerald-600">a well-received brief earns a little more depth</span>, a flat one leads tighter. The <span className="font-bold text-slate-600">headline never moves</span>, and widening must be <span className="font-bold text-emerald-600">earned by a proven level</span>, never by a hopeful trend. <span className="font-bold text-emerald-600">The aggregate is agency-only</span> — a client only ever sees their own vote, never this surface. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 

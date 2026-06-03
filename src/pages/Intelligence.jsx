@@ -1127,6 +1127,17 @@ const BRIEF_ENGAGEMENT_TONE = {
   'no-data':       { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   bar: 'bg-slate-200',   label: 'Listening' },
 }
 
+// intel-v9 layer 19c — the ACT half of the engagement loop, by direction. The panel above shows
+// the GRADE (how the reader received the brief); this palette dresses the RESPONSE the grade earned:
+// how wide a supporting cast tomorrow's brief will carry. widen = the brief EARNED room to say a
+// little more (emerald, Sparkles); tighten = it's landing flat, lead with the essentials (amber,
+// Scissors — the safe direction); neutral = graded but held at the usual depth (slate, Minus).
+const BRIEF_EMPHASIS_TONE = {
+  widen:   { wrap: 'border-emerald-100 bg-emerald-50/50', chip: 'bg-emerald-100 text-emerald-700', accent: 'text-emerald-700', icon: Sparkles, verb: 'Carrying a little more' },
+  tighten: { wrap: 'border-amber-100 bg-amber-50/50',     chip: 'bg-amber-100 text-amber-700',     accent: 'text-amber-700',   icon: Scissors, verb: 'Leading tighter' },
+  neutral: { wrap: 'border-slate-100 bg-slate-50/60',     chip: 'bg-slate-100 text-slate-600',     accent: 'text-slate-600',   icon: Minus,    verb: 'Holding steady' },
+}
+
 // One per-client engagement grade → a compact three-state view, mirroring briefImpactView.
 // A client with no votes is 'none' (—); one with votes but below the grading floor is
 // 'pending' (still abstaining, never a misleading 0%); a graded client carries its rate %.
@@ -1157,6 +1168,58 @@ function BriefEngagementClientRow({ client, watched }) {
       <span className="w-9 shrink-0 text-right text-[10px] font-semibold text-slate-400 tabular-nums">
         {view.helpful}/{view.n}
       </span>
+    </div>
+  )
+}
+
+// intel-v9 layer 19c — the engagement loop's RESPONSE, made visible. Everything above this strip
+// is the GRADE (did the reader find the brief useful); this is what that grade EARNED for tomorrow:
+// the supporting-cast breadth the morning brief will carry beneath its one headline. It reads the
+// emphasis object the engine already folded into the /brief-engagement payload (deriveBriefEmphasis:
+// { status, direction, also_cap, base_cap, ... }) plus the agency narrator sentence — no second
+// fetch. 'tuned' = the cap moved (widen earned a richer brief / tighten trims to the essentials);
+// 'idle' = graded but held at the neutral base, so the brief keeps its usual depth. 'abstained'
+// never renders here — the parent only mounts this inside the graded block, where a real rate
+// exists. The headline NEVER flexes — only the tail — so reception can make the brief richer or
+// leaner but can never bury what matters most. Agency-only by construction: narrateBriefEmphasis
+// returns '' for the client audience and the knob never crosses the client egress (proven in 19d).
+function BriefEmphasisStrip({ emphasis, narrative }) {
+  if (!emphasis || emphasis.status === 'abstained') return null
+  const dir  = emphasis.direction === 'widen' || emphasis.direction === 'tighten' ? emphasis.direction : 'neutral'
+  const tone = BRIEF_EMPHASIS_TONE[dir]
+  const Icon = tone.icon
+  const cap  = emphasis.also_cap
+  const base = emphasis.base_cap
+  const item = (n) => (n === 1 ? 'item' : 'items')
+  // The narrator is intentionally '' for idle/neutral (it only speaks when the cap actually moved);
+  // synthesize a calm steady-state line so the strip never reads empty when reception holds.
+  const line = (narrative || '').trim() ||
+    `Reception is steady, so tomorrow's brief keeps its usual depth — ${cap} supporting ${item(cap)} beneath the headline.`
+  return (
+    <div className={cn('mt-3 rounded-xl border px-3 py-2.5', tone.wrap)}>
+      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5 flex items-center gap-1">
+        <SlidersHorizontal className="w-3 h-3" /> What reception earns tomorrow's brief
+      </p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold', tone.chip)}>
+          <Icon className="w-3 h-3" /> {tone.verb}
+        </span>
+        {dir === 'neutral' ? (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+            <span className={cn('tabular-nums font-black', tone.accent)}>{cap}</span>
+            <span className="text-slate-400">supporting {item(cap)} · unchanged</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500">
+            <span className="tabular-nums text-slate-400">{base}</span>
+            <span className={cn('font-black', tone.accent)}>→</span>
+            <span className={cn('tabular-nums font-black', tone.accent)}>{cap}</span>
+            <span className="text-slate-400">supporting {item(cap)}</span>
+          </span>
+        )}
+        <span className="ml-auto text-[10px] font-medium text-slate-400">headline never moves</span>
+      </div>
+      <p className="mt-2 text-[12px] text-slate-500 leading-relaxed">{line}</p>
     </div>
   )
 }
@@ -1306,6 +1369,8 @@ function BriefEngagementPanel() {
                 </div>
               </div>
             )}
+
+            <BriefEmphasisStrip emphasis={eng.emphasis} narrative={eng.emphasis_narrative} />
           </>
         )}
       </div>
