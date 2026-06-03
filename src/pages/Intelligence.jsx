@@ -1633,6 +1633,18 @@ function PulseRow({ r }) {
           {/* The "why" — only present when the engine decomposed a composite move
               (revenue ≡ spend × roas, jobs ≡ leads × close_rate); inert otherwise. */}
           <DriverBreakdown message={r.diagnosis_message} diagnosis={r.diagnosis} tone={tone} audience="agency" />
+
+          {/* MORNING MEMORY (intel-v7 8) — this row's OWN continuity across mornings,
+              the per-signal read behind the banner ribbon above. Agency-toned by the
+              engine (lib/pulseContinuity.narrateContinuity): "New this morning." on a
+              fresh firing, "3rd morning running — and worsening." as it persists. Only
+              attached to firing rows; silent otherwise. Ties the row to the book's memory. */}
+          {r.continuity_note && (
+            <div className="flex items-center gap-1 mt-1 text-[10px] font-semibold text-slate-400">
+              <Clock className="w-3 h-3 shrink-0" />
+              <span>{r.continuity_note}</span>
+            </div>
+          )}
         </div>
 
         <div className="shrink-0 text-right w-24">
@@ -1708,6 +1720,73 @@ function BriefingStat({ tone, label }) {
   )
 }
 
+/* ── the morning-memory ribbon — intel-v7 (8c): continuity, not severity ──────────
+   The briefing above answers "what's the ONE thing this morning". This answers what
+   the system REMEMBERS from yesterday — the SAME daily-pulse feed read across two
+   mornings (lib/pulseContinuity.summarizePortfolioContinuity). Four reads, ordered as
+   an alert's LIFECYCLE so the row tells a story left-to-right: new today (indigo, just
+   appeared) → ongoing (amber, firing a 2nd morning+) → worsening (rose, the slice of
+   ongoing that's deteriorating — escalating ⊆ persisting, so it's a SHARPENING of
+   ongoing, never summed with it) → resolved overnight (emerald, the win the page earns).
+   It never invents a parallel notion: the counts are the engine's exact aggregate and
+   the eyebrow carries narratePortfolioContinuity's canonical sentence on hover. Degrades
+   to nothing on a calm morning (every count 0). Agency-only — a portfolio roll-up. */
+const CONTINUITY_CHIP = {
+  new:       { chip: 'bg-indigo-50 text-indigo-600 border-indigo-200',   Icon: Sparkles },
+  ongoing:   { chip: 'bg-amber-50 text-amber-600 border-amber-200',      Icon: Radar },
+  worsening: { chip: 'bg-rose-50 text-rose-600 border-rose-200',         Icon: AlertTriangle },
+  resolved:  { chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', Icon: CheckCircle2 },
+}
+function ContinuityChip({ tone, label, title }) {
+  const t = CONTINUITY_CHIP[tone] || CONTINUITY_CHIP.ongoing
+  return (
+    <span
+      title={title || undefined}
+      className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', t.chip)}
+    >
+      <t.Icon className="w-3 h-3" /> {label}
+    </span>
+  )
+}
+function ContinuityRibbon({ cont }) {
+  if (!cont) return null
+  const nw = Number(cont.new_count) || 0
+  const pe = Number(cont.persisting_count) || 0          // all persisting (includes worsening)
+  const es = Number(cont.escalating_count) || 0          // ⊆ persisting — a sharpening, never summed
+  const rc = Number(cont.resolved_count) || 0
+  if (nw + pe + rc === 0) return null                    // calm morning → no ribbon
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+  const resolvedNames = Array.isArray(cont.resolved) && cont.resolved.length
+    ? cont.resolved.map((r) => `${r.client_name || 'Unknown'} — ${(r.label || r.metric || '').toLowerCase()}`).join(', ')
+    : ''
+  return (
+    <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+      <span
+        title={cont.note || undefined}
+        className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400"
+      >
+        <Clock className="w-3 h-3" /> Morning memory
+      </span>
+      {nw > 0 && (
+        <ContinuityChip tone="new" label={`${nw} new today`}
+          title={cont.clients_new ? `${plural(cont.clients_new, 'client')} with a fresh alert this morning` : undefined} />
+      )}
+      {pe > 0 && (
+        <ContinuityChip tone="ongoing" label={`${pe} ongoing`}
+          title="Firing a second morning or more — carried over from yesterday" />
+      )}
+      {es > 0 && (
+        <ContinuityChip tone="worsening" label={`${es} worsening`}
+          title={`Of those ongoing, ${plural(es, 'metric')} ${es === 1 ? 'is' : 'are'} trending worse than yesterday${cont.clients_escalating ? ` · ${plural(cont.clients_escalating, 'client')}` : ''}`} />
+      )}
+      {rc > 0 && (
+        <ContinuityChip tone="resolved" label={`${rc} resolved overnight`}
+          title={resolvedNames || undefined} />
+      )}
+    </div>
+  )
+}
+
 function PulseBriefingBanner({ data }) {
   const b = data?.briefing
   if (!b || !b.headline_text) return null                  // no synthesis → degrade to no banner
@@ -1764,6 +1843,10 @@ function PulseBriefingBanner({ data }) {
             {c.tailwinds > 0 && <BriefingStat tone="emerald" label={`${c.tailwinds} pacing ahead`} />}
           </div>
         )}
+
+        {/* the morning-memory ribbon — continuity across mornings. Rides in BOTH modes:
+            a quiet book that RESOLVED something overnight is exactly the win to surface. */}
+        <ContinuityRibbon cont={data.continuity} />
       </div>
 
       {/* the confidence note as a grounding footer — the system explaining its own call */}

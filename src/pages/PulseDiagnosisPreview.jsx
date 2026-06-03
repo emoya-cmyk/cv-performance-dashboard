@@ -212,6 +212,55 @@ function BriefingStat({ tone, label }) {
   )
 }
 
+// ── the morning-memory ribbon (intel-v7 layer 8 / 8c) — continuity across mornings ──
+// Copied from Intelligence.jsx ContinuityRibbon (cn → template strings). Reads the portfolio
+// continuity aggregate (lib/pulseContinuity.summarizePortfolioContinuity) and renders it in
+// lifecycle order: new → ongoing → worsening → resolved. The engine's canonical sentence is
+// "N ongoing (M worsening)" — worsening is a SHARPENING of ongoing (escalating ⊆ persisting),
+// never summed beside it. Rides in BOTH banner modes: a quiet book that resolved something
+// overnight is exactly the win to surface. Degrades to null on a calm morning.
+const CONTINUITY_CHIP = {
+  new:       { chip: 'bg-indigo-50 text-indigo-600 border-indigo-200',   Icon: Sparkles },
+  ongoing:   { chip: 'bg-amber-50 text-amber-600 border-amber-200',      Icon: Radar },
+  worsening: { chip: 'bg-rose-50 text-rose-600 border-rose-200',         Icon: AlertTriangle },
+  resolved:  { chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', Icon: CheckCircle2 },
+}
+function ContinuityChip({ tone, label, title }) {
+  const t = CONTINUITY_CHIP[tone] || CONTINUITY_CHIP.ongoing
+  return (
+    <span title={title || undefined} className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${t.chip}`}>
+      <t.Icon className="w-3 h-3" /> {label}
+    </span>
+  )
+}
+function ContinuityRibbon({ cont }) {
+  if (!cont) return null
+  const nw = Number(cont.new_count) || 0
+  const pe = Number(cont.persisting_count) || 0          // all persisting (includes worsening)
+  const es = Number(cont.escalating_count) || 0          // ⊆ persisting — a sharpening, never summed
+  const rc = Number(cont.resolved_count) || 0
+  if (nw + pe + rc === 0) return null                    // calm morning → no ribbon
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+  const resolvedNames = Array.isArray(cont.resolved) && cont.resolved.length
+    ? cont.resolved.map((r) => `${r.client_name || 'Unknown'} — ${(r.label || r.metric || '').toLowerCase()}`).join(', ')
+    : ''
+  return (
+    <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+      <span title={cont.note || undefined} className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
+        <Clock className="w-3 h-3" /> Morning memory
+      </span>
+      {nw > 0 && (<ContinuityChip tone="new" label={`${nw} new today`}
+        title={cont.clients_new ? `${plural(cont.clients_new, 'client')} with a fresh alert this morning` : undefined} />)}
+      {pe > 0 && (<ContinuityChip tone="ongoing" label={`${pe} ongoing`}
+        title="Firing a second morning or more — carried over from yesterday" />)}
+      {es > 0 && (<ContinuityChip tone="worsening" label={`${es} worsening`}
+        title={`Of those ongoing, ${plural(es, 'metric')} ${es === 1 ? 'is' : 'are'} trending worse than yesterday${cont.clients_escalating ? ` · ${plural(cont.clients_escalating, 'client')}` : ''}`} />)}
+      {rc > 0 && (<ContinuityChip tone="resolved" label={`${rc} resolved overnight`}
+        title={resolvedNames || undefined} />)}
+    </div>
+  )
+}
+
 // Shaped EXACTLY like lib/pulseBriefing.summarizePortfolioPulse(roster) over the ACT_TODAY
 // rows above: headline = ACT_TODAY[0] (Skyline), also = ACT_TODAY[1..3]. 2 of the 4 alerts
 // are credible (Skyline + Harbor are proven AND reliable; Vista learning/noisy + Peak
@@ -232,7 +281,24 @@ const BRIEFING = {
   },
 }
 
-function PulseBriefingBannerPreview({ data }) {
+// Shaped EXACTLY like lib/pulseContinuity.summarizePortfolioContinuity(clientMemories) — the
+// sibling of `briefing` in getPortfolioPulse's return. The morning story over the same book:
+// of the 4 alerts, 2 are fresh this morning and 2 carried over from yesterday (1 of those 2 is
+// sharpening) — and one client that's quiet today (Meridian, not in the Act-today feed above)
+// CLEARED overnight, the win the ribbon resurfaces. note === narratePortfolioContinuity(agg).
+const CONTINUITY = {
+  new_count: 2,
+  persisting_count: 2,
+  escalating_count: 1,                                   // ⊆ persisting — Vista is worsening
+  resolved_count: 1,
+  resolved: [{ client_id: 'meridian', client_name: 'Meridian Dental', metric: 'leads', label: 'Leads' }],
+  clients_new: 2,
+  clients_escalating: 1,
+  clients_resolved: 1,
+  note: '2 new this morning · 2 ongoing (1 worsening) · 1 resolved since yesterday',
+}
+
+function PulseBriefingBannerPreview({ data, continuity }) {
   const b = data
   if (!b || !b.headline_text) return null                  // no synthesis → degrade to no banner
   const quiet   = b.status !== 'briefing'
@@ -280,6 +346,10 @@ function PulseBriefingBannerPreview({ data }) {
             {c.tailwinds > 0 && <BriefingStat tone="emerald" label={`${c.tailwinds} pacing ahead`} />}
           </div>
         )}
+
+        {/* the morning-memory ribbon — continuity across mornings. Rides in BOTH modes:
+            a quiet book that RESOLVED something overnight is exactly the win to surface. */}
+        <ContinuityRibbon cont={continuity} />
       </div>
 
       {/* the confidence note as a grounding footer — the system explaining its own call */}
@@ -357,6 +427,13 @@ function PreviewPulseRow({ r }) {
             {baseN > 0 && (<><span className="text-slate-300">·</span><span className="tabular-nums">{baseN}-wk base</span></>)}
           </div>
           <DriverBreakdown message={r.diagnosis_message} diagnosis={r.diagnosis} tone={tone} audience="agency" />
+          {/* per-row morning memory — how many mornings this exact alert has run, and which way it's bending (8c) */}
+          {r.continuity_note && (
+            <div className="flex items-center gap-1 mt-1 text-[10px] font-semibold text-slate-400">
+              <Clock className="w-3 h-3 shrink-0" />
+              <span>{r.continuity_note}</span>
+            </div>
+          )}
         </div>
         <div className="shrink-0 text-right w-24">
           <div className={`text-lg font-black tabular-nums leading-none ${tone.text}`}>{deltaStr}</div>
@@ -432,6 +509,7 @@ const AGENCY = [
     accuracy_note: 'Jobs won early-warnings for this client have called the week right 8 of 9 times recently (~89%), about 4 days before it closed — a proven lead.',
     tuning: { status: 'tuned', factor: 0.9056, direction: 'sensitize', warn: 1.811, crit: 2.717, base_warn: 2, base_crit: 3, precision: 0.8889, label: 'proven' },
     tuning_note: "Jobs won early-warnings here have proven out, so the sensor now trips on about 9% less movement — it's earned a lighter trigger.",
+    continuity_note: '3rd morning running — and worsening.',
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'leads',
       drivers: [{ metric: 'leads', pct: -50, share: 1, share_pct: 100 }, { metric: 'close_rate', pct: 0, share: 0, share_pct: 0 }] },
     diagnosis_message: 'Jobs won is down 50% — the driver is Leads (down 50%), while Close rate held.' },
@@ -444,6 +522,7 @@ const AGENCY = [
     accuracy_note: 'Revenue early-warnings for this client have called the week right 2 of 6 times recently (~33%) — still learning.',
     tuning: { status: 'tuned', factor: 1.1834, direction: 'tighten', warn: 2.367, crit: 3.55, base_warn: 2, base_crit: 3, precision: 0.3333, label: 'learning' },
     tuning_note: 'Revenue early-warnings here have been mixed, so the sensor now needs about 18% more movement before it speaks — fewer false alarms.',
+    continuity_note: 'New this morning.',
     diagnosis: { metric: 'revenue', direction: 'down', lead: 'spend',
       drivers: [{ metric: 'spend', pct: -50, share: 1.9434, share_pct: 194.3 }, { metric: 'roas', pct: 40, share: -0.9434, share_pct: -94.3 }] },
     diagnosis_message: 'Revenue is down 30% — the driver is Ad spend (down 50%), while ROAS actually rose 40% and softened the drop.' },
@@ -456,6 +535,7 @@ const AGENCY = [
     accuracy_note: 'Jobs won early-warnings for this client have called the week right 3 of 6 times recently (~50%), about 2 days before it closed — developing.',
     tuning: { status: 'tuned', factor: 1.1, direction: 'tighten', warn: 2.2, crit: 3.3, base_warn: 2, base_crit: 3, precision: 0.5, label: 'developing' },
     tuning_note: 'Jobs won early-warnings here have been mixed, so the sensor now needs about 10% more movement before it speaks — fewer false alarms.',
+    continuity_note: '2nd morning running, though easing.',
     diagnosis: { metric: 'jobs', direction: 'down', lead: 'close_rate',
       drivers: [{ metric: 'leads', pct: -20, share: 0.2435, share_pct: 24.3 }, { metric: 'close_rate', pct: -50, share: 0.7565, share_pct: 75.7 }] },
     diagnosis_message: 'Jobs won is down 60% — the driver is Close rate (down 50%), with Leads also down 20%.' },
@@ -598,7 +678,7 @@ export default function PulseDiagnosisPreview() {
             chips become one sentence, with the detail one glance below. ───────────────────────── */}
         <div className="mb-6">
           <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Today&rsquo;s pulse</p>
-          <PulseBriefingBannerPreview data={BRIEFING} />
+          <PulseBriefingBannerPreview data={BRIEFING} continuity={CONTINUITY} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The capstone reads the SAME ranked feed below and answers one question — &ldquo;if you do one thing today, do this&rdquo; —
             then grades its own call <span className="font-bold text-emerald-600">high confidence</span> because 2 of the 4 alerts come from
