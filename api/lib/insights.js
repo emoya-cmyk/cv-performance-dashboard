@@ -151,6 +151,25 @@ const { tunePulseThresholds, narratePulseTuning } = require('./pulseTuning')
 // sentence, machinery-free → rides clientSafePulse untouched). See lib/pulseBriefing.js.
 const { summarizePortfolioPulse, summarizeClientPulse } = require('./pulseBriefing')
 
+// Morning MEMORY (intel-v7 layer 8, PURE): the briefing is stateless — it forgets what
+// it said yesterday, so the same metric headlines three mornings running each reading as
+// if discovered fresh, and yesterday's now-cleared alarm vanishes unmentioned. continuity
+// replays the SAME tuned dayPulse over each metric's morning-ending prefixes (look-ahead-
+// proof, no clock, no log) to ask: is this alarm NEW, has it PERSISTED (how many mornings,
+// escalating or easing), or did it just RESOLVE. metricContinuity grades one metric;
+// summarizeContinuity folds a client's metrics into a machinery-free memory (rides the
+// client egress); summarizePortfolioContinuity rolls those up into one agency book view;
+// the narrate* helpers phrase the suffix clauses. Sibling to `briefing`, never nested in
+// it (the briefing stays byte-identical to the pure synthesiser). See pulseContinuity.js.
+const {
+  metricContinuity,
+  summarizeContinuity,
+  summarizePortfolioContinuity,
+  narrateContinuity,
+  narrateResolved,
+  narratePortfolioContinuity,
+} = require('./pulseContinuity')
+
 // Root-cause linking (PURE): given the sweep's findings plus each channel's share of
 // every additive metric, connect a fallen metric (anomaly/trend, down) to the dark
 // channel that materially fed it. Stamps a `caused_by` pointer on the symptom and an
@@ -2426,6 +2445,12 @@ function rankPulse(signals) {
 async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DAYS, window = PULSE_WINDOW } = {}) {
   const { end, dates, series } = await loadDailySeries(clientId, { asOf, windowDays: lookbackDays })
   const signals = []
+  // MORNING MEMORY (intel-v7 8): one continuity descriptor per metric — collected for EVERY
+  // metric, firing or not, so a metric that fired yesterday and cleared today can surface as a
+  // 'resolved' win below even though it never enters `signals`. Folded into the top-level
+  // `continuity` sibling after the loop; never nested in `briefing` (which stays byte-identical
+  // to the pure synthesiser the tests pin).
+  const continuityRaw = []
   for (const m of PULSE_METRICS) {
     const meta = METRIC_META[m]
     const adverseWhen = meta.goodWhenUp ? 'drop' : 'spike'
@@ -2445,6 +2470,14 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
     const acc = pulseAccuracy(series[m], { window, adverseWhen })
     const tune = tunePulseThresholds(acc)
     const v = dayPulse(series[m], { window, adverseWhen, warn: tune.warn, crit: tune.crit })
+    // MORNING MEMORY (8): replay the SAME tuned sensor over the last few morning-ending
+    // prefixes of this metric's daily series, so "is today new, or the same story as
+    // yesterday?" is answered from the IDENTICAL band the live `v` just fired on — back=0 is
+    // byte-identical to `v` (firing_today ⇔ today's adverse signal). Computed for EVERY metric,
+    // BEFORE the firing gate, so a metric that fired yesterday but has cleared today still
+    // surfaces as a 'resolved' win even though it adds no row to the live feed.
+    const cont = metricContinuity(series[m], { window, adverseWhen, warn: tune.warn, crit: tune.crit })
+    continuityRaw.push({ metric: m, label: meta.label, continuity: cont })
     if (v.status !== 'signal') continue
     const li = v.latest_index
     const ws = li - v.window + 1
@@ -2538,6 +2571,17 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
       const tnote = narratePulseTuning(tune, { label: meta.label, audience: 'agency' })
       if (tnote) sig.tuning_note = tnote
     }
+    // The "new or the same story again" for THIS firing metric (8): attach its morning memory
+    // — new vs persisting, the streak ('Nth morning'), escalating or easing vs yesterday —
+    // plus one grounded suffix clause per audience. narrateContinuity falls silent unless
+    // firing_today, so a tailwind row (status !== 'signal' never reaches here anyway) is moot;
+    // here every row IS firing, so both notes are present. Client-safe by construction (no z /
+    // baseline / tuning_* key), so it rides clientSafePulse untouched, like message/client_message.
+    sig.continuity = cont
+    const cnote  = narrateContinuity(cont, { audience: 'agency' })
+    const ccnote = narrateContinuity(cont, { audience: 'client' })
+    if (cnote)  sig.continuity_note        = cnote
+    if (ccnote) sig.continuity_client_note = ccnote
     signals.push(sig)
   }
   // The "what to do about it": fold each signal's severity (dayPulse) × learned
@@ -2561,12 +2605,36 @@ async function getClientPulse(clientId, { asOf, lookbackDays = PULSE_LOOKBACK_DA
   // briefing's pick can't disagree with the per-metric list. It carries ONLY client-visible
   // fields (no z / baseline / tuning_*), so it rides the clientSafePulse egress untouched —
   // a top-level sibling that passes straight through whether or not a signal needs stripping.
+  const clientBriefing = summarizeClientPulse(enriched)
+  // The morning's MEMORY for THIS client, folded on top (intel-v7 8): how many metrics are new
+  // vs persisting vs escalating this morning, the overnight 'resolved' wins, and the focus
+  // metric's own streak — distilled to client-visible fields by summarizeContinuity. is_focus is
+  // keyed to the briefing's OWN focus metric (clientBriefing.focus) so the streak chip can never
+  // disagree with the headline; lane comes from the triage map (a resolved metric isn't firing,
+  // so it isn't in `triaged` → lane null). A top-level sibling — NOT nested in `briefing`, which
+  // stays byte-identical to the pure synthesiser the tests pin — and machinery-free (no z /
+  // baseline / tuning_*), so it rides clientSafePulse untouched, exactly like briefing. The two
+  // resolved notes attach only when something actually cleared overnight.
+  const focusMetric = clientBriefing.focus ? clientBriefing.focus.metric : null
+  const continuityItems = continuityRaw.map((it) => ({
+    metric: it.metric,
+    label:  it.label,
+    is_focus: it.metric === focusMetric,
+    lane:   triaged.has(it.metric) ? triaged.get(it.metric).lane : null,
+    continuity: it.continuity,
+  }))
+  const continuity = summarizeContinuity(continuityItems)
+  const rNote  = narrateResolved(continuity.resolved, { audience: 'agency' })
+  const rcNote = narrateResolved(continuity.resolved, { audience: 'client' })
+  if (rNote)  continuity.resolved_note        = rNote
+  if (rcNote) continuity.resolved_client_note = rcNote
   return {
     as_of: end,
     window,
     lookback_days: lookbackDays,
     signals: rankPulse(enriched),
-    briefing: summarizeClientPulse(enriched),
+    briefing: clientBriefing,
+    continuity,
   }
 }
 
@@ -2612,10 +2680,17 @@ async function getPortfolioPulse({ asOf, lookbackDays = PULSE_LOOKBACK_DAYS, win
   const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
   const { rows } = await query(`SELECT id, name FROM clients`)
   const roster = []
+  // PORTFOLIO MORNING MEMORY (8): collect each client's continuity descriptor alongside the
+  // roster, so the agency banner can answer "how much of this is new this morning vs the same
+  // story, and what cleared overnight?" across the whole book. One row per client that produced a
+  // continuity object; folded by summarizePortfolioContinuity below. Same try/catch isolation as
+  // the roster — a data-less or erroring client contributes neither a row nor a memory.
+  const clientMemories = []
   for (const c of rows) {
     try {
-      const { signals } = await getClientPulse(c.id, { asOf: day, lookbackDays, window })
+      const { signals, continuity } = await getClientPulse(c.id, { asOf: day, lookbackDays, window })
       for (const s of signals) roster.push({ client_id: String(c.id), client_name: c.name, ...s })
+      if (continuity) clientMemories.push({ client_id: String(c.id), client_name: c.name, continuity })
     } catch { /* atomic grain unavailable / brand-new client -> skip, keep the rest of the roster */ }
   }
   // `roster` stays the full worst-first stream (every firing, tailwinds included — the
@@ -2635,7 +2710,15 @@ async function getPortfolioPulse({ asOf, lookbackDays = PULSE_LOOKBACK_DAYS, win
   // machinery-keeping (the headline row still carries tuning); rides GET /pulse, never the
   // per-client egress. Additive — `roster` and `act_today` are byte-identical for readers.
   const briefing = summarizePortfolioPulse(roster)
-  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster), act_today, briefing }
+  // The whole-book MORNING MEMORY synthesised on top (8): sum the per-client new / persisting /
+  // escalating counts and the overnight 'resolved' wins into one agency aggregate, plus a single
+  // calm narration ("3 new this morning · 2 ongoing (1 worsening) · 1 resolved since yesterday").
+  // Agency-only (its `resolved` list names other clients), so it lives only on this endpoint; the
+  // note is '' on a calm morning. Additive — roster / act_today / briefing are byte-identical.
+  const cAgg = summarizePortfolioContinuity(clientMemories)
+  const cNote = narratePortfolioContinuity(cAgg)
+  const continuity = cNote ? { ...cAgg, note: cNote } : cAgg
+  return { as_of: day, window, lookback_days: lookbackDays, roster: rankPulse(roster), act_today, briefing, continuity }
 }
 
 // Move one finding to a new lifecycle status and return the fresh row (null if the

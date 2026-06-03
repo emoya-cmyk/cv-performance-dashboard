@@ -6,8 +6,10 @@ const assert = require('node:assert/strict')
 const {
   metricContinuity,
   summarizeContinuity,
+  summarizePortfolioContinuity,
   narrateContinuity,
   narrateResolved,
+  narratePortfolioContinuity,
   ordinal,
   DEFAULT_MEMORY,
   DEFAULT_DEADBAND_PCT,
@@ -307,6 +309,109 @@ test('narrateResolved client names only its own metric, warmly', () => {
     narrateResolved([{ metric: 'a', label: 'A' }, { metric: 'b', label: 'B' }], { audience: 'client' }),
     "Good news — 2 of yesterday's alerts have already settled back to normal."
   )
+})
+
+// ===========================================================================
+// summarizePortfolioContinuity — book-wide morning roll-up (agency-only)
+// ===========================================================================
+
+// a per-client summarizeContinuity() result, defaults all-quiet.
+const csum = (over) => ({
+  focus: null, resolved: [], new_count: 0, persisting_count: 0, escalating_count: 0, ...over,
+})
+
+test('summarizePortfolioContinuity sums counts, attributes wins, counts distinct clients', () => {
+  const rows = [
+    { client_id: '1', client_name: 'Acme', continuity: csum({ new_count: 2, persisting_count: 1, escalating_count: 1, resolved: [{ metric: 'roas', label: 'ROAS' }] }) },
+    { client_id: '2', client_name: 'Globex', continuity: csum({ new_count: 1, persisting_count: 2, escalating_count: 0, resolved: [{ metric: 'leads', label: 'Leads' }, { metric: 'cpl', label: 'CPL' }] }) },
+    { client_id: '3', client_name: 'Initech', continuity: csum({}) }, // all quiet
+  ]
+  const p = summarizePortfolioContinuity(rows)
+  assert.equal(p.new_count, 3)
+  assert.equal(p.persisting_count, 3)
+  assert.equal(p.escalating_count, 1)
+  assert.equal(p.resolved_count, 3)
+  assert.deepEqual(p.resolved, [
+    { client_id: '1', client_name: 'Acme', metric: 'roas', label: 'ROAS' },
+    { client_id: '2', client_name: 'Globex', metric: 'leads', label: 'Leads' },
+    { client_id: '2', client_name: 'Globex', metric: 'cpl', label: 'CPL' },
+  ])
+  assert.equal(p.clients_new, 2)        // Acme + Globex
+  assert.equal(p.clients_escalating, 1) // Acme only
+  assert.equal(p.clients_resolved, 2)   // Acme + Globex
+})
+
+test('summarizePortfolioContinuity caps the resolved list but counts ALL wins', () => {
+  const rows = Array.from({ length: 4 }, (_, i) => ({
+    client_id: String(i), client_name: `C${i}`,
+    continuity: csum({ resolved: [{ metric: 'm', label: 'M' }, { metric: 'n', label: 'N' }] }),
+  }))
+  const p = summarizePortfolioContinuity(rows) // 8 wins across the book
+  assert.equal(p.resolved_count, 8)            // true count, pre-cap
+  assert.equal(p.resolved.length, 5)           // list capped at the default 5
+  assert.equal(p.clients_resolved, 4)
+  assert.equal(summarizePortfolioContinuity(rows, { resolvedCap: 2 }).resolved.length, 2)
+})
+
+test('summarizePortfolioContinuity coerces ragged counts and skips empty rows', () => {
+  const rows = [
+    null,
+    { client_id: '1', client_name: 'A' },                   // no continuity
+    { client_id: '2', client_name: 'B', continuity: null }, // null continuity
+    { client_id: '3', client_name: 'C', continuity: csum({ new_count: -1, persisting_count: 1.5, escalating_count: 'x', resolved: [null, { metric: 'm', label: 'M' }] }) },
+  ]
+  const p = summarizePortfolioContinuity(rows)
+  assert.equal(p.new_count, 0)        // -1 → 0
+  assert.equal(p.persisting_count, 0) // 1.5 → 0 (non-integer)
+  assert.equal(p.escalating_count, 0) // 'x' → 0
+  assert.equal(p.resolved_count, 1)   // null filtered out
+  assert.deepEqual(p.resolved, [{ client_id: '3', client_name: 'C', metric: 'm', label: 'M' }])
+  assert.equal(p.clients_new, 0)
+  assert.equal(p.clients_resolved, 1)
+})
+
+test('summarizePortfolioContinuity is total on empty / garbage', () => {
+  for (const v of [[], null, undefined, 'x', 42]) {
+    let p
+    assert.doesNotThrow(() => { p = summarizePortfolioContinuity(v) })
+    assert.deepEqual(p, {
+      new_count: 0, persisting_count: 0, escalating_count: 0, resolved_count: 0,
+      resolved: [], clients_new: 0, clients_escalating: 0, clients_resolved: 0,
+    })
+  }
+})
+
+// ===========================================================================
+// narratePortfolioContinuity — one agency sentence over the book's memory
+// ===========================================================================
+
+test('narratePortfolioContinuity joins new / ongoing(worsening) / resolved', () => {
+  assert.equal(
+    narratePortfolioContinuity({ new_count: 3, persisting_count: 2, escalating_count: 1, resolved_count: 1 }),
+    '3 new this morning · 2 ongoing (1 worsening) · 1 resolved since yesterday'
+  )
+})
+
+test('narratePortfolioContinuity omits silent parts and the worsening clause when none', () => {
+  assert.equal(narratePortfolioContinuity({ new_count: 0, persisting_count: 2, escalating_count: 0, resolved_count: 0 }), '2 ongoing')
+  assert.equal(
+    narratePortfolioContinuity({ new_count: 1, persisting_count: 0, escalating_count: 0, resolved_count: 2 }),
+    '1 new this morning · 2 resolved since yesterday'
+  )
+})
+
+test('narratePortfolioContinuity is silent on a calm, all-quiet morning', () => {
+  assert.equal(narratePortfolioContinuity({ new_count: 0, persisting_count: 0, escalating_count: 0, resolved_count: 0 }), '')
+  assert.equal(narratePortfolioContinuity(null), '')
+  assert.equal(narratePortfolioContinuity(undefined), '')
+})
+
+test('narratePortfolioContinuity reads a real aggregate end-to-end', () => {
+  const agg = summarizePortfolioContinuity([
+    { client_id: '1', client_name: 'A', continuity: csum({ new_count: 1 }) },
+    { client_id: '2', client_name: 'B', continuity: csum({ persisting_count: 1, escalating_count: 1 }) },
+  ])
+  assert.equal(narratePortfolioContinuity(agg), '1 new this morning · 1 ongoing (1 worsening)')
 })
 
 // ===========================================================================

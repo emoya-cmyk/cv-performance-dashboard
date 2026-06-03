@@ -68,6 +68,10 @@ function finiteOrNull(v) {
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
+// A count coerced to a non-negative integer (anything else → 0). The portfolio
+// roll-up sums per-client counts that are always whole and ≥0; this keeps a stray
+// undefined / float / negative from poisoning the total.
+function nonNeg(v) { return Number.isInteger(v) && v >= 0 ? v : 0 }
 
 // ordinal(3) → "3rd". For the streak phrasing ("3rd morning running").
 function ordinal(n) {
@@ -288,11 +292,98 @@ function narrateResolved(resolved, opts = {}) {
   return `Resolved since yesterday: ${labels}.`
 }
 
+/**
+ * summarizePortfolioContinuity(clientMemories, opts)
+ *   clientMemories : [{ client_id, client_name, continuity }] — one row per client,
+ *                    each `continuity` a summarizeContinuity() result for that client.
+ *   opts : { resolvedCap=5 } — most overnight wins to carry across the whole book.
+ *
+ * Rolls the per-client morning memories up into ONE agency-grade book view (the
+ * portfolio read never reaches a client, so this is agency-only and machinery-free):
+ *   { new_count, persisting_count, escalating_count, resolved_count,
+ *     resolved:[{ client_id, client_name, metric, label }],
+ *     clients_new, clients_escalating, clients_resolved }
+ *   • new/persisting/escalating_count — EXACT sums of metrics across every client that
+ *     are brand-new / persisting / escalating (persisting AND worsening) this morning;
+ *   • resolved — the capped roll-up of overnight wins, each tagged with WHICH client it
+ *     belongs to; resolved_count counts those wins as the per-client summaries surface
+ *     them (summarizeContinuity caps each client's list at 3, but a single client
+ *     clearing >3 flow metrics in one morning is degenerate, so this is exact in
+ *     practice);
+ *   • clients_* — how many DISTINCT clients have ≥1 new / escalating / resolved metric,
+ *     so the agency can say "3 clients need a look this morning" not just "5 alarms".
+ * Pure + total: tolerant of a missing / ragged list, never throws.
+ */
+function summarizePortfolioContinuity(clientMemories, opts = {}) {
+  const rows = Array.isArray(clientMemories) ? clientMemories : []
+  const cap  = posInt(opts.resolvedCap, 5)
+
+  let new_count = 0
+  let persisting_count = 0
+  let escalating_count = 0
+  let resolved_count = 0
+  let clients_new = 0
+  let clients_escalating = 0
+  let clients_resolved = 0
+  const resolved = []
+
+  for (const row of rows) {
+    if (!row || !row.continuity) continue
+    const m  = row.continuity
+    const nc = nonNeg(m.new_count)
+    const ec = nonNeg(m.escalating_count)
+    new_count        += nc
+    persisting_count += nonNeg(m.persisting_count)
+    escalating_count += ec
+    if (nc > 0) clients_new++
+    if (ec > 0) clients_escalating++
+
+    const res = Array.isArray(m.resolved) ? m.resolved.filter(Boolean) : []
+    if (res.length) clients_resolved++
+    resolved_count += res.length
+    for (const r of res) {
+      if (resolved.length < cap) {
+        resolved.push({ client_id: row.client_id, client_name: row.client_name, metric: r.metric, label: r.label })
+      }
+    }
+  }
+
+  return {
+    new_count,
+    persisting_count,
+    escalating_count,
+    resolved_count,
+    resolved,
+    clients_new,
+    clients_escalating,
+    clients_resolved,
+  }
+}
+
+// narratePortfolioContinuity(agg) — one agency sentence over the whole book's morning
+// memory, grounded in a summarizePortfolioContinuity aggregate. '' on a calm, all-quiet
+// morning (nothing new, nothing ongoing, nothing resolved). Agency-only by construction.
+//   "3 new this morning · 2 ongoing (1 worsening) · 1 resolved since yesterday."
+function narratePortfolioContinuity(agg) {
+  if (!agg) return ''
+  const nw = nonNeg(agg.new_count)
+  const pe = nonNeg(agg.persisting_count)
+  const es = nonNeg(agg.escalating_count)   // ⊆ persisting, so pe>0 whenever es>0
+  const rc = nonNeg(agg.resolved_count)
+  const parts = []
+  if (nw) parts.push(`${nw} new this morning`)
+  if (pe) parts.push(es ? `${pe} ongoing (${es} worsening)` : `${pe} ongoing`)
+  if (rc) parts.push(`${rc} resolved since yesterday`)
+  return parts.join(' · ')
+}
+
 module.exports = {
   metricContinuity,
   summarizeContinuity,
+  summarizePortfolioContinuity,
   narrateContinuity,
   narrateResolved,
+  narratePortfolioContinuity,
   ordinal,
   DEFAULT_MEMORY,
   DEFAULT_DEADBAND_PCT,

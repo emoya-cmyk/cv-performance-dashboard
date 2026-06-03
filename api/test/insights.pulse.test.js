@@ -40,7 +40,7 @@ for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } c
 process.env.SQLITE_PATH = DB_PATH
 
 const db = require('../db')
-const { getClientPulse, getPortfolioPulse, loadDailySeries, clientSafePulse } = require('../lib/insights')
+const { getClientPulse, getPortfolioPulse, loadDailySeries, clientSafePulse, METRIC_META } = require('../lib/insights')
 // The pure triage contract (severity×confidence → priority/lane/reason), unit-tested
 // exhaustively in pulseTriage.test.js. Here we only assert the ENGINE emits exactly
 // what these produce for its own signals — i.e. the wiring is faithful, not a re-impl.
@@ -883,4 +883,243 @@ test('clientSafePulse: carries the client briefing through untouched — same re
   const safePlain = clientSafePulse(plainPulse)
   assert.equal(safePlain, plainPulse, 'no strip → same pulse reference')
   assert.equal(safePlain.briefing, plainPulse.briefing, 'briefing preserved on the no-strip path')
+})
+
+// ============================================================
+// MORNING MEMORY — getClientPulse / getPortfolioPulse continuity wiring (intel-v7 8b)
+//
+// lib/pulseContinuity.js is unit-tested exhaustively in pulseContinuity.test.js; the math
+// (firing replay, streak, trend, status, the narrators, the portfolio fold) is proven
+// there. These tests prove only that the ENGINE wires it FAITHFULLY:
+//
+//   • every metric — firing or not — gets a continuity descriptor replayed over the SAME
+//     tuned band the live sensor fired on, so back=0 ⇔ today's signal;
+//   • the per-client `continuity` sibling is byte-identical to summarizeContinuity over the
+//     very items the engine built (focus keyed to the briefing's focus, lane from the
+//     published triage), with the two overnight-resolved notes attached;
+//   • a metric that fired YESTERDAY and cleared TODAY surfaces as a 'resolved' win even
+//     though it never enters `signals`;
+//   • the continuity sibling is machinery-free and rides clientSafePulse untouched (the
+//     SAME object), exactly like `briefing`;
+//   • the portfolio `continuity` is byte-identical to summarizePortfolioContinuity folded
+//     over the REAL per-client memories, with the agency narration self-consistent.
+//
+// Faithful-by-construction: expectedContinuity() re-runs the engine's own fold from the
+// loaded series + the engine's PUBLISHED focus/lane, so the assertion can't drift from a
+// re-implementation — it IS the wiring, replayed.
+// ============================================================
+
+const {
+  metricContinuity, summarizeContinuity, narrateContinuity, narrateResolved,
+  summarizePortfolioContinuity, narratePortfolioContinuity,
+} = require('../lib/pulseContinuity')
+
+// The engine's sum-aggregable flow set, in PULSE_METRICS order (see the file header and
+// getClientPulse's loop). Continuity is replayed for each, firing or not.
+const PULSE_FLOW = ['revenue', 'leads', 'spend', 'jobs']
+
+// expectedContinuity(clientId, publishedSignals, briefing) — re-derive the per-client
+// `continuity` sibling EXACTLY as getClientPulse does (lib/insights.js): load the same daily
+// series, and for EVERY flow metric grade its canonical-band precision, tune the band, then
+// replay metricContinuity at that tuned band. is_focus is keyed to the engine's OWN published
+// briefing.focus.metric and lane to the published signal's lane — the very values the engine
+// folded with — so this mirror is the wiring replayed, not a parallel guess. Then fold with
+// summarizeContinuity and attach the overnight-resolved notes, just like the engine's tail.
+async function expectedContinuity(clientId, publishedSignals, briefing) {
+  const { series } = await loadDailySeries(clientId, { asOf: ASOF })
+  const focusMetric = briefing && briefing.focus ? briefing.focus.metric : null
+  const laneBy = new Map((publishedSignals || []).map((s) => [s.metric, s.lane]))
+  const items = PULSE_FLOW.map((m) => {
+    const meta = METRIC_META[m]
+    const adverseWhen = meta.goodWhenUp ? 'drop' : 'spike'
+    const acc  = pulseAccuracy(series[m], { window: 7, adverseWhen })
+    const tune = tunePulseThresholds(acc)
+    const cont = metricContinuity(series[m], { window: 7, adverseWhen, warn: tune.warn, crit: tune.crit })
+    return {
+      metric: m,
+      label: meta.label,
+      is_focus: m === focusMetric,
+      lane: laneBy.has(m) ? laneBy.get(m) : null,
+      continuity: cont,
+    }
+  })
+  const continuity = summarizeContinuity(items)
+  const rNote  = narrateResolved(continuity.resolved, { audience: 'agency' })
+  const rcNote = narrateResolved(continuity.resolved, { audience: 'client' })
+  if (rNote)  continuity.resolved_note        = rNote
+  if (rcNote) continuity.resolved_client_note = rcNote
+  return continuity
+}
+
+// ── Test A: a PERSISTING firing metric — the sustained, proven collapse ──────────
+test('getClientPulse: a sustained collapse is stamped PERSISTING — sig.continuity is the tuned-band replay, the sibling folds it faithfully, and the focus carries the streak machinery-free', async () => {
+  await ready()
+  const c = await freshClient('Continuity Persist Co')
+  // The PROVEN/sensitized fixture: 29 mornings of a leads collapse (idx35..63 = 20 vs a 100
+  // baseline). Every sampled morning in memory fires → 'persisting', the streak fills the
+  // memory window (capped), and today vs yesterday is flat → 'steady'.
+  await seedDaily(c, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+  const sig = out.signals.find((s) => s.metric === 'leads')
+  assert.ok(sig, 'leads is firing today')
+
+  // FAITHFUL PER-SIGNAL WIRE: sig.continuity is metricContinuity replayed at the metric's OWN
+  // tuned band — back=0 is byte-identical to the live signal, by construction.
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  const tune = tunePulseThresholds(pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' }))
+  const expectedCont = metricContinuity(series.leads, { window: 7, adverseWhen: 'drop', warn: tune.warn, crit: tune.crit })
+  assert.deepEqual(sig.continuity, expectedCont)
+
+  // the fixture is doing its job — a real, capped, persisting streak (else the below is vacuous).
+  assert.equal(expectedCont.status, 'persisting')
+  assert.equal(expectedCont.firing_today, true)
+  assert.equal(expectedCont.prev_firing, true)
+  assert.equal(expectedCont.streak_capped, true)
+  assert.ok(expectedCont.streak >= 2)
+
+  // the two suffix notes are byte-identical to the narrators, one per audience.
+  assert.equal(sig.continuity_note,        narrateContinuity(expectedCont, { audience: 'agency' }))
+  assert.equal(sig.continuity_client_note, narrateContinuity(expectedCont, { audience: 'client' }))
+  assert.match(sig.continuity_note,        /morning running/)
+  assert.match(sig.continuity_client_note, /tracking this for/)
+
+  // FAITHFUL SIBLING: the top-level continuity is byte-identical to the engine's own fold.
+  assert.deepEqual(out.continuity, await expectedContinuity(c, out.signals, out.briefing))
+
+  // and it says what we expect: leads is the focus, persisting, counted once, nothing new or
+  // resolved this morning.
+  assert.equal(out.continuity.focus.metric, 'leads')
+  assert.equal(out.continuity.focus.status, 'persisting')
+  assert.equal(out.continuity.persisting_count, 1)
+  assert.equal(out.continuity.new_count, 0)
+  assert.deepEqual(out.continuity.resolved, [])
+
+  // the focus exposes EXACTLY the seven client-visible fields — no z, no baseline, no band.
+  assert.deepEqual(Object.keys(out.continuity.focus).sort(),
+    ['label', 'metric', 'since_back', 'status', 'streak', 'streak_capped', 'trend'])
+  const wire = JSON.stringify(out.continuity)
+  assert.equal(wire.includes('tuning'), false, 'no tuning machinery in the continuity sibling')
+  assert.equal(wire.includes('baseline'), false, 'no raw baseline in the continuity sibling')
+})
+
+// ── Test C: a metric that fired YESTERDAY and cleared TODAY → a RESOLVED win ──────
+test('getClientPulse: an overnight recovery surfaces as a RESOLVED win — absent from signals, present in continuity.resolved with both grounded notes', async () => {
+  await ready()
+  const c = await freshClient('Continuity Resolved Co')
+  // Alternating 105/95 (a calm ~700 weekly book) with ONE zero on the day that is exclusive
+  // to YESTERDAY's trailing window (days-ago 7 = idx56): today's window (idx57..63) is clean
+  // ≈ baseline → not firing; yesterday's window (idx56..62) carries the hole → a ~14% drop,
+  // |z| ≫ crit → fired. firing = [false, true, …] → 'resolved'.
+  const daily = Array.from({ length: 64 }, (_, i) => (i % 2 === 1 ? 105 : 95))
+  daily[56] = 0
+  await seedDaily(c, 'leads', daily)
+
+  const out = await getClientPulse(c, { asOf: ASOF })
+
+  // it cleared — leads is NOT in the live feed today.
+  assert.equal(out.signals.find((s) => s.metric === 'leads'), undefined, 'no live leads signal today')
+
+  // but the morning memory remembers yesterday's alarm: 'resolved'.
+  const { series } = await loadDailySeries(c, { asOf: ASOF })
+  const tune = tunePulseThresholds(pulseAccuracy(series.leads, { window: 7, adverseWhen: 'drop' }))
+  const cont = metricContinuity(series.leads, { window: 7, adverseWhen: 'drop', warn: tune.warn, crit: tune.crit })
+  assert.equal(cont.status, 'resolved')
+  assert.equal(cont.firing_today, false)
+  assert.equal(cont.prev_firing, true)
+
+  // FAITHFUL SIBLING + the resolved win is surfaced with both grounded notes.
+  assert.deepEqual(out.continuity, await expectedContinuity(c, out.signals, out.briefing))
+  assert.deepEqual(out.continuity.resolved, [{ metric: 'leads', label: 'Leads' }])
+  assert.equal(out.continuity.resolved_note,        narrateResolved(out.continuity.resolved, { audience: 'agency' }))
+  assert.equal(out.continuity.resolved_client_note, narrateResolved(out.continuity.resolved, { audience: 'client' }))
+  assert.match(out.continuity.resolved_note,        /^Resolved since yesterday: leads\.$/)
+  assert.match(out.continuity.resolved_client_note, /^Good news —/)
+
+  // a cleared alarm is not "firing": no focus, nothing new or persisting this morning.
+  assert.equal(out.continuity.focus, null)
+  assert.equal(out.continuity.new_count, 0)
+  assert.equal(out.continuity.persisting_count, 0)
+})
+
+// ── Test D: the portfolio fold — whole-book memory, faithfully ───────────────────
+test('getPortfolioPulse: the portfolio continuity is byte-identical to summarizePortfolioContinuity over the REAL per-client memories, with a self-consistent agency narration', async () => {
+  await ready()
+  const cPersist  = await freshClient('Book Persist Co')
+  const cResolved = await freshClient('Book Resolved Co')
+  await seedDaily(cPersist, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+  const daily = Array.from({ length: 64 }, (_, i) => (i % 2 === 1 ? 105 : 95))
+  daily[56] = 0
+  await seedDaily(cResolved, 'leads', daily)
+
+  const out = await getPortfolioPulse({ asOf: ASOF })
+  assert.ok(out.continuity, 'a continuity aggregate rides the portfolio payload')
+
+  // FAITHFUL WIRE: re-run the engine's OWN loop — every client in the book, same asOf, same
+  // per-client call — fold it with summarizePortfolioContinuity, narrate, and the engine's
+  // published aggregate must be byte-identical.
+  const { rows } = await db.query('SELECT id, name FROM clients')
+  const mems = []
+  for (const r of rows) {
+    try {
+      const { continuity } = await getClientPulse(r.id, { asOf: ASOF })
+      if (continuity) mems.push({ client_id: String(r.id), client_name: r.name, continuity })
+    } catch { /* data-less / brand-new → skip, exactly like the engine */ }
+  }
+  const agg  = summarizePortfolioContinuity(mems)
+  const note = narratePortfolioContinuity(agg)
+  assert.deepEqual(out.continuity, note ? { ...agg, note } : agg)
+
+  // my two seeded clients move the book: at least one persisting and one resolved overnight.
+  assert.ok(out.continuity.persisting_count >= 1, 'the persisting client is counted')
+  assert.ok(out.continuity.resolved_count   >= 1, 'the resolved client is counted')
+  assert.ok(out.continuity.clients_resolved >= 1)
+
+  // the resolved roll-up names the client + metric, machinery-free (no z / baseline).
+  const mine = out.continuity.resolved.find((r) => r.client_id === String(cResolved) && r.metric === 'leads')
+  assert.ok(mine, 'the overnight-resolved client appears in the portfolio resolved list')
+  assert.deepEqual(Object.keys(mine).sort(), ['client_id', 'client_name', 'label', 'metric'])
+
+  // the agency narration is self-consistent and reports the overnight wins.
+  assert.equal(out.continuity.note, narratePortfolioContinuity(out.continuity))
+  assert.match(out.continuity.note, /resolved since yesterday/)
+})
+
+// ── Test E: the continuity sibling rides clientSafePulse untouched ───────────────
+test('clientSafePulse: carries the continuity sibling through untouched — the SAME object on the strip path, machinery-free, with the tuning dial gone', async () => {
+  await ready()
+  // (1) a PROVEN/sensitized client → a strip happens (a new envelope is allocated); the
+  // continuity sibling must ride that {...pulse} spread through as the SAME object, exactly
+  // like briefing, with the agency tuning dial stripped off the signal.
+  const cTuned = await freshClient('Continuity Egress Tuned Co')
+  await seedDaily(cTuned, 'leads', Array.from({ length: 64 }, (_, i) => (i < 35 ? 100 : 20)))
+  const tunedPulse = await getClientPulse(cTuned, { asOf: ASOF })
+  const tSig = tunedPulse.signals.find((s) => s.metric === 'leads')
+  assert.ok(tSig.tuning, 'the tuned signal carries a dial → clientSafePulse will strip and re-allocate')
+  assert.ok(tunedPulse.continuity && tunedPulse.continuity.focus, 'a real continuity sibling rides the tuned pulse')
+
+  const safeTuned = clientSafePulse(tunedPulse)
+  assert.notEqual(safeTuned, tunedPulse, 'a strip happened — a new envelope')
+  assert.equal(safeTuned.continuity, tunedPulse.continuity, 'the continuity sibling rides the spread as the SAME object')
+
+  // the per-signal continuity + its client note survive the strip; the tuning dial does not.
+  const safeSig = safeTuned.signals.find((s) => s.metric === 'leads')
+  assert.equal(safeSig.tuning, undefined, 'the agency tuning dial is stripped from the client signal')
+  assert.deepEqual(safeSig.continuity, tSig.continuity, 'the per-signal continuity survives untouched')
+  assert.equal(safeSig.continuity_client_note, tSig.continuity_client_note, 'the client continuity note survives')
+
+  // machinery-free at the wire — no tuning dial, no raw baseline anywhere in the sibling.
+  const cwire = JSON.stringify(safeTuned.continuity)
+  assert.equal(cwire.includes('tuning'), false)
+  assert.equal(cwire.includes('baseline'), false)
+
+  // (2) a plain collapse client → nothing to strip → clientSafePulse returns the SAME pulse
+  // reference, so the continuity sibling is trivially preserved.
+  const cPlain = await freshClient('Continuity Egress Plain Co')
+  await seedWeekly(cPlain, 'leads', [20, 90, 100, 110, 95, 105, 100, 98, 102])
+  const plainPulse = await getClientPulse(cPlain, { asOf: ASOF })
+  assert.equal(plainPulse.signals.find((s) => s.metric === 'leads').tuning, undefined, 'no dial to strip')
+  const safePlain = clientSafePulse(plainPulse)
+  assert.equal(safePlain, plainPulse, 'no strip → same pulse reference')
+  assert.equal(safePlain.continuity, plainPulse.continuity, 'continuity preserved on the no-strip path')
 })
