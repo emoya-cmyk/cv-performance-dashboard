@@ -2816,5 +2816,8 @@ module.exports = {
   // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
   // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
   // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.
+  // PULSE_METRICS/PULSE_WINDOW/PULSE_LOOKBACK_DAYS are exported so the layer-12 briefImpactEngine can
+  // replay the SAME self-tuning sensor over the mornings that followed each shipped brief lead.
   loadDailySeries, getClientPulse, getPortfolioPulse, clientSafePulse,
+  PULSE_METRICS, PULSE_WINDOW, PULSE_LOOKBACK_DAYS,
 }

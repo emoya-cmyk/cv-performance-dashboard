@@ -52,6 +52,8 @@ const {
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
+const { getBriefImpact } = require('../lib/briefImpactEngine')
+const { narrateBriefImpact } = require('../lib/briefImpact')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -290,6 +292,35 @@ router.get('/brief-health', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-health error', err.message)
     res.status(500).json({ error: 'Failed to load brief health' })
+  }
+})
+
+// GET /api/ai/brief-impact (agency-only) — the editorial-PRECISION read. brief-health
+// asks "is the narrator still WRITING, and are the numbers VERIFIED?" (mechanics +
+// reliability); brief-impact asks the orthogonal third question — "when we put something
+// at the TOP of the brief, did the move we flagged actually HOLD UP over the next few
+// mornings, or are we overcalling?" It replays the same self-tuning day-pulse sensor
+// over the mornings that FOLLOWED each shipped lead and grades the lead earned/fair/
+// overcalled with zero human review. Agency-only by construction: the verdict names a
+// tighten-lead-selection action and exposes by_lane/by_audience grading no client should
+// read, so the route is 403-gated and the narration is agency-voiced.
+router.get('/brief-impact', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days)
+
+  try {
+    const impact = await getBriefImpact({ asOf, days })
+    res.json({
+      ...impact,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateBriefImpact(impact, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-impact error', err.message)
+    res.status(500).json({ error: 'Failed to load brief impact' })
   }
 })
 

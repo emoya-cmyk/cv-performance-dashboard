@@ -225,6 +225,16 @@ export const api = {
   // ({ total, window, grounded_rate, all_grounded, overall, by_audience }) plus an echoed
   // `requested` window and one agency-voiced `narrative` sentence off the overall bucket.
   getBriefHealth:           (days)       => get(`/api/ai/brief-health${days ? `?days=${days}` : ''}`),
+  // brief-IMPACT (intel-v7 12): the editorial-PRECISION read — orthogonal to brief-health's
+  // mechanics/reliability. Replays the self-tuning day-pulse over the mornings that FOLLOWED
+  // each shipped lead and grades it earned/fair/overcalled (did the thing we put at the TOP of
+  // the brief actually hold up, or are we overcalling?). Names a tighten-lead-selection action
+  // and exposes by_lane/by_audience grading no client should read, so it shares the same 403
+  // posture — a client token is refused. `days` tunes the look-back (default 30, clamped
+  // 1..365). Returns the full summarizeBriefImpact shape ({ status, label, hit_rate, sample,
+  // judged, hits, misses, unknown, by_lane, by_audience }) plus echoed `requested` + one
+  // agency-voiced `narrative` sentence.
+  getBriefImpact:           (days)       => get(`/api/ai/brief-impact${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),
