@@ -60,6 +60,10 @@ const { narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
 const { narrateLeadPolicyGovernance } = require('../lib/briefLeadPolicyGovernor')
 const { narrateLeadPolicyGovernanceAudit } = require('../lib/briefLeadPolicyAudit')
 const { narrateLeadPolicyRemediation } = require('../lib/briefLeadPolicyRemediation')
+const {
+  recordBriefFeedback, getClientBriefFeedback, getPortfolioEngagement,
+} = require('../lib/briefEngagementEngine')
+const { narrateBriefEngagement } = require('../lib/briefEngagement')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -143,6 +147,19 @@ async function resolveAskScope(req) {
   }
   if (user.client_id) return { scopeClientId: user.client_id }
   return { error: 'not authorized for portfolio queries', status: 403 }
+}
+
+// The brief-feedback WRITE and own-vote READ are a CONSUMER action: a client rates
+// THEIR OWN morning brief. The clientId is therefore taken ONLY from the authenticated
+// token — never a body/query param a caller could forge to vote as (or read) another
+// client. An agency token carries no client_id (it is scoped by role, not to one
+// client) and has no own-brief to rate, so it is refused here; the agency instead reads
+// the AGGREGATE via GET /brief-engagement (resolvePortfolioScope). This is the privacy
+// twin of resolveAskScope's non-agency branch, narrowed to a pure token-scope (no body).
+function resolveConsumerScope(req) {
+  const user = req.user || {}
+  if (user.client_id) return { clientId: user.client_id }
+  return { error: 'brief feedback is recorded from a client session', status: 403 }
 }
 
 // ── GET /api/ai/recap/:clientId ───────────────────────────────────────────────
@@ -490,6 +507,85 @@ router.get('/lead-policy-governance-remediation', async (req, res) => {
   }
 })
 
+// ── POST /api/ai/brief-feedback ─────────────────────────────────────────────────
+// intel-v8 layer 18 — the dashboard's FIRST outward-facing loop. Every layer above
+// (brief-health → lead-policy → … → remediation) is inward self-governance; NONE asks
+// the one question only the reader can answer: was the brief USEFUL? This records that
+// — one 👍/👎 per client per morning — as a reversible upsert. The clientId comes ONLY
+// from the token (resolveConsumerScope), never the body, so a caller can only ever vote
+// on their OWN brief; an agency token (no client_id) is refused. ?as_of / { as_of }
+// selects the rated morning (absent → today, UTC). signal must be helpful|not_helpful.
+// Returns the { as_of, signal } that now stands, so the client UI reflects the vote back
+// — and NOTHING aggregate (no rate, no other client) ever crosses this client egress.
+router.post('/brief-feedback', async (req, res) => {
+  const signal = req.body?.signal
+  if (signal !== 'helpful' && signal !== 'not_helpful') {
+    return res.status(400).json({ error: 'signal must be helpful | not_helpful' })
+  }
+  const { clientId, error: scopeErr, status } = resolveConsumerScope(req)
+  if (scopeErr) return res.status(status).json({ error: scopeErr })
+  const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    const vote = await recordBriefFeedback({ clientId, asOf, signal })
+    res.json(vote)
+  } catch (err) {
+    console.error('[ai] POST brief-feedback error', err.message)
+    res.status(500).json({ error: 'Failed to record brief feedback' })
+  }
+})
+
+// ── GET /api/ai/brief-feedback ──────────────────────────────────────────────────
+// The consumer reads back THEIR OWN vote for a morning so the 👍/👎 control can paint
+// its current state. Token-scoped exactly like the write (resolveConsumerScope): a
+// client only ever sees their own row. ?as_of selects the morning (absent → today, UTC).
+// signal is null when the client has not voted that day. No aggregate ever appears here.
+router.get('/brief-feedback', async (req, res) => {
+  const { clientId, error: scopeErr, status } = resolveConsumerScope(req)
+  if (scopeErr) return res.status(status).json({ error: scopeErr })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    const vote = await getClientBriefFeedback({ clientId, asOf })
+    res.json(vote)
+  } catch (err) {
+    console.error('[ai] GET brief-feedback error', err.message)
+    res.status(500).json({ error: 'Failed to load brief feedback' })
+  }
+})
+
+// ── GET /api/ai/brief-engagement ────────────────────────────────────────────────
+// The AGENCY aggregate that closes layer 18's loop: roll EVERY client's 👍/👎 over a
+// trailing window into a portfolio helpful_rate + label + trend, a per-client board
+// (worst reception first), and a watch list of clients whose brief is landing poorly or
+// fading — the consumer-reception early-warning the agency learns from. AGENCY-ONLY by
+// construction: it names per-client reception no client may see, so it shares the
+// portfolio 403 gate (resolvePortfolioScope) and the narration is agency-voiced (the
+// pure narrator returns '' for the client audience unconditionally). ?days=N sizes the
+// window (default 90, clamped 1..365); ?as_of anchors its end (default today, UTC). The
+// portfolio top-level IS the grade shape, so narrateBriefEngagement reads off it directly.
+router.get('/brief-engagement', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days)
+
+  try {
+    const engagement = await getPortfolioEngagement({ asOf, days })
+    res.json({
+      ...engagement,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateBriefEngagement(engagement, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-engagement error', err.message)
+    res.status(500).json({ error: 'Failed to load brief engagement' })
+  }
+})
+
 // ── POST /api/ai/ask ──────────────────────────────────────────────────────────
 // Body: { question: string, clientId?: string }. Returns the deterministic rows
 // plus a grounded one-line answer, scoped to whatever the caller is allowed to
@@ -591,3 +687,7 @@ module.exports.resolveAskScope = resolveAskScope
 // reach the narration machinery). Same attach-to-router idiom as above.
 module.exports.resolveDays = resolveDays
 module.exports.resolvePortfolioScope = resolvePortfolioScope
+// Exposed for unit tests — the consumer-feedback token-scope guard (layer 18b): the
+// vote's clientId is derived ONLY from the authenticated token, never a body param,
+// and an agency token (no client_id) is refused. Same attach-to-router idiom as above.
+module.exports.resolveConsumerScope = resolveConsumerScope
