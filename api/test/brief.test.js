@@ -2676,3 +2676,285 @@ test('22d — the control-health guard is load-bearing: a smuggled counter, reas
   assert.ok(!FORBIDDEN_CONTROLHEALTH_TOKENS.test('hold none trust idle stable settling settled steady direction widen leaner mornings running'),
     'the control-health sweep is disjoint from the generic English the brief actually uses')
 })
+
+// 23d — EMPHASIS-CONTROL-TUNING CONFINEMENT: the chronic GAIN-SCHEDULE that narrows the
+// controller's authority across MANY windows is the sixth and outermost turn of the outward
+// loop — and, like every turn beneath it, it rides NO client byte and NO pack.
+// ------------------------------------------------------------
+// intel-v9 layer 23 closes the loop layer 22 opened. 22 is the ACUTE breaker: it reads ONE
+// window of controller moves and, when they hunt, benches the tuner for that morning. 23 is the
+// CHRONIC gain-schedule: it reads a HISTORY of 22's verdicts and, when the controller hunts
+// REPEATEDLY across windows, NARROWS the range the controller is even allowed to move within —
+// and hands that range back only after the governor proves stable for restoreRun mornings
+// running. 22 says "hands off the wheel today"; 23 says "you've thrashed for weeks, your steering
+// range stays narrowed until you hold a line." tuneEmphasisControlAuthority(history) is the most
+// supervisory instrument the stack produces: it carries the reach (how far the controller may
+// push the cap off base), the max_reach (the structural ceiling), the effective_bounds it has
+// narrowed the controller to, the authority label (frozen / reduced / full), the load-bearing
+// recommended_action (reduce_authority benches the controller's range; restore_authority hands
+// it back), and the machine reason (hunting_active / awaiting_stability / stability_proven /
+// no_intervention / insufficient_history). The consumer must receive NONE of it.
+//
+// Layer 23's confinement matches 22's, and is in one way CLEANER: where 22's distinctive run
+// counters (high_run / low_run) collide with the sibling layer-14 lead-policy monitor that
+// legitimately rides the agency pack — forcing 22d to carve a narrower portfolio-scope set —
+// NONE of 23's fingerprints is shared with any sibling: no other module emits `max_reach`,
+// `effective_bounds`, `detuned`, or the `*_authority` actions. So one fingerprint set serves
+// BOTH the client and the portfolio scope here. The tuning verdict rides NO pack at all — it
+// exists only as the return of tuneEmphasisControlAuthority / the agency-gated
+// /brief-emphasis-control-tuning route, computed at read time over the persisted governor
+// history. So the agency surface that must trip the client guard is the TUNING VERDICT ITSELF,
+// not a pack field — and we additionally prove neither the client NOR the portfolio pack ever
+// carries the tuning vocabulary, EVEN WHEN 23b has narrowed the controller and the layer-19
+// engagement_policy projection points at the narrowed cap: the only trace a narrow leaves on any
+// pack is a different cap integer, never the word 'detuned', 'reduce_authority', or 'max_reach'.
+// narrateEmphasisControlTuning is '' for the client UNCONDITIONALLY (the precedent of
+// 18d/19d/20d/21d/22d). 23a proves the schedule in isolation, 23b/23c the read-path + UI wiring;
+// here, the EGRESS SPLIT — the sixth and outermost guard, stacked on 22→21→20→19→18.
+const { tuneEmphasisControlAuthority, narrateEmphasisControlTuning, shouldReduceControlAuthority, controlAuthorityRails } = require('../lib/briefEmphasisControlTuning')
+
+// A genuine DETUNED tuning verdict, built from REAL layer-22 governor verdicts (mirroring 22d's
+// use of real assessEmphasisControlHealth artifacts, not hand-stubbed rows): a quiet/idle window
+// (three holds → the controller never engaged → idle/controller_quiet) FOLLOWED by the real
+// CTRL_HEALTH_HUNTING window above (the proven unstable/damp verdict). Newest entry unstable →
+// trailing_unstable 1 → the controller's reach is narrowed by one notch: reduce_authority /
+// hunting_active, reach 1 inside max_reach 2, effective_bounds {2,4,3} — the SAME verdict the
+// /brief-emphasis-control-tuning route serves and 23b acts on, and the exact 23c FE fixture.
+const CALM_HOLD_HISTORY = [
+  applyEmphasisControl(EMPH_WIDEN, eff20(1.0, 1.0)), // hold (passthrough)
+  applyEmphasisControl(EMPH_WIDEN, eff20(1.0, 1.0)), // hold
+  applyEmphasisControl(EMPH_WIDEN, eff20(1.0, 1.0)), // hold
+]
+const CTRL_HEALTH_CALM = assessEmphasisControlHealth(CALM_HOLD_HISTORY)
+const TUNE_DETUNED = tuneEmphasisControlAuthority([CTRL_HEALTH_CALM, CTRL_HEALTH_HUNTING])
+
+// The tuning verdict ALWAYS carries `max_reach` and `effective_bounds` (emitted unconditionally
+// for EVERY verdict — default, detuned, holding, restored), so guarding those two by name is a
+// COMPLETE structural guard: no verdict can ride along without tripping. Plus the two conceptual
+// wrapper names, in case the route ever nested the verdict under one. Deliberately NOT bare
+// `reach` — it is the Meta/social "reach" marketing metric, a REAL client fact that must flow
+// freely (the whole reason 23 names its ceiling `max_reach`, never bare `reach`). NOT
+// `authority`/`bounds`/`window_used`/`history_len`/`recommended_action`/`reason`/`status`/`as_of`/
+// `governor` — generic or shared (caught by the token sweep below, or by the delegated lower
+// sweeps).
+const FORBIDDEN_CONTROLTUNING_KEYS = [
+  'control_tuning', 'emphasis_control_tuning',
+  'max_reach', 'effective_bounds',
+]
+// Distinctive control-tuning tokens only — the two structural compounds as strings, the two
+// wrapper names, the signature status `detuned`, the three `*_authority` machine actions, and the
+// three compound machine reasons. Every one is a compound machine identifier or a coined word the
+// brief's generated English never uses. DELIBERATELY NOT bare `reach`/`authority`/`bounds`
+// (generic or a real marketing metric), NOT bare `holding`/`restored`/`full`/`reduced`/`frozen`/
+// `default` (the gain-schedule's plain status English, which is also ordinary client prose —
+// "leads holding steady", "reach restored", "full range" — mirrors 22d sparing bare
+// `hold`/`idle`/`stable`, 21d sparing bare `hold`), and NOT `no_intervention`/`insufficient_history`
+// (the latter is shared abstention vocabulary across the whole stack; both are already covered by
+// the structural `max_reach`/`effective_bounds` guard a real leak necessarily carries).
+const FORBIDDEN_CONTROLTUNING_TOKENS =
+  /control_tuning|emphasis_control_tuning|detuned|reduce_authority|hold_authority|restore_authority|hunting_active|awaiting_stability|stability_proven|max_reach|effective_bounds/
+
+// ONE scope serves both client and portfolio here (unlike 22d's narrower portfolio set): NONE of
+// the layer-23 fingerprints is shared with any sibling that legitimately rides the agency pack.
+// `max_reach`/`effective_bounds`/`detuned`/`*_authority` are emitted by layer 23 ALONE — grep
+// confirms no other module names them — so a genuine tuning leak on the portfolio pack would trip
+// the exact same set. (Contrast 22's high_run/low_run, shared with the layer-14 lead-policy
+// monitor.) We therefore reuse FORBIDDEN_CONTROLTUNING_{KEYS,TOKENS} for the portfolio assertion.
+
+function assertNoControlTuning(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_CONTROLTUNING_KEYS.includes(k),
+          `${where}: client egress must not carry control-tuning field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_CONTROLTUNING_TOKENS.test(JSON.stringify(pack)),
+    `${where}: emphasis-control-tuning vocabulary leaked into the serialized client egress`
+  )
+  // Belt-and-suspenders: a clean control-tuning egress must also clear the 22d control-health
+  // sweep (which delegates to 21d → 20d → 19d → 18d) — all SIX turns of the outward loop stack here.
+  assertNoControlHealth(pack, where)
+}
+
+test('23d — narrateEmphasisControlTuning is silent for the CLIENT unconditionally; the agency hears the gain-schedule across detuned/restored, identifier-free', () => {
+  // Sanity: the real upstream history produced a dense DETUNED verdict — the load-bearing
+  // narrowing the /brief-emphasis-control-tuning route serves, so the agency narration below is
+  // non-vacuous. One quiet window then one hunting window → the controller's reach clipped to 1.
+  assert.deepEqual(
+    { s: TUNE_DETUNED.status, a: TUNE_DETUNED.recommended_action, r: TUNE_DETUNED.reason, reach: TUNE_DETUNED.reach, mr: TUNE_DETUNED.max_reach, eff: TUNE_DETUNED.effective_bounds, reduce: shouldReduceControlAuthority(TUNE_DETUNED) },
+    { s: 'detuned', a: 'reduce_authority', r: 'hunting_active', reach: 1, mr: 2, eff: { min: 2, max: 4, base: 3 }, reduce: true },
+    'a fresh hunt after a quiet window reads as detuned/reduce_authority, the schedule narrowing the controller by one notch')
+
+  // THE INVARIANT: the consumer never hears the gain-schedule — for ANY shape (detuned, frozen-
+  // detuned, restored, holding, default, or malformed), narration is '' UNCONDITIONALLY.
+  const B = { min: 1, max: 5, base: 3 }
+  for (const [name, v] of [
+    ['detuned', TUNE_DETUNED],
+    ['frozen-detuned', { status: 'detuned', reach: 0, max_reach: 2, effective_bounds: { min: 3, max: 3, base: 3 } }],
+    ['restored', { status: 'restored', recommended_action: 'restore_authority', reach: 2, max_reach: 2, effective_bounds: B }],
+    ['holding', { status: 'holding', reach: 1, max_reach: 2, effective_bounds: B }],
+    ['default', { status: 'default', reach: 2, max_reach: 2, effective_bounds: B }],
+    ['null', null], ['malformed', { effective_bounds: {} }], ['junk', 'nope'],
+  ]) {
+    assert.equal(narrateEmphasisControlTuning(v, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  // The agency DOES hear the schedule — across the two states worth a word (detuned, restored) —
+  // proving the client silence is a deliberate split, not a dead feature…
+  const agencyDetune = narrateEmphasisControlTuning(TUNE_DETUNED, { audience: 'agency' })
+  assert.ok(agencyDetune.length > 0, 'the agency hears the schedule on a detuned verdict')
+  assert.match(agencyDetune, /over-correcting|narrowed/, 'the detuned verdict reads as plain English')
+  const agencyFrozen = narrateEmphasisControlTuning({ status: 'detuned', reach: 0, max_reach: 2, effective_bounds: { min: 3, max: 3, base: 3 } }, { audience: 'agency' })
+  assert.match(agencyFrozen, /single steady setting|stops swinging/, 'a frozen-detuned verdict reads as plain English')
+  const agencyRestore = narrateEmphasisControlTuning({ status: 'restored', recommended_action: 'restore_authority', reach: 2, max_reach: 2, effective_bounds: B }, { audience: 'agency' })
+  assert.match(agencyRestore, /full range|handed back/, 'a restored verdict reads as plain English')
+  // …but stays mute on the two honest-silence states (nothing earned saying yet).
+  for (const silent of ['holding', 'default']) {
+    assert.equal(narrateEmphasisControlTuning({ status: silent, reach: 1, max_reach: 2, effective_bounds: B }, { audience: 'agency' }), '',
+      `the agency is silent on the ${silent} state`)
+  }
+
+  // Even the candid agency sentences carry no machine identifier — they could not seed a leak
+  // even if mis-routed (they say "over-correcting", "narrowed", "handed back", never "detuned"/
+  // "reduce_authority"/"max_reach") — and clear the 22d + 21d + 20d + 19d + 18d sweeps too. All
+  // SIX turns proven mute on the agency prose.
+  for (const s of [agencyDetune, agencyFrozen, agencyRestore]) {
+    assert.ok(!FORBIDDEN_CONTROLTUNING_TOKENS.test(s), 'agency schedule sentence carries no control-tuning identifier')
+    assert.ok(!FORBIDDEN_CONTROLHEALTH_TOKENS.test(s), 'agency schedule sentence carries no control-health identifier')
+    assert.ok(!FORBIDDEN_CONTROL_TOKENS.test(s), 'agency schedule sentence carries no control identifier')
+    assert.ok(!FORBIDDEN_EFFICACY_TOKENS.test(s), 'agency schedule sentence carries no efficacy identifier')
+    assert.ok(!FORBIDDEN_EMPHASIS_TOKENS.test(s), 'agency schedule sentence carries no emphasis identifier')
+    assert.ok(!FORBIDDEN_ENGAGEMENT_TOKENS.test(s), 'agency schedule sentence carries no aggregate identifier')
+  }
+})
+
+test('23d — the tuning verdict trips the client guard, yet neither the client nor the portfolio pack carries its vocabulary: the sixth, endpoint-only split', async () => {
+  await ready()
+
+  // THE AGENCY SURFACE: the verdict the route returns is dense with max_reach/effective_bounds +
+  // the reduce_authority action + the hunting_active reason + the detuned status → the client
+  // guard MUST trip on it, confirming the cleanliness below is a real split, not a vacuous pass.
+  assert.throws(
+    () => assertNoControlTuning(TUNE_DETUNED, 'tuning-verdict-probe'),
+    /control-tuning field|control-tuning vocabulary/,
+    'the tuning verdict is dense with machinery — the client guard MUST trip on it')
+
+  // THE CLIENT SURFACE: the consumer pack carries none of the control-tuning machinery — and, by
+  // the stacked delegation inside assertNoControlTuning, none of the 22d control-health / 21d
+  // control / 20d efficacy / 19d emphasis / 18d aggregate vocabulary either (all SIX outward-loop
+  // turns enforced at once).
+  const c = await freshClient('Emphasis Control Tuning Confinement Roofing Co')
+  const cli = await generateClientBrief(c, AS_OF)
+  assert.equal(cli.grounded, true)
+  assert.match(cli.brief_text, /^Good morning\./)
+  assertNoControlTuning(cli.pack, 'generateClientBrief')
+  // the persisted read-back — the row the client actually fetches — is just as clean.
+  const cliRow = await getClientBrief(c, AS_OF)
+  assertNoControlTuning(cliRow.pack, 'getClientBrief read-back')
+
+  // LIKE 22d/21d: the gain-schedule rides NO pack — not even the agency/portfolio pack (it is
+  // computed only at read time by tuneEmphasisControlAuthority / the route). The portfolio pack
+  // may legitimately carry the 19d engagement_policy PROJECTION, so the full belt-and-suspenders
+  // assertNoControlTuning would rightly trip on THAT (the delegated 19d sweep), not on
+  // control-tuning; we assert the narrower, layer-23-specific truth: the CONTROL-TUNING
+  // vocabulary never rides it. ONE fingerprint set suffices for both scopes — no layer-23 token is
+  // shared with any sibling that rides this pack (contrast 22d's portfolio carve-out).
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok(
+    !FORBIDDEN_CONTROLTUNING_TOKENS.test(JSON.stringify(port.pack)),
+    'the control-tuning vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_CONTROLTUNING_KEYS.includes(k), `the portfolio pack must not carry the control-tuning field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+
+  // THE LAYER-23 WRINKLE: 23b lets shouldReduceControlAuthority / controlAuthorityRails NARROW
+  // the controller's range and point the persisted engagement_policy projection at the narrowed
+  // cap. Prove the narrow leaves NO linguistic trace — even when narrowing happens, the projection
+  // the portfolio pack carries speaks only the 19 cap vocabulary; the sole mark of a clipped
+  // controller is a different cap integer, never 'detuned', 'reduce_authority', 'max_reach', or
+  // 'effective_bounds'. (The rails the engine consumes are non-null on this very verdict — proving
+  // the narrow is live, not theoretical.)
+  assert.deepEqual(controlAuthorityRails(TUNE_DETUNED), { min: 2, max: 4, base: 3, reach: 1, frozen: false },
+    'the detuned verdict yields live narrowed rails the engine acts on — so the no-trace proof below is non-vacuous')
+  if (port.pack && port.pack.engagement_policy) {
+    const ep = port.pack.engagement_policy
+    assert.ok(!FORBIDDEN_CONTROLTUNING_TOKENS.test(JSON.stringify(ep)),
+      'the engagement_policy projection must carry no control-tuning vocabulary, narrowed or not')
+    for (const k of FORBIDDEN_CONTROLTUNING_KEYS) {
+      assert.ok(!(k in ep), `the engagement_policy projection must not carry the control-tuning field "${k}"`)
+    }
+  }
+})
+
+test('23d — the tuning guard is load-bearing: a smuggled reach-bound, action, or reason trips it; legit client fields never do', () => {
+  // each distinctive structural compound is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoControlTuning({ tune: { max_reach: 2 } }, 'max-reach-probe'),
+    /control-tuning field/, 'a lone max_reach must be rejected by name')
+  assert.throws(() => assertNoControlTuning({ tune: { effective_bounds: { min: 2, max: 4 } } }, 'eff-bounds-probe'),
+    /control-tuning field/, 'a lone effective_bounds must be rejected by name')
+  assert.throws(() => assertNoControlTuning({ box: { control_tuning: {} } }, 'control-tuning-probe'),
+    /control-tuning field/, 'a lone control_tuning wrapper must be rejected by name')
+  // the status, the machine actions, and the compound reasons, smuggled as plain strings, are
+  // caught by the token sweep.
+  assert.throws(() => assertNoControlTuning({ note: 'the schedule went detuned this week' }, 'detuned-token-probe'),
+    /control-tuning vocabulary/, "the status ('detuned') leaked as a string must be rejected")
+  assert.throws(() => assertNoControlTuning({ note: 'action: reduce_authority' }, 'reduce-token-probe'),
+    /control-tuning vocabulary/, "'reduce_authority' leaked as a string must be rejected")
+  assert.throws(() => assertNoControlTuning({ note: 'reason: hunting_active' }, 'hunting-active-probe'),
+    /control-tuning vocabulary/, "'hunting_active' leaked as a string must be rejected")
+  assert.throws(() => assertNoControlTuning({ note: 'restore_authority once stability_proven' }, 'restore-token-probe'),
+    /control-tuning vocabulary/, "'restore_authority'/'stability_proven' leaked as strings must be rejected")
+  // the whole tuning verdict trips (structural compounds + action + reason + status all present).
+  assert.throws(() => assertNoControlTuning(TUNE_DETUNED, 'full-verdict-probe'),
+    /control-tuning field|control-tuning vocabulary/, 'the full tuning verdict must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the Meta/social "reach" metric — the single most important disjointness guarantee of naming
+  //   the ceiling `max_reach` and never bare `reach`. A real client sentence reporting reach must
+  //   pass clean through all six stacked sweeps.
+  assert.doesNotThrow(
+    () => assertNoControlTuning({ focus: { metric: 'reach', label: 'Reach', direction: 'up', delta_pct: 12, lane: 'celebrate' }, note: 'Reach climbed 12% on Meta while leads held steady.' }, 'meta-reach-probe'),
+    'the Meta "reach" metric and a reach sentence are legit and must pass clean')
+  //   the client focus (Section D): direction + delta_pct + a 'steady' trend + a lane. None is a
+  //   control-tuning token (we forbid neither bare `direction` nor `steady` nor `reach`).
+  assert.doesNotThrow(
+    () => assertNoControlTuning({ focus: { direction: 'down', delta_pct: -40, label: 'Leads', lane: 'act_now', metric: 'leads', trend: 'steady' } }, 'client-focus-probe'),
+    'the client focus is legit and must pass clean')
+  //   bare gain-schedule-state English the brief's plain prose shares with the verdict's status —
+  //   'holding'/'restored'/'full'/'reduced'/'default'/'steady' — NONE forbidden (we forbid only
+  //   the compound machine identifiers detuned/reduce_authority/max_reach/etc.), so a real client
+  //   sentence using them must pass through all six stacked sweeps.
+  assert.doesNotThrow(
+    () => assertNoControlTuning({ note: 'Leads are holding steady; trust is restored to its full range; the default picture is reduced risk — none slipped.' }, 'status-prose-probe'),
+    'bare gain-schedule-state words in client prose are disjoint from the control-tuning tokens and must pass')
+  //   the supporting-cast array the (possibly narrowed) cap ultimately shapes — the EFFECT the
+  //   client sees, never the schedule that policed the range that sized it.
+  assert.doesNotThrow(
+    () => assertNoControlTuning({ briefing: { also: [{ metric: 'leads', label: 'Leads' }, { metric: 'reach', label: 'Reach' }] } }, 'supporting-cast-probe'),
+    'the supporting-cast array must pass — it is the EFFECT of the cap, not the schedule')
+  //   the consumer's own engagement vote — the only engagement byte they ever send.
+  assert.doesNotThrow(
+    () => assertNoControlTuning({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+
+  // FINAL disjointness ledger: the distinctive control-tuning tokens never appear in the generic
+  // English the brief actually uses (note this string deliberately includes bare `reach`,
+  // `authority`, `bounds`, `holding`, `restored`, `full`, `reduced`, `default`, `stability` — all
+  // legal) — so stacking 23→22→21→20→19→18 can never false-positive a legit client egress on a
+  // schedule identifier (mirrors 22d's closing ledger).
+  assert.ok(!FORBIDDEN_CONTROLTUNING_TOKENS.test('reach authority bounds holding restored full reduced default frozen steady stability range narrow setting widen leaner mornings running'),
+    'the control-tuning sweep is disjoint from the generic English the brief actually uses')
+})
