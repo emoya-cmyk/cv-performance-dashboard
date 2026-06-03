@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -1307,6 +1307,262 @@ function LeadPolicyPanelPreview({ data }) {
   )
 }
 
+// ── 14c LEAD-POLICY STABILITY — "watch the watcher" ───────────────────────────
+// The panel above tunes itself each morning; this one audits whether that loop is trustworthy
+// right now. A FIFTH disjoint vocabulary (stable / settling / unstable / constrained / flagged /
+// idle / abstained) over a per-lane verdict, shaped EXACTLY like GET /api/ai/lead-policy-health
+// (assessLeadPolicyHealth + requested + narrative). The per-lane weight SERIES renders as a
+// divergent sparkline so the failure a single snapshot hides becomes visible: a zigzag is
+// oscillation, a flat-topped run is saturation, bars collapsing to the line are convergence.
+const LEAD_HEALTH_TONE = {
+  unstable:    { pill: 'border-rose-200 bg-rose-50 text-rose-700',       dot: 'bg-rose-500',    text: 'text-rose-500',    label: 'Oscillating',   Icon: AlertOctagon },
+  constrained: { pill: 'border-amber-200 bg-amber-50 text-amber-700',    dot: 'bg-amber-500',   text: 'text-amber-500',   label: 'At its bounds', Icon: Gauge },
+  flagged:     { pill: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500',  text: 'text-orange-500',  label: 'Floor masking', Icon: ShieldAlert },
+  settling:    { pill: 'border-sky-200 bg-sky-50 text-sky-700',          dot: 'bg-sky-500',     text: 'text-sky-500',     label: 'Settling',      Icon: Activity },
+  stable:      { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Stable',     Icon: ShieldCheck },
+  idle:        { pill: 'border-slate-200 bg-slate-50 text-slate-500',    dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Idle',          Icon: Minus },
+  abstained:   { pill: 'border-slate-200 bg-slate-50 text-slate-500',    dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining',    Icon: Minus },
+}
+const LEAD_HEALTH_ACTION = {
+  revert_to_neutral: { tone: 'border-rose-200 bg-rose-50 text-rose-700',       Icon: Wrench,      label: 'Reverted to neutral',        auto: true },
+  widen_bounds:      { tone: 'border-amber-200 bg-amber-50 text-amber-700',    Icon: Scale,       label: 'Consider widening the band', auto: false },
+  investigate_floor: { tone: 'border-orange-200 bg-orange-50 text-orange-700', Icon: ShieldAlert, label: 'Investigate the floor',      auto: false },
+  hold:              { tone: 'border-sky-200 bg-sky-50 text-sky-700',          Icon: Activity,    label: 'Hold steady',                auto: false },
+  trust:             { tone: 'border-emerald-200 bg-emerald-50 text-emerald-700', Icon: Check,    label: 'Trust the loop',             auto: false },
+  none:              null,
+}
+const LEAD_HEALTH_LANE = {
+  oscillating:    { fill: 'bg-rose-500',    text: 'text-rose-700',    badge: 'border-rose-200 bg-rose-50 text-rose-600',       label: 'Oscillating' },
+  saturated_high: { fill: 'bg-amber-500',   text: 'text-amber-700',   badge: 'border-amber-200 bg-amber-50 text-amber-600',    label: 'Pinned high' },
+  saturated_low:  { fill: 'bg-amber-500',   text: 'text-amber-700',   badge: 'border-amber-200 bg-amber-50 text-amber-600',    label: 'Pinned low' },
+  floor_masked:   { fill: 'bg-orange-500',  text: 'text-orange-700',  badge: 'border-orange-200 bg-orange-50 text-orange-600', label: 'Floor-masked' },
+  settling:       { fill: 'bg-sky-400',     text: 'text-sky-600',     badge: 'border-sky-200 bg-sky-50 text-sky-600',          label: 'Settling' },
+  stable:         { fill: 'bg-emerald-500', text: 'text-emerald-700', badge: 'border-emerald-200 bg-emerald-50 text-emerald-600', label: 'Stable' },
+  idle:           { fill: 'bg-slate-300',   text: 'text-slate-400',   badge: 'border-slate-200 bg-slate-50 text-slate-500',    label: 'Idle' },
+}
+const LEAD_HEALTH_RANK = { oscillating: 0, saturated_high: 1, saturated_low: 1, floor_masked: 2, settling: 3, stable: 4, idle: 5 }
+function leadHealthEvidence(lane) {
+  const n = (k) => (lane && Number.isFinite(lane[k]) ? lane[k] : 0)
+  const mornings = (v) => `${v} ${v === 1 ? 'morning' : 'mornings'}`
+  switch (lane?.state) {
+    case 'oscillating':    return `${n('flips')} reversals across ${mornings(n('present'))}`
+    case 'saturated_high': return `pinned at the ceiling · ${mornings(n('high_run'))}`
+    case 'saturated_low':  return `pinned at the floor · ${mornings(n('low_run'))}`
+    case 'floor_masked':   return `floor-caught · ${mornings(n('mask_runs'))} running`
+    case 'settling':       return `still converging · spread ${n('spread').toFixed(2)}`
+    case 'stable':         return `converged · holding ×${(Number.isFinite(lane?.last_weight) ? lane.last_weight : 1).toFixed(2)}`
+    default:               return 'even weight — never tuned'
+  }
+}
+function leadHealthHeadline(status) {
+  switch (status) {
+    case 'unstable':    return 'The loop is chasing noise — reverted to a neutral lead order'
+    case 'constrained': return 'A lane has run out of band — the nudge has become a wall'
+    case 'flagged':     return 'The safety floor is masking a persistent overcall'
+    case 'settling':    return 'Still converging on its learned priorities'
+    case 'stable':      return 'Holding steady — the learned priorities have settled'
+    case 'idle':        return 'Nothing has tuned off neutral yet — nothing to watch'
+    default:            return 'Not enough graded history yet to judge the loop'
+  }
+}
+function LeadHealthSeriesPreview({ series, bounds, state }) {
+  const vals = Array.isArray(series) ? series : []
+  const min = Number.isFinite(bounds?.min) ? bounds.min : 0.8
+  const max = Number.isFinite(bounds?.max) ? bounds.max : 1.2
+  const fill = (LEAD_HEALTH_LANE[state] || LEAD_HEALTH_LANE.idle).fill
+  if (!vals.length) return null
+  return (
+    <div className="relative h-7 w-full flex items-stretch gap-px">
+      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-slate-200" />
+      {vals.map((w, i) => {
+        if (!Number.isFinite(w)) return <div key={i} className="flex-1" />
+        if (w === 1) {
+          return (
+            <div key={i} className="relative flex-1">
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-slate-300" />
+            </div>
+          )
+        }
+        const up = w > 1
+        const mag = up ? (max > 1 ? (w - 1) / (max - 1) : 0) : (min < 1 ? (1 - w) / (1 - min) : 0)
+        const h = Math.max(Math.min(1, Math.max(0, mag)) * 50, 4)
+        return (
+          <div key={i} className="relative flex-1">
+            <div
+              className={`absolute left-1/2 -translate-x-1/2 w-[60%] min-w-[3px] ${fill} ${up ? 'bottom-1/2 rounded-t-sm' : 'top-1/2 rounded-b-sm'}`}
+              style={{ height: `${h}%` }}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+function LeadHealthLaneRowPreview({ name, lane, bounds }) {
+  const tone = LEAD_HEALTH_LANE[lane?.state] || LEAD_HEALTH_LANE.idle
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate">{name}</div>
+        <span className={`mt-0.5 inline-flex items-center rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed ${tone.badge}`}>
+          {tone.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <LeadHealthSeriesPreview series={lane?.series} bounds={bounds} state={lane?.state} />
+      </div>
+      <span className={`w-28 shrink-0 text-right text-[10px] font-semibold leading-tight tabular-nums ${tone.text}`}>
+        {leadHealthEvidence(lane)}
+      </span>
+    </div>
+  )
+}
+
+// fixture A — the loop THRASHING: worth_a_look's weight ping-pongs above and below neutral on
+// noise (4 reversals → oscillating), so the verdict is unstable and the loop reverts that lane to
+// ×1.00 on its own. act_now has been pinned to the ceiling for 4 straight mornings (saturated_high
+// → the nudge became a wall), and a quiet tailwind has settled.
+const LEAD_HEALTH_UNSTABLE = {
+  status: 'unstable',
+  recommended_action: 'revert_to_neutral',
+  as_of: null,
+  window_used: 6,
+  history_len: 6,
+  bounds: { min: 0.8, max: 1.2 },
+  lanes: {
+    worth_a_look: { state: 'oscillating',    flips: 4, high_run: 1, low_run: 1, mask_runs: 0, spread: 0.34, last_weight: 1.12, last_direction: 'promote', present: 6, series: [1.12, 0.88, 1.15, 0.85, 1.10, 0.90] },
+    act_now:      { state: 'saturated_high', flips: 0, high_run: 4, low_run: 0, mask_runs: 0, spread: 0.04, last_weight: 1.20, last_direction: 'promote', present: 6, series: [1.06, 1.12, 1.20, 1.20, 1.20, 1.20] },
+    tailwind:     { state: 'settling',       flips: 1, high_run: 0, low_run: 0, mask_runs: 0, spread: 0.06, last_weight: 1.04, last_direction: 'promote', present: 5, series: [null, 1.10, 1.02, 1.06, 1.03, 1.04] },
+    verify:       { state: 'idle',           flips: 0, high_run: 0, low_run: 0, mask_runs: 0, spread: 0.00, last_weight: 1.00, last_direction: 'neutral', present: 6, series: [1, 1, 1, 1, 1, 1] },
+  },
+  counts: { oscillating: 1, saturated: 1, masked: 0, settling: 1, stable: 0, idle: 1, active: 3 },
+  verdict_reason: 'worth_a_look oscillating (4 reversals in 6 mornings)',
+  requested: { as_of: null, days: 6 },
+  narrative: "The lead order is thrashing: worth a look has flipped direction 4 times in 6 mornings, so we've reset it to neutral and will let it re-earn its place on a calmer record.",
+}
+
+// fixture B — the loop CONVERGED and SAFE: every active lane has settled within band, the safety
+// floor isn't masking anything, and the verdict is stable → trust the loop. The sparklines are
+// near-flat, the calm shape that says "no human needed". The agency narration is brief; the panel's
+// own headline carries the rest.
+const LEAD_HEALTH_STABLE = {
+  status: 'stable',
+  recommended_action: 'trust',
+  as_of: null,
+  window_used: 6,
+  history_len: 6,
+  bounds: { min: 0.8, max: 1.2 },
+  lanes: {
+    act_now:      { state: 'stable',   flips: 0, high_run: 1, low_run: 0, mask_runs: 0, spread: 0.03, last_weight: 1.10, last_direction: 'promote', present: 6, series: [1.08, 1.10, 1.09, 1.11, 1.10, 1.10] },
+    worth_a_look: { state: 'stable',   flips: 0, high_run: 0, low_run: 1, mask_runs: 0, spread: 0.02, last_weight: 0.92, last_direction: 'demote',  present: 6, series: [0.94, 0.92, 0.93, 0.91, 0.92, 0.92] },
+    tailwind:     { state: 'settling', flips: 1, high_run: 0, low_run: 0, mask_runs: 0, spread: 0.05, last_weight: 1.03, last_direction: 'promote', present: 5, series: [null, 1.07, 1.01, 1.04, 1.02, 1.03] },
+    verify:       { state: 'idle',     flips: 0, high_run: 0, low_run: 0, mask_runs: 0, spread: 0.00, last_weight: 1.00, last_direction: 'neutral', present: 6, series: [1, 1, 1, 1, 1, 1] },
+  },
+  counts: { oscillating: 0, saturated: 0, masked: 0, settling: 1, stable: 2, idle: 1, active: 4 },
+  verdict_reason: 'all active lanes within band, no oscillation or saturation',
+  requested: { as_of: null, days: 6 },
+  narrative: "The tuning loop has settled — every lane it has moved is holding inside its band with no thrash, so the learned lead order can be trusted as-is.",
+}
+
+function LeadPolicyHealthPanelPreview({ data }) {
+  const st = data?.status || 'abstained'
+  const tone = LEAD_HEALTH_TONE[st] || LEAD_HEALTH_TONE.abstained
+  const HeadIcon = tone.Icon
+  const action = LEAD_HEALTH_ACTION[data?.recommended_action] || null
+  const ActionIcon = action?.Icon
+  const narrative = (data?.narrative || '').trim()
+  const headline = leadHealthHeadline(st)
+  const windowUsed = data?.window_used || data?.requested?.days || 6
+  const historyLen = data?.history_len || 0
+  const bounds = data?.bounds || { min: 0.8, max: 1.2 }
+  const counts = data?.counts || {}
+  const concerns = [
+    counts.oscillating > 0 ? `${counts.oscillating} oscillating` : null,
+    counts.saturated > 0 ? `${counts.saturated} at bounds` : null,
+    counts.masked > 0 ? `${counts.masked} floor-masked` : null,
+    counts.settling > 0 ? `${counts.settling} settling` : null,
+    counts.stable > 0 ? `${counts.stable} stable` : null,
+  ].filter(Boolean)
+  const lanes = Object.entries(data?.lanes || {})
+    .sort((a, b) => {
+      const ra = LEAD_HEALTH_RANK[a[1]?.state] ?? 9, rb = LEAD_HEALTH_RANK[b[1]?.state] ?? 9
+      if (ra !== rb) return ra - rb
+      return (b[1]?.present || 0) - (a[1]?.present || 0)
+    })
+    .slice(0, 6)
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Activity className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Lead-policy stability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Watching the tuning loop for thrash · last {windowUsed} mornings
+          </p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        <div className="flex items-start gap-2">
+          <HeadIcon className={`w-4 h-4 shrink-0 mt-0.5 ${tone.text}`} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+            {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </div>
+        </div>
+
+        {action && (
+          <div className="mt-3">
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold ${action.tone}`}>
+              <ActionIcon className="w-3.5 h-3.5" /> {action.label}
+            </span>
+            <p className="mt-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+              {action.auto
+                ? 'Applied automatically — the loop reverted itself to a neutral lead order this run; no action needed.'
+                : 'Agency advisory — surfaced for a human to weigh, never auto-applied.'}
+            </p>
+          </div>
+        )}
+
+        {concerns.length > 0 && (
+          <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+            {concerns.join(' · ')} <span className="text-slate-300">across {historyLen} graded {historyLen === 1 ? 'morning' : 'mornings'}</span>
+          </p>
+        )}
+
+        {lanes.length > 0 && (
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Per-lane trajectory</p>
+              <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />thrash</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />settled</span>
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              {lanes.map(([key, lane]) => (
+                <LeadHealthLaneRowPreview key={key} name={laneLabel(key)} lane={lane} bounds={bounds} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">Watch the watcher.</span> The lead-policy loop tunes itself each morning; this reads its last {windowUsed} weights per lane and flags the failure one snapshot hides — a lane <span className="font-semibold text-rose-600">oscillating</span> on noise, one <span className="font-semibold text-amber-600">pinned to its band</span>, or a real overcall the <span className="font-semibold text-orange-600">safety floor is masking</span>. Oscillation reverts that lane to neutral on its own; the rest are surfaced for a human. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -1482,6 +1738,40 @@ export default function PulseDiagnosisPreview() {
             <span className="font-bold text-indigo-600">pinned back to ×1.00</span> — promotable when it&rsquo;s right, never eased when it&rsquo;s wrong. The one
             lane where a miss is dangerous is the one the system is forbidden to quiet. <span className="font-bold text-slate-600">A fourth, disjoint vocabulary</span> —
             promote / ease / even — so it never blurs with the grade it&rsquo;s built on. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* ── 14c LEAD-POLICY STABILITY — "watch the watcher". The panel above tunes itself every
+            morning; nothing was watching whether that loop is itself trustworthy. This reads its last
+            six weights PER LANE and renders the SEQUENCE a single snapshot can't show: a zigzag is a
+            lane chasing noise, a flat-topped run is a lane jammed against its band, bars collapsing to
+            the line is convergence. A FIFTH disjoint vocabulary (stable / settling / unstable /
+            constrained / flagged) so it never blurs with the four below it. Two instances: the loop
+            thrashing (auto-reverts itself) and the loop settled (trust it). ────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy stability · thrashing</p>
+          <LeadPolicyHealthPanelPreview data={LEAD_HEALTH_UNSTABLE} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The self-tuning loop needs its own supervisor, or a single bad streak quietly poisons what leads tomorrow.
+            Here <span className="font-bold text-rose-600">Worth a look</span> has <span className="font-bold text-rose-600">flipped direction four times in six mornings</span> —
+            the sparkline zigzags above and below the line. That isn&rsquo;t learning, it&rsquo;s <span className="font-bold text-rose-600">chasing noise</span>, so the loop{' '}
+            <span className="font-bold text-rose-600">reverts that lane to neutral on its own</span> (<Wrench className="inline w-3 h-3 text-rose-500 align-text-bottom" /> applied automatically, no human needed).
+            Meanwhile <span className="font-bold text-amber-600">Act now</span> has been <span className="font-bold text-amber-600">pinned to the ceiling four mornings running</span> — the flat-topped bars say the{' '}
+            nudge has <span className="font-bold text-amber-600">become a wall</span>, surfaced for a human to weigh but never auto-touched. <span className="font-bold text-slate-600">A fifth, disjoint vocabulary</span> —
+            stable / settling / unstable / constrained — so it never blurs with the policy it audits. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* second instance — the loop CONVERGED and trustworthy, the calm shape that says "leave it alone" */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy stability · settled</p>
+          <LeadPolicyHealthPanelPreview data={LEAD_HEALTH_STABLE} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The same supervisor on a <span className="font-bold text-emerald-600">healthy morning</span>: every lane it has moved is <span className="font-bold text-emerald-600">holding inside its band</span> —
+            the sparklines sit nearly flat against the line — with <span className="font-bold text-emerald-600">no oscillation and nothing jammed against a bound</span>.
+            The verdict is <span className="font-bold text-emerald-600">stable</span> and the recommendation is simply <span className="font-bold text-emerald-600">trust the loop</span>: no revert, no advisory, no human.
+            That asymmetry is the point — <span className="font-bold text-slate-600">the watcher stays silent when the loop is fine and only speaks when it isn&rsquo;t</span>,
+            which is exactly what lets the whole self-tuning stack <span className="font-bold text-indigo-600">run unattended</span>. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 

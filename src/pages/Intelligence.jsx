@@ -190,6 +190,13 @@ export default function Intelligence() {
           one: grade the front page, then quietly rewrite the front-page priorities. USE_API-gated. */}
       {USE_API && <LeadPolicyPanel />}
 
+      {/* lead-policy STABILITY — "watch the watcher". The panel above tunes itself each morning;
+          this one reads GET /api/ai/lead-policy-health (agency-only) and judges whether that loop
+          is trustworthy right now — a lane oscillating on noise, pinned to its band, or a real
+          overcall the safety floor is masking. Oscillation self-reverts to neutral; the rest are
+          surfaced for a human. Sits directly under the loop it audits. USE_API-gated. */}
+      {USE_API && <LeadPolicyHealthPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -1085,6 +1092,76 @@ const LEAD_DIR_TONE = {
   neutral: { fill: 'bg-slate-300',   text: 'text-slate-400',   label: 'Even' },
 }
 
+// ── lead-policy STABILITY monitor (14c) — "watch the watcher" ─────────────────
+// A vocabulary DISJOINT from LEAD_POLICY_TONE: that grades the policy itself; this grades
+// whether the TUNING LOOP that produced it is trustworthy right now. Health verdict status →
+// the header pill, its dot, its headline-icon tint. (briefLeadPolicyHealth.js statuses.)
+const LEAD_HEALTH_TONE = {
+  unstable:    { pill: 'border-rose-200 bg-rose-50 text-rose-700',       dot: 'bg-rose-500',    text: 'text-rose-500',    label: 'Oscillating',   Icon: AlertOctagon },
+  constrained: { pill: 'border-amber-200 bg-amber-50 text-amber-700',    dot: 'bg-amber-500',   text: 'text-amber-500',   label: 'At its bounds', Icon: Gauge },
+  flagged:     { pill: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500',  text: 'text-orange-500',  label: 'Floor masking', Icon: ShieldAlert },
+  settling:    { pill: 'border-sky-200 bg-sky-50 text-sky-700',          dot: 'bg-sky-500',     text: 'text-sky-500',     label: 'Settling',      Icon: Activity },
+  stable:      { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Stable',     Icon: ShieldCheck },
+  idle:        { pill: 'border-slate-200 bg-slate-50 text-slate-500',    dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Idle',          Icon: Minus },
+  abstained:   { pill: 'border-slate-200 bg-slate-50 text-slate-500',    dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining',    Icon: Minus },
+}
+
+// recommended_action → an agency-facing chip. revert_to_neutral is the ONE the loop applies
+// itself (past tense — already done, no human in the path); the rest are advisories a person weighs.
+const LEAD_HEALTH_ACTION = {
+  revert_to_neutral: { tone: 'border-rose-200 bg-rose-50 text-rose-700',       Icon: Wrench,      label: 'Reverted to neutral',        auto: true },
+  widen_bounds:      { tone: 'border-amber-200 bg-amber-50 text-amber-700',    Icon: Scale,       label: 'Consider widening the band', auto: false },
+  investigate_floor: { tone: 'border-orange-200 bg-orange-50 text-orange-700', Icon: ShieldAlert, label: 'Investigate the floor',      auto: false },
+  hold:              { tone: 'border-sky-200 bg-sky-50 text-sky-700',          Icon: Activity,    label: 'Hold steady',                auto: false },
+  trust:             { tone: 'border-emerald-200 bg-emerald-50 text-emerald-700', Icon: Check,    label: 'Trust the loop',             auto: false },
+  none:              null,
+}
+
+// per-lane verdict state → small badge + the divergent sparkline's colour. The SHAPE of the
+// sparkline carries the diagnosis (a zigzag is oscillation, a flat-topped run is saturation,
+// a calm flat line is convergence); the colour carries its severity.
+const LEAD_HEALTH_LANE = {
+  oscillating:    { fill: 'bg-rose-500',    text: 'text-rose-700',    badge: 'border-rose-200 bg-rose-50 text-rose-600',       label: 'Oscillating' },
+  saturated_high: { fill: 'bg-amber-500',   text: 'text-amber-700',   badge: 'border-amber-200 bg-amber-50 text-amber-600',    label: 'Pinned high' },
+  saturated_low:  { fill: 'bg-amber-500',   text: 'text-amber-700',   badge: 'border-amber-200 bg-amber-50 text-amber-600',    label: 'Pinned low' },
+  floor_masked:   { fill: 'bg-orange-500',  text: 'text-orange-700',  badge: 'border-orange-200 bg-orange-50 text-orange-600', label: 'Floor-masked' },
+  settling:       { fill: 'bg-sky-400',     text: 'text-sky-600',     badge: 'border-sky-200 bg-sky-50 text-sky-600',          label: 'Settling' },
+  stable:         { fill: 'bg-emerald-500', text: 'text-emerald-700', badge: 'border-emerald-200 bg-emerald-50 text-emerald-600', label: 'Stable' },
+  idle:           { fill: 'bg-slate-300',   text: 'text-slate-400',   badge: 'border-slate-200 bg-slate-50 text-slate-500',    label: 'Idle' },
+}
+
+// urgency order for the lane list — most-concerning first, exactly the verdict precedence.
+const LEAD_HEALTH_RANK = { oscillating: 0, saturated_high: 1, saturated_low: 1, floor_masked: 2, settling: 3, stable: 4, idle: 5 }
+
+// One lane's per-morning EVIDENCE line — the very figure the verdict counted to reach its state.
+function leadHealthEvidence(lane) {
+  const n = (k) => (lane && Number.isFinite(lane[k]) ? lane[k] : 0)
+  const mornings = (v) => `${v} ${v === 1 ? 'morning' : 'mornings'}`
+  switch (lane?.state) {
+    case 'oscillating':    return `${n('flips')} reversals across ${mornings(n('present'))}`
+    case 'saturated_high': return `pinned at the ceiling · ${mornings(n('high_run'))}`
+    case 'saturated_low':  return `pinned at the floor · ${mornings(n('low_run'))}`
+    case 'floor_masked':   return `floor-caught · ${mornings(n('mask_runs'))} running`
+    case 'settling':       return `still converging · spread ${n('spread').toFixed(2)}`
+    case 'stable':         return `converged · holding ×${(Number.isFinite(lane?.last_weight) ? lane.last_weight : 1).toFixed(2)}`
+    default:               return 'even weight — never tuned'
+  }
+}
+
+// Headline shown above the narration — present even when narrate() stays silent (settling/idle/
+// abstained), so the panel never reads empty on a healthy-but-quiet loop.
+function leadHealthHeadline(status) {
+  switch (status) {
+    case 'unstable':    return 'The loop is chasing noise — reverted to a neutral lead order'
+    case 'constrained': return 'A lane has run out of band — the nudge has become a wall'
+    case 'flagged':     return 'The safety floor is masking a persistent overcall'
+    case 'settling':    return 'Still converging on its learned priorities'
+    case 'stable':      return 'Holding steady — the learned priorities have settled'
+    case 'idle':        return 'Nothing has tuned off neutral yet — nothing to watch'
+    default:            return 'Not enough graded history yet to judge the loop'
+  }
+}
+
 // One policy lane → the human record beneath its name: the hit-rate and resolved count that
 // EARNED the weight, or a calm "building" while it's still under the sample bar. Display fields stay
 // truthful even when the weight is held neutral, so a thin or safety-floored lane reads honestly.
@@ -1287,6 +1364,226 @@ function LeadPolicyPanel() {
       <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
         <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
           The <span className="font-semibold text-slate-500">tune</span> half of editorial precision: each lane's recent hit-rate becomes a bounded weight the brief applies when it picks the one lead — <span className="font-semibold text-emerald-600">lead more</span> with a lane that keeps earning the front page, <span className="font-semibold text-amber-600">ease off</span> one that keeps overcalling. Neutral = <span className="tabular-nums font-semibold text-slate-500">×1.00</span>; the band is ±{bandPct}%, so it reprioritises but never silences. <span className="font-semibold text-indigo-600">act_now is safety-floored</span> — promotable, never eased, because burying a real emergency is worse than crying wolf. Abstains until the record is graded. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+// One lane's weight history as a DIVERGENT sparkline — the shape is the diagnosis a single
+// snapshot can't show. Bars deflect UP from the centre baseline for a weight above neutral and
+// DOWN for below, each side normalised to its own half-band; a neutral morning is a centre tick,
+// an ungraded one a gap. Oscillation reads as a zigzag, saturation as a flat-topped run, a
+// converging lane as bars shrinking toward the line.
+function LeadHealthSeries({ series, bounds, state }) {
+  const vals = Array.isArray(series) ? series : []
+  const min = Number.isFinite(bounds?.min) ? bounds.min : 0.8
+  const max = Number.isFinite(bounds?.max) ? bounds.max : 1.2
+  const fill = (LEAD_HEALTH_LANE[state] || LEAD_HEALTH_LANE.idle).fill
+  if (!vals.length) return null
+  return (
+    <div className="relative h-7 w-full flex items-stretch gap-px" title="Per-morning weight — up = led more, down = eased, tick = neutral, gap = ungraded">
+      <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-slate-200" />
+      {vals.map((w, i) => {
+        if (!Number.isFinite(w)) return <div key={i} className="flex-1" />
+        if (w === 1) {
+          return (
+            <div key={i} className="relative flex-1">
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-slate-300" />
+            </div>
+          )
+        }
+        const up = w > 1
+        const mag = up ? (max > 1 ? (w - 1) / (max - 1) : 0) : (min < 1 ? (1 - w) / (1 - min) : 0)
+        const h = Math.max(Math.min(1, Math.max(0, mag)) * 50, 4)
+        return (
+          <div key={i} className="relative flex-1">
+            <div
+              className={cn('absolute left-1/2 -translate-x-1/2 w-[60%] min-w-[3px]', fill, up ? 'bottom-1/2 rounded-t-sm' : 'top-1/2 rounded-b-sm')}
+              style={{ height: `${h}%` }}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// One stability lane row: name over its verdict-state badge · the divergent sparkline · the very
+// figure the verdict counted to reach that state (reversals, run length, spread). State drives the
+// badge tone, the bar colour, and the evidence colour — one lane, one severity, read three ways.
+function LeadHealthLaneRow({ name, lane, bounds }) {
+  const tone = LEAD_HEALTH_LANE[lane?.state] || LEAD_HEALTH_LANE.idle
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={name}>{name}</div>
+        <span className={cn('mt-0.5 inline-flex items-center rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed', tone.badge)}>
+          {tone.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <LeadHealthSeries series={lane?.series} bounds={bounds} state={lane?.state} />
+      </div>
+      <span className={cn('w-28 shrink-0 text-right text-[10px] font-semibold leading-tight tabular-nums', tone.text)}>
+        {leadHealthEvidence(lane)}
+      </span>
+    </div>
+  )
+}
+
+// The self-aware stability monitor over the lead-policy loop — "watch the watcher" (layer 14).
+// Reads GET /api/ai/lead-policy-health (agency-only): the verdict that grades not the policy but
+// whether the LOOP that produced it is trustworthy right now. Oscillation reverts a lane to
+// neutral on its own (the one self-healing action); saturation and floor-masking are surfaced for
+// a human. Never client-facing — the whole tuning machinery stays behind the agency wall.
+function LeadPolicyHealthPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [health, setHealth] = useState(null)
+  const [error, setError] = useState('')
+
+  const fetchHealth = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const h = await api.getLeadPolicyHealth()
+      setHealth(h); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load policy stability'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchHealth() }, [fetchHealth])
+
+  const st = health?.status || 'abstained'
+  const tone = LEAD_HEALTH_TONE[st] || LEAD_HEALTH_TONE.abstained
+  const HeadIcon = tone.Icon
+  const action = LEAD_HEALTH_ACTION[health?.recommended_action] || null
+  const ActionIcon = action?.Icon
+  const narrative = (health?.narrative || '').trim()
+  const headline = leadHealthHeadline(st)
+  const windowUsed = health?.window_used || health?.requested?.days || 6
+  const historyLen = health?.history_len || 0
+  const bounds = health?.bounds || { min: 0.8, max: 1.2 }
+  const counts = health?.counts || {}
+  // concern figures, most-urgent first — only the non-zero ones, so a calm loop reads calm.
+  const concerns = [
+    counts.oscillating > 0 ? `${counts.oscillating} oscillating` : null,
+    counts.saturated > 0 ? `${counts.saturated} at bounds` : null,
+    counts.masked > 0 ? `${counts.masked} floor-masked` : null,
+    counts.settling > 0 ? `${counts.settling} settling` : null,
+    counts.stable > 0 ? `${counts.stable} stable` : null,
+  ].filter(Boolean)
+  // lanes ranked by verdict precedence (most-concerning first), sliced to the panel's depth.
+  const lanes = Object.entries(health?.lanes || {})
+    .sort((a, b) => {
+      const ra = LEAD_HEALTH_RANK[a[1]?.state] ?? 9, rb = LEAD_HEALTH_RANK[b[1]?.state] ?? 9
+      if (ra !== rb) return ra - rb
+      return (b[1]?.present || 0) - (a[1]?.present || 0)
+    })
+    .slice(0, 6)
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Activity className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Lead-policy stability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Watching the tuning loop for thrash · last {windowUsed} mornings
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Loop stability: ${st}`}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', tone.dot)} /> {tone.label}
+          </span>
+        )}
+        <button
+          onClick={fetchHealth}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Auditing the tuning loop…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load policy stability'}</p>
+            <button onClick={fetchHealth} className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition">
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && (
+          <>
+            <div className="flex items-start gap-2">
+              <HeadIcon className={cn('w-4 h-4 shrink-0 mt-0.5', tone.text)} />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+                {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+              </div>
+            </div>
+
+            {action && (
+              <div className="mt-3">
+                <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold', action.tone)}>
+                  <ActionIcon className="w-3.5 h-3.5" /> {action.label}
+                </span>
+                <p className="mt-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+                  {action.auto
+                    ? 'Applied automatically — the loop reverted itself to a neutral lead order this run; no action needed.'
+                    : 'Agency advisory — surfaced for a human to weigh, never auto-applied.'}
+                </p>
+              </div>
+            )}
+
+            {concerns.length > 0 && (
+              <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+                {concerns.join(' · ')} <span className="text-slate-300">across {historyLen} graded {historyLen === 1 ? 'morning' : 'mornings'}</span>
+              </p>
+            )}
+
+            {lanes.length > 0 ? (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Per-lane trajectory</p>
+                  <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />thrash</span>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />settled</span>
+                  </span>
+                </div>
+                <div className="space-y-2.5">
+                  {lanes.map(([key, lane]) => (
+                    <LeadHealthLaneRow key={key} name={laneLabel(key)} lane={lane} bounds={bounds} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+                <Inbox className="w-4 h-4 shrink-0" />
+                No lanes have moved off neutral yet — nothing to watch until the loop starts tuning.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">Watch the watcher.</span> The lead-policy loop tunes itself each morning; this reads its last {windowUsed} weights per lane and flags the failure one snapshot hides — a lane <span className="font-semibold text-rose-600">oscillating</span> on noise, one <span className="font-semibold text-amber-600">pinned to its band</span>, or a real overcall the <span className="font-semibold text-orange-600">safety floor is masking</span>. Oscillation reverts that lane to neutral on its own; the rest are surfaced for a human. Agency-only.
         </p>
       </div>
     </section>
