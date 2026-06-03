@@ -1389,3 +1389,226 @@ test('the 17d remediation guard is load-bearing — a lone key, a smuggled enum,
     'a real staged remediation spliced into a client pack must be rejected',
   )
 })
+
+// ============================================================
+// intel-v8 layer 18d — the CONSUMER engagement egress is leak-proof.
+// ------------------------------------------------------------
+// 18a/b/c built the morning-brief 👍/👎 loop: the consumer votes, the agency
+// reads a portfolio-wide reception aggregate (helpful_rate, a per-client board,
+// a watch list, trend halves) and the preview twin renders it. THIS is the only
+// rung where a human reader grades the system — so it is exactly where a privacy
+// regression would hurt: the aggregate is how the AGENCY sees the whole book, and
+// no client may ever see another client's reception, the portfolio rate, or even
+// the abstention floor that governs grading.
+//
+// The engagement aggregate never rides inside a brief pack (unlike the lead-policy
+// machinery the block above guards) — its egress is narrower and that is the point:
+//   1. narrateBriefEngagement(grade, {audience:'client'}) === '' UNCONDITIONALLY —
+//      the candid reception sentence is agency-only by construction, for every
+//      label and every trend, even when the agency voice is loud.
+//   2. recordBriefFeedback / getClientBriefFeedback return ONLY { as_of, signal } —
+//      the lone vote reflected back, never a rate, never a neighbour, never a count.
+//   3. getPortfolioEngagement is the dense agency instrument — and a structural
+//      guard proves it can NEVER be mistaken for a client egress.
+//
+// The sharp edge here, unique to this layer: 'helpful' | 'not_helpful' is a LEGIT
+// client value that crosses the egress every single vote. So the forbidden sweep
+// must catch the aggregate RATE `helpful_rate` while leaving the signal VALUE
+// untouched — `helpful_rate` is not a substring of `helpful` or `not_helpful`, and
+// the disjointness control below proves the 👎 vote passes clean. We forbid only
+// the distinctive aggregate identifiers (helpful_rate / recent_rate / older_rate /
+// by_client / watch / clients_graded / clients_total / requested_min_votes /
+// min_votes) and the two label VALUES that would betray a grade if smuggled as a
+// string (well_received / poorly_received) — never the generic count nouns
+// (total / n / helpful / ignored) that a lone honest vote legitimately shares.
+// ============================================================
+const {
+  recordBriefFeedback: recordBriefFeedback18d,
+  getClientBriefFeedback: getClientBriefFeedback18d,
+  getPortfolioEngagement: getPortfolioEngagement18d,
+} = require('../lib/briefEngagementEngine')
+const {
+  summarizeBriefEngagement: summarizeBriefEngagement18d,
+  narrateBriefEngagement: narrateBriefEngagement18d,
+} = require('../lib/briefEngagement')
+
+const FORBIDDEN_ENGAGEMENT_KEYS = [
+  'helpful_rate', 'recent_rate', 'older_rate',
+  'by_client', 'watch',
+  'clients_graded', 'clients_total',
+  'requested_min_votes', 'min_votes',
+]
+// Distinctive aggregate tokens only. NOT bare `helpful`/`not_helpful` (legit signal
+// values) and NOT generic `total`/`n`/`label`/`trend` (shared by a lone honest vote).
+const FORBIDDEN_ENGAGEMENT_TOKENS =
+  /helpful_rate|recent_rate|older_rate|by_client|clients_graded|clients_total|requested_min_votes|min_votes|well_received|poorly_received/
+
+function assertNoEngagementAggregate(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_ENGAGEMENT_KEYS.includes(k),
+          `${where}: client egress must not carry engagement-aggregate field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_ENGAGEMENT_TOKENS.test(JSON.stringify(pack)),
+    `${where}: engagement-aggregate vocabulary leaked into the serialized client egress`
+  )
+}
+
+// 10 votes on distinct ascending days so the pure grader's time-split is exactly the
+// older-half / recent-half we intend (it sorts by as_of, then signal). Each fixture
+// is engineered to land on a specific label×trend corner of the grading space.
+const mkVotes18d = (signals) =>
+  signals.map((signal, i) => ({ as_of: `2026-05-${String(i + 1).padStart(2, '0')}`, signal }))
+//                         older half (days 01-05)            recent half (days 06-10)
+const WELL_IMPROVING_18d = mkVotes18d(['helpful', 'helpful', 'helpful', 'not_helpful', 'not_helpful',
+  'helpful', 'helpful', 'helpful', 'helpful', 'helpful'])           // 8/10=0.80 → well_received; 0.6→1.0 improving
+const POORLY_DECLINING_18d = mkVotes18d(['helpful', 'helpful', 'helpful', 'not_helpful', 'not_helpful',
+  'not_helpful', 'not_helpful', 'not_helpful', 'not_helpful', 'helpful']) // 4/10=0.40 → poorly_received; 0.6→0.2 declining
+const FAIR_STEADY_18d = mkVotes18d(['helpful', 'not_helpful', 'helpful', 'not_helpful', 'helpful',
+  'helpful', 'not_helpful', 'helpful', 'not_helpful', 'helpful'])   // 6/10=0.60 → fair; 0.6→0.6 steady
+
+test('18d — narrateBriefEngagement is silent for the CLIENT across every label and trend; the agency hears it in identifier-free English', () => {
+  const fixtures = [
+    { label: 'well_received', trend: 'improving', events: WELL_IMPROVING_18d,
+      agency: 'Clients found the morning brief useful 8 of 10 times recently (~80%) — well received. Reception has been improving lately.' },
+    { label: 'poorly_received', trend: 'declining', events: POORLY_DECLINING_18d,
+      agency: 'Clients found the morning brief useful 4 of 10 times recently (~40%) — poorly received; worth a closer look. Heads up — reception has been slipping lately.' },
+    { label: 'fair', trend: 'steady', events: FAIR_STEADY_18d,
+      agency: 'Clients found the morning brief useful 6 of 10 times recently (~60%) — a fair reception.' },
+  ]
+  for (const f of fixtures) {
+    const grade = summarizeBriefEngagement18d(f.events, { minVotes: 3 })
+    assert.equal(grade.status, 'graded', `${f.label}/${f.trend} fixture must grade`)
+    assert.equal(grade.label, f.label, `fixture must grade to ${f.label}`)
+    assert.equal(grade.trend, f.trend, `fixture must trend ${f.trend}`)
+    // THE INVARIANT: the consumer never hears the aggregate, for ANY grade, loud or quiet.
+    assert.equal(
+      narrateBriefEngagement18d(grade, { audience: 'client' }), '',
+      `client narration must be '' for ${f.label}/${f.trend}`
+    )
+    // The agency DOES hear it — proving the client silence is a deliberate split, not a dead
+    // feature — and the candid sentence itself carries no machine identifier ('well received',
+    // never 'well_received'), so it could not seed a leak even if mis-routed.
+    const agency = narrateBriefEngagement18d(grade, { audience: 'agency' })
+    assert.equal(agency, f.agency, 'the agency sentence is grounded verbatim in the grade it explains')
+    assert.ok(
+      !FORBIDDEN_ENGAGEMENT_TOKENS.test(agency),
+      'even the candid agency sentence carries no aggregate identifier'
+    )
+  }
+  // A missing or un-graded grade is half-spoken to no one.
+  assert.equal(narrateBriefEngagement18d(null, { audience: 'agency' }), '')
+  assert.equal(
+    narrateBriefEngagement18d(
+      summarizeBriefEngagement18d([{ as_of: '2026-05-01', signal: 'helpful' }], { minVotes: 3 }),
+      { audience: 'agency' }
+    ),
+    '',
+    'a grade below the abstention floor is not narrated even to the agency'
+  )
+})
+
+test('18d — the consumer own-vote egress is exactly { as_of, signal }: the vote reflected back, never an aggregate', async () => {
+  await ready()
+  const c = await freshClient('Engagement Own-Vote Roofing Co')
+  // a fresh morning, no vote yet → signal null, but the shape is still exactly {as_of, signal}.
+  const before = await getClientBriefFeedback18d({ clientId: c, asOf: AS_OF })
+  assert.deepEqual(Object.keys(before).sort(), ['as_of', 'signal'])
+  assert.equal(before.signal, null)
+  assertNoEngagementAggregate(before, 'own-vote read before any vote')
+  // the client votes 👎, then changes to 👍 — the reversible upsert reflects the LATEST vote
+  // straight back, and nothing more.
+  const down = await recordBriefFeedback18d({ clientId: c, asOf: AS_OF, signal: 'not_helpful' })
+  assert.deepEqual(down, { as_of: AS_OF, signal: 'not_helpful' })
+  const up = await recordBriefFeedback18d({ clientId: c, asOf: AS_OF, signal: 'helpful' })
+  assert.deepEqual(up, { as_of: AS_OF, signal: 'helpful' })
+  // the read-back the UI paints is that same lone vote — and the guard passes on it,
+  // including the 👎 echo, proving the legit signal VALUE never trips the aggregate sweep.
+  const after = await getClientBriefFeedback18d({ clientId: c, asOf: AS_OF })
+  assert.deepEqual(after, { as_of: AS_OF, signal: 'helpful' })
+  assertNoEngagementAggregate(after, 'own-vote read after voting')
+  assertNoEngagementAggregate(down, 'the 👎 own-vote echo')
+})
+
+test('18d — a REAL agency aggregate trips the egress guard, while the same client own-vote read passes: the split is enforced, not hoped', async () => {
+  await ready()
+  // seed THREE clients with enough votes in a dedicated window to produce a graded portfolio —
+  // a per-client reception board, a watch list, helpful_rate, trend halves: the whole instrument.
+  const span = ['2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06', '2026-03-07']
+  const seedPlan = [
+    { name: 'Engagement Agg A', signals: ['helpful', 'helpful', 'helpful', 'helpful', 'helpful', 'not_helpful'] },          // 5/6 → well_received
+    { name: 'Engagement Agg B', signals: ['not_helpful', 'not_helpful', 'not_helpful', 'helpful', 'not_helpful', 'not_helpful'] }, // 1/6 → poorly_received → rides the watch list
+    { name: 'Engagement Agg C', signals: ['helpful', 'not_helpful', 'helpful', 'not_helpful', 'helpful', 'not_helpful'] },  // 3/6 → fair
+  ]
+  let probeClient = null
+  for (const p of seedPlan) {
+    const id = await freshClient(p.name)
+    if (probeClient == null) probeClient = id
+    for (let i = 0; i < span.length; i++) {
+      await recordBriefFeedback18d({ clientId: id, asOf: span[i], signal: p.signals[i] })
+    }
+  }
+  const aggregate = await getPortfolioEngagement18d({ asOf: '2026-03-07', days: 30, minVotes: 3 })
+  // sanity: a real, populated agency instrument — not an empty shell that would trip the guard vacuously.
+  assert.equal(aggregate.status, 'graded', 'the seeded window grades into a real portfolio reception')
+  assert.ok(
+    Array.isArray(aggregate.by_client) && aggregate.by_client.length === 3,
+    'the aggregate carries a three-client reception board'
+  )
+  assert.ok(
+    aggregate.watch.some((w) => w.label === 'poorly_received'),
+    'and a watch list naming the poorly-received client'
+  )
+  // THE SPLIT: the consumer guard THROWS on that agency aggregate — proof it is load-bearing,
+  // not decorative…
+  assert.throws(
+    () => assertNoEngagementAggregate(aggregate, 'portfolio-aggregate-probe'),
+    /engagement-aggregate field|engagement-aggregate vocabulary/,
+    'the agency aggregate is dense with reception machinery — the client guard MUST trip on it',
+  )
+  // …while the very same client's own-vote read-back — the only engagement bytes they ever
+  // receive — passes clean, carrying no neighbour, no rate, no board.
+  const own = await getClientBriefFeedback18d({ clientId: probeClient, asOf: '2026-03-07' })
+  assert.deepEqual(Object.keys(own).sort(), ['as_of', 'signal'])
+  assertNoEngagementAggregate(own, 'the seeded client own-vote read-back')
+})
+
+test('18d — the engagement guard is load-bearing: a lone rate, a board, a smuggled label all trip it; the legit own-vote never does', () => {
+  // a pack clean of everything but a single helpful_rate is caught BY NAME.
+  assert.throws(
+    () => assertNoEngagementAggregate({ vote: { signal: 'helpful', helpful_rate: 0.8 } }, 'lone-rate-probe'),
+    /helpful_rate/,
+    'a lone engagement rate in a client egress must be rejected by name',
+  )
+  // an agency reception board / watch list is caught by name.
+  assert.throws(
+    () => assertNoEngagementAggregate({ insight: { by_client: [], watch: [] } }, 'board-probe'),
+    /by_client|watch/,
+    'an agency reception board in a client egress must be rejected by name',
+  )
+  // a label VALUE smuggled in as a plain string is caught by the token sweep.
+  assert.throws(
+    () => assertNoEngagementAggregate({ note: 'this brief was well_received across the book' }, 'label-token-probe'),
+    /engagement-aggregate vocabulary/,
+    'a label identifier leaked as a string must be rejected by the token sweep',
+  )
+  // CRITICAL disjointness: the consumer's own vote — INCLUDING the 👎 signal value 'not_helpful' —
+  // is real client vocabulary and must NEVER trip the sweep. 'helpful_rate' is not a substring of
+  // 'not_helpful', so the rate-catcher and the signal value are provably disjoint.
+  assert.doesNotThrow(
+    () => assertNoEngagementAggregate({ as_of: '2026-05-18', signal: 'not_helpful' }, 'own-vote-down-probe'),
+    "the 👎 own-vote must pass — 'not_helpful' is the signal value, not the aggregate rate",
+  )
+  assert.doesNotThrow(
+    () => assertNoEngagementAggregate({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-up-probe'),
+    'the 👍 own-vote must pass clean',
+  )
+})

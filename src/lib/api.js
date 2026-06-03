@@ -249,6 +249,17 @@ export const api = {
   // clients_total }) plus echoed `requested` + one agency-voiced `narrative` (empty until graded).
   // `days` sizes the reception window (default 90 — reception moves slowly; clamp 1..365).
   getBriefEngagement:       (days)       => get(`/api/ai/brief-engagement${days ? `?days=${days}` : ''}`),
+  // CONSUMER OWN-VOTE (intel-v8 18d, client-scoped — the OUTWARD half of the engagement loop).
+  // getBriefEngagement above reads the whole-book aggregate (agency-only, 403 for a client token);
+  // THESE two are all a client ever touches — their own 👍/👎 on their own morning brief, one day.
+  // clientId is NEVER a param: the server derives it from the authenticated token
+  // (resolveConsumerScope), so a client can only ever write/read their OWN row, and the response is
+  // strictly { as_of, signal } (signal: 'helpful' | 'not_helpful' | null) — never a rate, a
+  // neighbour, or any rollup. submitBriefFeedback upserts (re-voting overwrites in place, so 👍→👎
+  // is one reversible call); getBriefFeedback reads the vote that now stands (signal null = not yet
+  // voted). `asOf` (optional 'YYYY-MM-DD') targets one morning; absent → today (server-side, UTC).
+  submitBriefFeedback:      (signal, asOf) => post('/api/ai/brief-feedback', asOf ? { signal, as_of: asOf } : { signal }),
+  getBriefFeedback:         (asOf)         => get(`/api/ai/brief-feedback${asOf ? `?as_of=${asOf}` : ''}`),
   // The TUNE half of the lead loop (agency-only, 403 for client tokens). brief-impact MEASURES
   // whether shipped leads held up; lead-policy turns that grade into the bounded per-lane policy
   // the morning brief applies — each triage lane's hit_rate → a weight in [0.8, 1.2], act_now

@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
   Award, Minus, ArrowUpRight, RefreshCw, ShieldCheck,
-  AlertTriangle, Crosshair, Eye, Radar,
+  AlertTriangle, Crosshair, Eye, Radar, ThumbsUp, ThumbsDown,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -676,6 +676,93 @@ function fmtBriefDay(raw) {
 // no confidence chip, no verification badge (the grounding still happens; it just isn't chrome
 // the client needs to see). posture renders in the client's voice (Looking good / Worth a glance /
 // Needs a look), never the agency-internal act/watch words. Self-hides when there's no brief yet.
+// ── Was this useful? — the consumer's 👍/👎 on THIS morning's brief (intel-v8, layer 18 / 18d) ──
+// The OUTWARD half of the self-improving loop and the ONLY rung where a human grades the system:
+// brief-impact / brief-quality / brief-health judge the narration from the inside; this captures the
+// one signal only the reader can give — did the brief actually help. Strictly own-vote by construction:
+// api.submitBriefFeedback / api.getBriefFeedback derive the client from the auth token (NEVER a body
+// param — server-side resolveConsumerScope) and round-trip ONLY { as_of, signal }. So this surface shows
+// the reader THEIR OWN vote reflected back and nothing else — no helpful_rate, no recent/older split, no
+// per-client board, no watch list, no clients_graded. The engagement AGGREGATE (getBriefEngagement /
+// summarizeBriefEngagement / narrateBriefEngagement's agency branch) lives entirely on /intelligence and
+// never touches this component. Reversible: re-tapping the other thumb upserts in place (one call), so
+// 👍→👎 just overwrites. Self-hides with the brief — it's rendered inside ClientMorningBrief, which
+// returns null when there's no brief to grade, so the prompt never appears without something to judge.
+function BriefFeedback({ asOf }) {
+  const [signal, setSignal] = useState(null)   // 'helpful' | 'not_helpful' | null — THIS reader's own vote, reflected back
+  const [busy,   setBusy]   = useState(false)
+  const [ready,  setReady]  = useState(false)   // own-vote read settled, so we never flash a wrong state
+
+  // Reflect the vote that currently stands for this morning. Any failure (demo mode, no key,
+  // transient) is silent — it leaves an unanswered prompt, never an error in the reader's face.
+  useEffect(() => {
+    let live = true
+    setReady(false)
+    api.getBriefFeedback(asOf)
+      .then(v => { if (live) setSignal(v?.signal || null) })
+      .catch(() => { if (live) setSignal(null) })
+      .finally(() => { if (live) setReady(true) })
+    return () => { live = false }
+  }, [asOf])
+
+  async function vote(next) {
+    if (busy) return
+    const prev = signal
+    setBusy(true)
+    setSignal(next)                                // optimistic — the tap lands instantly
+    try {
+      const v = await api.submitBriefFeedback(next, asOf)
+      if (v?.signal) setSignal(v.signal)           // the vote that now stands (server echoes { as_of, signal })
+    } catch {
+      setSignal(prev)                              // roll back on failure — never strand a wrong vote
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const voted = signal === 'helpful' || signal === 'not_helpful'
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-50 flex items-center gap-3">
+      <span className="text-[11px] font-bold text-slate-400">
+        {voted ? "Thanks — your feedback tunes tomorrow's brief." : 'Was this useful?'}
+      </span>
+      <div className="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => vote('helpful')}
+          disabled={busy || !ready}
+          aria-pressed={signal === 'helpful'}
+          aria-label="This brief was useful"
+          title="Helpful"
+          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border transition disabled:opacity-40 ${
+            signal === 'helpful'
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-600'
+              : 'border-slate-200 text-slate-300 hover:border-emerald-200 hover:text-emerald-500'
+          }`}
+        >
+          <ThumbsUp className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => vote('not_helpful')}
+          disabled={busy || !ready}
+          aria-pressed={signal === 'not_helpful'}
+          aria-label="This brief was not useful"
+          title="Not helpful"
+          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border transition disabled:opacity-40 ${
+            signal === 'not_helpful'
+              ? 'border-rose-300 bg-rose-50 text-rose-600'
+              : 'border-slate-200 text-slate-300 hover:border-rose-200 hover:text-rose-500'
+          }`}
+        >
+          <ThumbsDown className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ClientMorningBrief({ brief }) {
   const text = (brief?.brief_text || '').trim()
   if (!text) return null
@@ -719,6 +806,7 @@ function ClientMorningBrief({ brief }) {
         A fresh read each morning — written by your account&rsquo;s AI analyst from your verified
         numbers, days before your Monday recap.
       </p>
+      <BriefFeedback asOf={brief?.as_of} />
     </div>
   )
 }
