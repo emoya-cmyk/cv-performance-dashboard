@@ -235,6 +235,20 @@ export const api = {
   // judged, hits, misses, unknown, by_lane, by_audience }) plus echoed `requested` + one
   // agency-voiced `narrative` sentence.
   getBriefImpact:           (days)       => get(`/api/ai/brief-impact${days ? `?days=${days}` : ''}`),
+  // CONSUMER ENGAGEMENT (intel-v8 18, agency-only, 403 for client tokens). brief-impact and
+  // brief-health grade the brief from the INSIDE (did our editorial judgment hold? does the
+  // narrator still write?); this is the FIRST outward loop — it reads the one signal only the
+  // human can give, the 👍/👎 they left on their own morning brief. Rolls every client's votes
+  // over a trailing window into a portfolio helpful_rate + a per-client board (worst reception
+  // first) + a `watch` list of clients whose brief is landing poorly OR whose reception is
+  // declining — a consumer-satisfaction early warning the agency owns and the client never sees.
+  // The aggregate is strictly agency-only: this endpoint 403s a client token, and the client
+  // surface only ever reflects a client's OWN vote back, never any rollup. Returns the
+  // getPortfolioEngagement shape ({ status, helpful_rate, label, trend, recent_rate, older_rate,
+  // counts, requested_min_votes, by_client:[{client_id,name,...grade}], watch, clients_graded,
+  // clients_total }) plus echoed `requested` + one agency-voiced `narrative` (empty until graded).
+  // `days` sizes the reception window (default 90 — reception moves slowly; clamp 1..365).
+  getBriefEngagement:       (days)       => get(`/api/ai/brief-engagement${days ? `?days=${days}` : ''}`),
   // The TUNE half of the lead loop (agency-only, 403 for client tokens). brief-impact MEASURES
   // whether shipped leads held up; lead-policy turns that grade into the bounded per-lane policy
   // the morning brief applies — each triage lane's hit_rate → a weight in [0.8, 1.2], act_now

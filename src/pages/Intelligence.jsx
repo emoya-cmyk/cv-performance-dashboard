@@ -3,7 +3,7 @@ import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
-  Gauge, ShieldAlert, AlertOctagon, Wrench, Minus, Scissors, Stethoscope, RotateCcw,
+  Gauge, ShieldAlert, AlertOctagon, Wrench, Minus, Scissors, Stethoscope, RotateCcw, ThumbsUp,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -223,6 +223,19 @@ export default function Intelligence() {
           never auto-applied, never on the safety floor. Closes the loop the auditor opened —
           SENSE→ACT→AUDIT→REMEDIATE. Sits directly under the auditor whose escalation it answers. USE_API-gated. */}
       {USE_API && <LeadPolicyGovernanceRemediationPanel />}
+
+      {/* consumer engagement — intel-v8 (18c). The capstone of a different KIND. Everything
+          above — narration health, delivery, editorial precision, and the whole lead-policy
+          tower that tunes/governs/audits/remediates ITSELF — is the system grading the system.
+          This is the first and only OUTWARD loop: it reads GET /api/ai/brief-engagement
+          (agency-only) — the rollup of the 👍/👎 a client leaves on a morning brief — into a
+          portfolio reception rate + trend, a per-client board, and a watch list of clients
+          whose brief is landing flat or slipping. The consumer-side early-warning the inward
+          loops can structurally never see. Privacy is load-bearing: the aggregate is
+          agency-only by construction; a client only ever sees their own vote reflected back.
+          Sits last in the intelligence stack so the page reads "the system grading itself" →
+          "and finally, the reader grading the system." USE_API-gated. */}
+      {USE_API && <BriefEngagementPanel />}
 
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
@@ -1086,6 +1099,223 @@ function BriefImpactPanel() {
           A third, separate question — not did we <span className="font-semibold text-slate-500">write</span> the brief or <span className="font-semibold text-slate-500">deliver</span> it, but did the call we
           {' '}<span className="font-semibold text-slate-500">led with</span> hold up. A lead is graded only once its {window}-morning follow-through resolves — young calls abstain, never count against us.
           {' '}<span className="font-semibold text-emerald-600">earned</span> ≥70% · <span className="font-semibold text-amber-600">fair</span> 40–69% · <span className="font-semibold text-rose-600">overcalled</span> &lt;40%. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* ── consumer engagement — intel-v8 (18c): did the HUMAN find the brief useful? ─────────────────
+   Every panel above — narration reliability, delivery, editorial precision, and the whole
+   lead-policy tower that governs/audits/remediates its OWN tuning — is the system grading
+   itself. Not one asks the question a consumer product ultimately lives or dies on: did the
+   person who READ the brief find it useful? This is the first and only OUTWARD loop. It reads
+   GET /api/ai/brief-engagement (agency-only) — the rollup of the lightweight 👍/👎 a client
+   leaves on a morning brief — into a portfolio reception rate + label + trend, a per-client
+   board (worst reception first), and a watch list of clients whose brief is landing flat or
+   slipping: the consumer-side early-warning the inward loops can never see. Honest by
+   abstention: a client with fewer than a handful of votes abstains, never a rate off noise.
+   PRIVACY (load-bearing): the aggregate is AGENCY-ONLY by construction — a client only ever
+   sees their own vote reflected back (the pure narrator returns '' for the client audience
+   unconditionally), never the rate, the board, or the watch list. Sits as the capstone right
+   after the inward self-governance chain — read down the page and it goes "the system grading
+   itself" → "and finally, the reader grading the system." Self-fetching, USE_API-gated, agency-only. */
+const BRIEF_ENGAGEMENT_TONE = {
+  well_received:   { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', bar: 'bg-emerald-500', label: 'Well received' },
+  fair:            { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   bar: 'bg-amber-400',   label: 'A fair reception' },
+  poorly_received: { pill: 'border-rose-200 bg-rose-50 text-rose-700',          dot: 'bg-rose-500',    bar: 'bg-rose-400',    label: 'Landing flat' },
+  'no-data':       { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   bar: 'bg-slate-200',   label: 'Listening' },
+}
+
+// One per-client engagement grade → a compact three-state view, mirroring briefImpactView.
+// A client with no votes is 'none' (—); one with votes but below the grading floor is
+// 'pending' (still abstaining, never a misleading 0%); a graded client carries its rate %.
+function engagementClientView(c) {
+  if (!c || !c.n)            return { state: 'none',    pct: null, helpful: 0, n: 0 }
+  if (c.status !== 'graded') return { state: 'pending', pct: null, helpful: c.helpful || 0, n: c.n }
+  return { state: 'graded', pct: c.helpful_rate != null ? Math.round(c.helpful_rate * 100) : 0, helpful: c.helpful || 0, n: c.n }
+}
+
+// One client row in the per-client reception board: a worst-first dot · name · mini helpful-rate
+// bar · pct · helpful/n. A watch-listed client (landing flat or slipping) carries a rose dot so
+// the eye catches it; a still-abstaining client shows an empty track and a calm "·", never a 0%.
+function BriefEngagementClientRow({ client, watched }) {
+  const view = engagementClientView(client)
+  const tone = BRIEF_ENGAGEMENT_TONE[client?.label] || BRIEF_ENGAGEMENT_TONE['no-data']
+  return (
+    <div className="flex items-center gap-2">
+      <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', watched ? 'bg-rose-500' : 'bg-slate-200')} />
+      <span className="w-24 shrink-0 text-[11px] font-semibold text-slate-500 truncate" title={client?.name || 'Unnamed client'}>
+        {client?.name || 'Unnamed client'}
+      </span>
+      <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        {view.state === 'graded' && <div className={cn('h-full rounded-full transition-all', tone.bar)} style={{ width: `${view.pct}%` }} />}
+      </div>
+      <span className="w-9 shrink-0 text-right text-[11px] font-black tabular-nums text-slate-700">
+        {view.state === 'graded' ? `${view.pct}%` : view.state === 'pending' ? '·' : '—'}
+      </span>
+      <span className="w-9 shrink-0 text-right text-[10px] font-semibold text-slate-400 tabular-nums">
+        {view.helpful}/{view.n}
+      </span>
+    </div>
+  )
+}
+
+function BriefEngagementPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [eng, setEng]       = useState(null)
+  const [error, setError]   = useState('')
+
+  const fetchEngagement = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const e = await api.getBriefEngagement()
+      setEng(e); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load consumer engagement'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchEngagement() }, [fetchEngagement])
+
+  const graded    = eng?.status === 'graded'
+  const tone      = BRIEF_ENGAGEMENT_TONE[eng?.label] || BRIEF_ENGAGEMENT_TONE['no-data']
+  const pct       = graded && eng.helpful_rate != null ? Math.round(eng.helpful_rate * 100) : null
+  const narrative = (eng?.narrative || '').trim()
+  const days      = eng?.requested?.days || 90
+  const minVotes  = eng?.requested_min_votes || 3
+  const reason    = eng?.reason || 'insufficient_history'
+  const watch     = Array.isArray(eng?.watch) ? eng.watch : []
+  const watchIds  = new Set(watch.map((c) => c.client_id))
+  // by_client arrives worst-reception-first (ungraded last); cap the board so it stays scannable.
+  const board     = (Array.isArray(eng?.by_client) ? eng.by_client : []).slice(0, 6)
+  const trend     = eng?.trend
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <ThumbsUp className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Consumer engagement</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Did the reader find the brief useful · last {days} days
+          </p>
+        </div>
+        {status === 'done' && graded && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Reception: ${eng.label}`}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', tone.dot)} /> {tone.label}
+          </span>
+        )}
+        {status === 'done' && graded && trend === 'improving' && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700" title="Reception has been improving lately">
+            <ArrowUpCircle className="w-3 h-3" /> Improving
+          </span>
+        )}
+        {status === 'done' && graded && trend === 'declining' && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700" title="Reception has been slipping lately">
+            <TrendingDown className="w-3 h-3" /> Slipping
+          </span>
+        )}
+        <button
+          onClick={fetchEngagement}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Listening for reader feedback…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load consumer engagement'}</p>
+            <button
+              onClick={fetchEngagement}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && !graded && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2">
+            <Inbox className="w-4 h-4 shrink-0" />
+            {reason === 'insufficient_votes'
+              ? `Only ${eng?.n || 0} of ${minVotes} ratings needed have come in — the reception score firms up as readers leave 👍 / 👎 on the brief.`
+              : `No reader has rated a morning brief in the last ${days} days yet — this fills in as clients leave 👍 / 👎 on the brief they receive.`}
+          </div>
+        )}
+
+        {status === 'done' && graded && (
+          <>
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">{pct}%</span>
+                <span className="text-[11px] font-bold text-slate-400">found it useful</span>
+              </div>
+              <p className="text-[11px] font-semibold text-slate-400 pb-0.5">
+                {eng.helpful} of {eng.n} {eng.n === 1 ? 'rating' : 'ratings'} were 👍
+                {eng.clients_graded > 0 ? ` · ${eng.clients_graded} of ${eng.clients_total} ${eng.clients_total === 1 ? 'client' : 'clients'} rated` : ''}
+              </p>
+            </div>
+
+            <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+              <div className={cn('h-full rounded-full transition-all', tone.bar)} style={{ width: `${pct}%` }} />
+            </div>
+
+            {narrative && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+
+            {watch.length > 0 && (
+              <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50/50 px-3 py-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-rose-500 mb-1.5 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" /> Needs a look · {watch.length}
+                </p>
+                <div className="space-y-1">
+                  {watch.slice(0, 5).map((c) => (
+                    <div key={c.client_id} className="flex items-center gap-2 text-[11px]">
+                      <span className="flex-1 truncate font-semibold text-slate-700" title={c.name || 'Unnamed client'}>{c.name || 'Unnamed client'}</span>
+                      <span className="shrink-0 font-medium text-rose-600">
+                        {c.label === 'poorly_received'
+                          ? `landing flat · ${c.helpful_rate != null ? Math.round(c.helpful_rate * 100) : 0}%`
+                          : 'reception slipping'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {board.length > 0 && (
+              <div className="mt-3">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Who it's landing with</p>
+                <div className="space-y-1.5">
+                  {board.map((c) => (
+                    <BriefEngagementClientRow key={c.client_id} client={c} watched={watchIds.has(c.client_id)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The one <span className="font-semibold text-slate-500">outward</span> loop — every panel above is the system grading itself; this is the reader grading the brief.
+          {' '}A client is graded once {minVotes}+ ratings land — thinner records abstain, never a rate off noise.
+          {' '}<span className="font-semibold text-emerald-600">well received</span> ≥75% · <span className="font-semibold text-amber-600">fair</span> 50–74% · <span className="font-semibold text-rose-600">landing flat</span> &lt;50%.
+          {' '}The aggregate is <span className="font-semibold text-slate-500">agency-only</span>; a client only ever sees their own vote.
         </p>
       </div>
     </section>
