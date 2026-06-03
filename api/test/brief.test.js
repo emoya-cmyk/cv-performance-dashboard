@@ -2155,3 +2155,238 @@ test('20d — the efficacy guard is load-bearing: a smuggled step-scale, control
     () => assertNoEfficacy({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
     'the consumer own-vote must pass clean')
 })
+
+// ============================================================
+// 21d — EMPHASIS-CONTROL CONFINEMENT: the controller that feeds layer 20's measured
+// step-scale back into layer 19's flex MAGNITUDE is the outermost turn of the outward
+// loop — and, like the efficacy summary it consumes, it rides NO client byte and NO pack.
+// ------------------------------------------------------------
+// intel-v9 layer 21 closes the feedback path the four layers describe: 18 grades the brief
+// → 19 flexes tomorrow's supporting-cast cap on that grade with FIXED steps → 20 measures
+// whether the flex paid off and emits a bounded per-direction step-scale → 21 applies that
+// scale back into 19's step MAGNITUDE (a vindicated widen leans in one deeper, an
+// over-served widen eases off — never past the [MIN_CAP,MAX_CAP] rails 19 already owns).
+// applyEmphasisControl(emphasis, efficacy) is the densest agency instrument the stack
+// produces: it carries the move (lean_in/ease_off/hold/none), the machine reason
+// (efficacy_endorsed/_tempered/_neutral/no_flex_to_scale/insufficient_efficacy), the
+// applied step_scale, the base-vs-controlled step pair, and the PRE-control cap it started
+// from (emphasis_also_cap). The consumer must receive NONE of it.
+//
+// Layer 21's confinement matches 20's, STRICTER than 19's: where 19's engagement_policy
+// DOES ride the PORTFOLIO pack (agency telemetry, gated off the client pack), the
+// controller verdict rides NO pack at all — it exists only as the return of
+// applyEmphasisControl / the agency-gated /brief-emphasis-control route, computed at read
+// time over the persisted policy + efficacy history. So the agency surface that must trip
+// the client guard is the CONTROLLER VERDICT ITSELF, not a pack field — and we additionally
+// prove neither the client NOR the portfolio pack ever carries the control vocabulary.
+// narrateEmphasisControl is '' for the client UNCONDITIONALLY (the precedent of 18d/19d/20d).
+// 21a proves the controller in isolation, 21b/21c the read-path + UI wiring; here, the
+// EGRESS SPLIT — the fourth and outermost guard, stacked on 20→19→18.
+const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEmphasisControl')
+
+// Hand-built layer-20 recommendations, mirroring 21a's `eff()` helper — lets us drive each
+// control move (ease_off needs a <1 widen scale, hold needs exactly 1.0) without seeding a
+// history. applyEmphasisControl reads only efficacy.status + efficacy.recommendation.*, the
+// shape both this stub and the genuine summarizeEmphasisEfficacy output satisfy.
+const eff20 = (widen, tighten) => ({ status: 'graded', recommendation: { widen_step_scale: widen, tighten_step_scale: tighten, verdict: 'v', reason: 'r' } })
+
+// The controller verdict ALWAYS carries the move + reason at its root, the applied
+// step_scale, the base/controlled step pair, and the pre-control emphasis_also_cap — for
+// EVERY shape (moved, held, or passed-through). Guarding those six keys is therefore a
+// COMPLETE structural guard: no verdict can ride along without tripping. NOT the cap quartet
+// (also_cap/base_cap/min_cap/max_cap — those are layer 19's, legit on the portfolio pack and
+// already owned by the 19d guard we delegate to). NOT bare `hold`/`none`/`controlled`/
+// `tuned`/`idle`/`delta`/`direction` — generic English or shared status words that would
+// false-positive legit client prose and the focus object (mirrors 20d sparing bare
+// `steady`/`tempered`). The move is caught STRUCTURALLY (it cannot ride without control_move
+// beside it) AND by its two distinctive VALUES lean_in/ease_off in the token sweep below.
+const FORBIDDEN_CONTROL_KEYS = [
+  'control_move', 'control_reason', 'step_scale',
+  'base_step', 'controlled_step', 'emphasis_also_cap',
+]
+// Distinctive control tokens only — the structural keys as strings (plus the bare
+// `step_scale` stem, shared with 20d), the five machine REASON values, and the two
+// distinctive MOVE values lean_in/ease_off. Deliberately NOT bare `hold`/`none`: `hold` is
+// the agency narrative's own word ("holding a little more of the picture") and generic
+// client prose; `none` is ubiquitous English. The narrative says "paying off" / "leaning in
+// further" / "easing back toward the essentials" / "recovering attention", never the tokens.
+const FORBIDDEN_CONTROL_TOKENS =
+  /control_move|control_reason|step_scale|base_step|controlled_step|emphasis_also_cap|efficacy_endorsed|efficacy_tempered|efficacy_neutral|no_flex_to_scale|insufficient_efficacy|lean_in|ease_off/
+
+function assertNoControl(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_CONTROL_KEYS.includes(k),
+          `${where}: client egress must not carry emphasis-control field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_CONTROL_TOKENS.test(JSON.stringify(pack)),
+    `${where}: emphasis-control vocabulary leaked into the serialized client egress`
+  )
+  // Belt-and-suspenders: a clean control egress must also clear the 20d efficacy sweep
+  // (which delegates to 19d → 18d) — all four turns of the outward loop stack here.
+  assertNoEfficacy(pack, where)
+}
+
+// The real controller verdict: a vindicated layer-19 widen (EMPH_WIDEN, cap 3→4) re-scaled
+// by layer-20's endorsed ×1.25 → a lean_in to cap 5, the SAME verdict 21b earns end-to-end.
+const CTRL_TUNED = applyEmphasisControl(EMPH_WIDEN, EFF_GRADED)
+
+test('21d — narrateEmphasisControl is silent for the CLIENT unconditionally; the agency hears the re-tuned knob, identifier-free', () => {
+  // Sanity: the real upstream pair produced a MOVED, dense controller verdict — a lean_in
+  // that pushed the vindicated widen one deeper (pre-cap 4 → controlled cap 5), the same the
+  // /brief-emphasis-control route serves, so the agency narration below is non-vacuous.
+  assert.deepEqual(
+    { m: CTRL_TUNED.control_move, r: CTRL_TUNED.control_reason, cap: CTRL_TUNED.also_cap, pre: CTRL_TUNED.emphasis_also_cap, ctl: CTRL_TUNED.controlled },
+    { m: 'lean_in', r: 'efficacy_endorsed', cap: 5, pre: 4, ctl: true },
+    'endorsed efficacy leans the vindicated widen one deeper: pre-cap 4 → controlled cap 5')
+
+  // THE INVARIANT: the consumer never hears the controller — for ANY shape (moved, held,
+  // passed-through, abstained, or malformed), narration is '' UNCONDITIONALLY.
+  for (const [name, c] of [
+    ['lean_in', CTRL_TUNED],
+    ['ease_off', applyEmphasisControl(EMPH_WIDEN, eff20(0.5, 1.0))],
+    ['hold', applyEmphasisControl(EMPH_WIDEN, eff20(1.0, 1.0))],
+    ['passthrough', applyEmphasisControl(EMPH_IDLE, EFF_GRADED)],
+    ['insufficient', applyEmphasisControl(EMPH_WIDEN, EFF_INSUFFICIENT)],
+    ['null', null], ['malformed', { controlled: true }], ['junk', 'nope'],
+  ]) {
+    assert.equal(narrateEmphasisControl(c, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  // The agency DOES hear the moved controller — grounded in the efficacy that drove it —
+  // proving the client silence is a deliberate split, not a dead feature…
+  const agency = narrateEmphasisControl(CTRL_TUNED, { audience: 'agency' })
+  assert.ok(agency.length > 0, 'the agency hears the controller on a moved verdict')
+  assert.match(agency, /paying off|leaning in/, 'the lean_in verdict reads as plain English')
+  // …but stays mute on a pass-through (19 idle → no flex to scale) and on a neutral hold.
+  assert.equal(narrateEmphasisControl(applyEmphasisControl(EMPH_IDLE, EFF_GRADED), { audience: 'agency' }), '',
+    'the agency hears nothing when there was no flex to scale')
+  assert.equal(narrateEmphasisControl(applyEmphasisControl(EMPH_WIDEN, eff20(1.0, 1.0)), { audience: 'agency' }), '',
+    'the agency hears nothing on a neutral hold')
+
+  // Even the candid agency sentence carries no machine identifier — it could not seed a leak
+  // even if mis-routed (it says "leaning in further", "easing back", never "lean_in"/
+  // "ease_off"/"step_scale") — and clears the 20d + 19d + 18d sweeps too.
+  assert.ok(!FORBIDDEN_CONTROL_TOKENS.test(agency), 'agency control sentence carries no control identifier')
+  assert.ok(!FORBIDDEN_EFFICACY_TOKENS.test(agency), 'agency control sentence carries no efficacy identifier')
+  assert.ok(!FORBIDDEN_EMPHASIS_TOKENS.test(agency), 'agency control sentence carries no emphasis identifier')
+  assert.ok(!FORBIDDEN_ENGAGEMENT_TOKENS.test(agency), 'agency control sentence carries no aggregate identifier')
+})
+
+test('21d — the controller verdict trips the client guard, yet neither the client nor the portfolio pack carries its vocabulary: an endpoint-only split', async () => {
+  await ready()
+
+  // THE AGENCY SURFACE: the verdict the route returns is dense with control_move/
+  // control_reason/step_scale/base_step/controlled_step/emphasis_also_cap → the client guard
+  // MUST trip on it, confirming the cleanliness below is a real split, not a vacuous pass.
+  assert.throws(
+    () => assertNoControl(CTRL_TUNED, 'controller-verdict-probe'),
+    /emphasis-control field|emphasis-control vocabulary/,
+    'the controller verdict is dense with machinery — the client guard MUST trip on it')
+
+  // THE CLIENT SURFACE: the consumer pack carries none of the control machinery — and, by
+  // the stacked delegation inside assertNoControl, none of the 20d efficacy / 19d emphasis /
+  // 18d aggregate vocabulary either (all four outward-loop layers enforced at once).
+  const c = await freshClient('Emphasis Control Confinement Roofing Co')
+  const cli = await generateClientBrief(c, AS_OF)
+  assert.equal(cli.grounded, true)
+  assert.match(cli.brief_text, /^Good morning\./)
+  assertNoControl(cli.pack, 'generateClientBrief')
+  // the persisted read-back — the row the client actually fetches — is just as clean.
+  const cliRow = await getClientBrief(c, AS_OF)
+  assertNoControl(cliRow.pack, 'getClientBrief read-back')
+
+  // LIKE 20d: the controller rides NO pack — not even the agency/portfolio pack (it is
+  // computed only at read time by applyEmphasisControl / the route). The portfolio pack may
+  // legitimately carry the 19d engagement_policy PROJECTION, so the full belt-and-suspenders
+  // assertNoControl would rightly trip on THAT (the delegated 19d sweep), not on control; we
+  // assert the narrower, layer-21-specific truth: the CONTROL vocabulary never rides it.
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok(
+    !FORBIDDEN_CONTROL_TOKENS.test(JSON.stringify(port.pack)),
+    'the control vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_CONTROL_KEYS.includes(k), `the portfolio pack must not carry the control field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+
+  // …and the layer-19 projection the portfolio pack DOES carry stays pure layer 19: if the
+  // engagement_policy is present, it speaks only the 19 cap-policy vocabulary — no step_scale
+  // / control_move rode back in with the controller's feedback (21b persists the cap policy,
+  // never the controller verdict).
+  if (port.pack && port.pack.engagement_policy) {
+    const ep = port.pack.engagement_policy
+    assert.ok(!FORBIDDEN_CONTROL_TOKENS.test(JSON.stringify(ep)),
+      'the engagement_policy projection must carry no control vocabulary')
+    for (const k of FORBIDDEN_CONTROL_KEYS) {
+      assert.ok(!(k in ep), `the engagement_policy projection must not carry the control field "${k}"`)
+    }
+  }
+})
+
+test('21d — the control guard is load-bearing: a smuggled move, reason, scale, or step trips it; legit client fields never do', () => {
+  // each structural key is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoControl({ ctl: { control_move: 'lean_in' } }, 'move-probe'),
+    /emphasis-control field/, 'a lone control_move must be rejected by name')
+  assert.throws(() => assertNoControl({ ctl: { control_reason: 'efficacy_endorsed' } }, 'reason-probe'),
+    /emphasis-control field/, 'a lone control_reason must be rejected by name')
+  assert.throws(() => assertNoControl({ box: { step_scale: 1.25 } }, 'scale-probe'),
+    /emphasis-control field/, 'a lone step_scale must be rejected by name')
+  assert.throws(() => assertNoControl({ box: { base_step: 1 } }, 'base-step-probe'),
+    /emphasis-control field/, 'a lone base_step must be rejected by name')
+  assert.throws(() => assertNoControl({ box: { controlled_step: 2 } }, 'controlled-step-probe'),
+    /emphasis-control field/, 'a lone controlled_step must be rejected by name')
+  assert.throws(() => assertNoControl({ box: { emphasis_also_cap: 4 } }, 'pre-cap-probe'),
+    /emphasis-control field/, 'a lone emphasis_also_cap must be rejected by name')
+  // a machine REASON / MOVE value smuggled in as a plain string is caught by the token sweep.
+  assert.throws(() => assertNoControl({ note: 'the loop logged efficacy_tempered today' }, 'reason-token-probe'),
+    /emphasis-control vocabulary/, "a reason identifier ('efficacy_tempered') leaked as a string must be rejected")
+  assert.throws(() => assertNoControl({ note: 'reason: no_flex_to_scale' }, 'no-flex-token-probe'),
+    /emphasis-control vocabulary/, "'no_flex_to_scale' leaked as a string must be rejected")
+  assert.throws(() => assertNoControl({ note: 'we are easing: ease_off now' }, 'move-token-probe'),
+    /emphasis-control vocabulary/, "'ease_off' leaked as a string must be rejected")
+  // the whole controller verdict trips (move + reason + step pair all present).
+  assert.throws(() => assertNoControl(CTRL_TUNED, 'full-verdict-probe'),
+    /emphasis-control field|emphasis-control vocabulary/, 'the full controller verdict must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the client focus (Section D): direction + delta_pct + a 'steady' trend + a lane. None
+  //   of these is a control token (we forbid neither bare `direction` nor `steady`).
+  assert.doesNotThrow(
+    () => assertNoControl({ focus: { direction: 'down', delta_pct: -40, label: 'Leads', lane: 'act_now', metric: 'leads', trend: 'steady' } }, 'client-focus-probe'),
+    'the client focus is legit and must pass clean')
+  //   bare 'hold'/'holding'/'none' in plain brief prose — the move words we deliberately did
+  //   NOT forbid ('hold' is the agency narrative's own word; 'none' is generic English), so a
+  //   real client sentence using them must pass.
+  assert.doesNotThrow(
+    () => assertNoControl({ note: 'Leads hold steady; none of the channels slipped, so we are holding.' }, 'hold-none-prose-probe'),
+    "bare 'hold'/'none' in client prose are disjoint from the control tokens and must pass")
+  //   the supporting-cast array the controlled cap ultimately shapes — the EFFECT the client
+  //   sees, not the knob that sized it.
+  assert.doesNotThrow(
+    () => assertNoControl({ briefing: { also: [{ metric: 'leads', label: 'Leads' }, { metric: 'revenue', label: 'Revenue' }] } }, 'supporting-cast-probe'),
+    'the supporting-cast array must pass — it is the EFFECT of the cap, not the machinery')
+  //   the consumer's own engagement vote — the only engagement byte they ever send.
+  assert.doesNotThrow(
+    () => assertNoControl({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+
+  // FINAL disjointness ledger: the distinctive control tokens never appear in the generic
+  // English the brief actually uses — so stacking 21→20→19→18 can never false-positive a
+  // legit client egress on a control identifier (mirrors 20d's closing ledger).
+  assert.ok(!FORBIDDEN_CONTROL_TOKENS.test('hold none steady tempered holding leaning easing'),
+    'the control sweep is disjoint from the generic English the brief actually uses')
+})
