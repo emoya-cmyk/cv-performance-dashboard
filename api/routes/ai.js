@@ -67,6 +67,7 @@ const {
 const { narrateBriefEngagement } = require('../lib/briefEngagement')
 const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngagementLearning')
 const { narrateEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
+const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEmphasisControl')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -632,6 +633,46 @@ router.get('/brief-emphasis-efficacy', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-emphasis-efficacy error', err.message)
     res.status(500).json({ error: 'Failed to load brief emphasis efficacy' })
+  }
+})
+
+// ── GET /api/ai/brief-emphasis-control ────────────────────────────────────────
+// Layer 21 closes the second-order loop. Layer 19 flexes the supporting-cast cap on every
+// reception grade (widen when well-received, tighten when fading); layer 20 measures whether
+// those flexes PAID OFF and emits a bounded step-scale per direction; THIS surfaces the
+// controller that feeds 20's verdict back into 19's MAGNITUDE — leaning the flex one row
+// further when efficacy endorsed it, easing it one row back when efficacy tempered it, holding
+// otherwise. It composes the very pieces the engine wires into tomorrow's brief — deriveBriefEmphasis
+// over getPortfolioEngagement (the layer-19 flex), then briefEmphasisEfficacyFor (the layer-20
+// verdict), then applyEmphasisControl (the layer-21 scaling) — with the engine's own 90-day
+// efficacy window as the default, so in the graded happy path this returns the IDENTICAL
+// controlled decision the brief actually ships: reception → flex → efficacy → scaled flex, in one
+// payload. AGENCY-ONLY by construction — every input is per-client reception telemetry no client
+// may see, so it shares the portfolio 403 gate (resolvePortfolioScope) and narrateEmphasisControl
+// returns '' for the client audience unconditionally. ?days=N sizes the efficacy window (default
+// 90, clamped 1..365); ?as_of anchors its end (default today, UTC). No measured efficacy yet →
+// applyEmphasisControl is an honest identity pass-through of layer 19's flex (control_reason
+// 'insufficient_efficacy'), a clean 200; a thin/abstained grade → a clean idle pass-through; only
+// a genuine DB fault (engagement or efficacy read) is a 500, exactly like its two siblings above.
+router.get('/brief-emphasis-control', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days, 90)
+
+  try {
+    const emphasis = deriveBriefEmphasis(await getPortfolioEngagement({ asOf }))
+    const efficacy = await briefEmphasisEfficacyFor(asOf, days)
+    const control  = applyEmphasisControl(emphasis, efficacy)
+    res.json({
+      ...control,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateEmphasisControl(control, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-emphasis-control error', err.message)
+    res.status(500).json({ error: 'Failed to load brief emphasis control' })
   }
 })
 

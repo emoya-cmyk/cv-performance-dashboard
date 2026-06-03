@@ -228,6 +228,38 @@ async function briefEmphasisEfficacyFor(asOf, days) {
   return summarizeEmphasisEfficacy(buildEmphasisObservations(rows))
 }
 
+// ── intel-v9 layer 21b: scale layer 19's flex by its OWN measured efficacy ────
+// Layer 19 turns the reception grade into a ±1 supporting-cast cap flex; layer 20 measures
+// whether past flexes WORKED and emits a bounded step-scale per direction; THIS composes the
+// two — applyEmphasisControl reads 20's verdict on the direction 19 just flexed and leans the
+// magnitude one row further (efficacy endorsed) or eases it one row back (efficacy tempered),
+// closing the second-order loop: reception → flex → efficacy → scaled flex. The CONTROLLED cap
+// is what the brief actually uses, and the controlled decision is what we persist (below), so
+// layer 20 keeps grading the breadth the brief genuinely went out with — never a mislabel.
+// Fail-safe by construction, three ways: briefEngagementEmphasisFor is itself fail-safe (null
+// on a thrown error, an abstained object on a thin grade); an abstained or null 19 grade
+// short-circuits BEFORE any DB read and
+// is handed back as-is so the caller's `status !== 'abstained'` persist gate still suppresses a
+// thin morning; and if the (not-itself-fail-safe) efficacy read throws, we fall back to 19's
+// un-controlled decision — byte-identical to a 19b-only morning — never propagating the throw.
+// applyEmphasisControl is a pure module that never throws and is an exact identity pass-through
+// whenever there is no flex to scale or no measured efficacy yet, so until the loop has data the
+// controlled brief equals the 19-only brief. Uses the SAME default window the read endpoint
+// reports (EMPHASIS_EFFICACY_WINDOW = 90) so the engine and the endpoint compute one identical
+// controlled decision. Lazy require keeps load-time clean; the require cache makes it free after.
+const EMPHASIS_EFFICACY_WINDOW = 90
+async function briefEmphasisControlFor(asOf, days = EMPHASIS_EFFICACY_WINDOW) {
+  const emphasis = await briefEngagementEmphasisFor(asOf)
+  if (!emphasis || emphasis.status === 'abstained') return emphasis || null
+  try {
+    const { applyEmphasisControl } = require('./briefEmphasisControl')
+    const efficacy = await briefEmphasisEfficacyFor(asOf, days)
+    return applyEmphasisControl(emphasis, efficacy)
+  } catch {
+    return emphasis
+  }
+}
+
 // ── intel-v7 layer 14: watch the watcher ─────────────────────────────────────
 // leadPolicyFor hands back ONE morning's policy; the stability monitor needs the
 // TRAJECTORY. leadPolicyHistoryFor walks the day-anchors of an inclusive window
@@ -422,18 +454,27 @@ async function generatePortfolioBrief(asOf) {
   // it corrected and WHY. Apply whenever the governed order still tunes something ('tuned').
   const { policy: rawPolicy, governed: leadPolicy, governance, health } = await leadPolicyDecisionFor(day)
   const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned')
-  // CLOSE THE ENGAGEMENT LOOP (layer 19b): tune the supporting-cast breadth from the
-  // portfolio engagement grade. Fail-safe (null on error / thin grade) and a guaranteed
-  // no-op unless reception EARNED a move (status 'tuned' → also_cap differs from base 3).
-  // Recompute the briefing when EITHER the lead order OR the breadth changed: passing an
-  // idle/abstained leadPolicy is a no-op (applyLeadPolicyToFeed) and an undefined alsoCap
-  // falls back to the neutral cap, so the recompute stays set-identical to pulse.briefing
-  // except for whichever knob actually moved. pulse.roster is a pure sort, so this is the
-  // same set summarizePortfolioPulse already produced — only headline/also can re-aim.
-  const emphasis      = await briefEngagementEmphasisFor(day)
-  const applyEmphasis = !!(emphasis && emphasis.status === 'tuned')
+  // CLOSE THE ENGAGEMENT LOOP (layers 19b + 21b): tune the supporting-cast breadth from the
+  // portfolio engagement grade (19), then scale that flex by its OWN measured efficacy (21).
+  // briefEmphasisControlFor composes the two: layer 19 turns reception into a ±1 cap flex,
+  // layer 20 measures whether past flexes WORKED, and layer 21 leans the magnitude one row
+  // further (efficacy endorsed) or eases it one row back (efficacy tempered) — the second-
+  // order loop. It is fail-safe (null on error / thin grade) and an exact identity pass-through
+  // of layer 19's decision until the loop has measured efficacy, so the CONTROLLED cap equals
+  // the 19-only cap until there is data to act on. A guaranteed no-op unless the (controlled)
+  // grade EARNED a move (status 'tuned' → also_cap differs from base 3). Recompute the briefing
+  // when EITHER the lead order OR the breadth changed: passing an idle/abstained leadPolicy is a
+  // no-op (applyLeadPolicyToFeed) and an undefined alsoCap falls back to the neutral cap, so the
+  // recompute stays set-identical to pulse.briefing except for whichever knob actually moved.
+  // pulse.roster is a pure sort, so this is the same set summarizePortfolioPulse already
+  // produced — only headline/also can re-aim. We feed the CONTROLLED cap (not the raw 19 flex)
+  // so the brief ships the magnitude the loop actually endorses, and we persist that same
+  // controlled decision below — layer 20 then grades the breadth the brief genuinely went out
+  // with, never a mislabel, keeping the loop stable rather than self-reinforcing on a phantom.
+  const controlled    = await briefEmphasisControlFor(day)
+  const applyEmphasis = !!(controlled && controlled.status === 'tuned')
   const briefing      = ((applyPolicy || applyEmphasis) && Array.isArray(pulse.roster))
-    ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? emphasis.also_cap : undefined })
+    ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? controlled.also_cap : undefined })
     : pulse.briefing
   const pack  = buildPortfolioBriefPack({ ...pulse, briefing })
   const { text, model, grounded } = await generateBriefText(pack)
@@ -467,16 +508,49 @@ async function generatePortfolioBrief(asOf) {
   const remediation = leadRemediation.proposeLeadPolicyRemediation(
     await leadPolicyGovernanceAuditFor(day), rawPolicy)
   if (leadRemediation.shouldStageRemediation(remediation)) pack.lead_policy_remediation = remediation
-  // CLOSE THE ENGAGEMENT LOOP (layer 19b): the supporting-cast breadth the portfolio
+  // CLOSE THE ENGAGEMENT LOOP (layers 19b + 21b): the supporting-cast breadth the portfolio
   // engagement grade earned this morning — agency-only telemetry (also_cap vs base_cap, the
   // helpful_rate/label/trend that drove it, direction + reason). A SEPARATE loop from the
   // lead-policy tower above: that learns from our own editorial precision, this learns from
-  // the consumer's reception. Attached whenever the grade produced a real policy (status
-  // !== 'abstained'), INDEPENDENT of whether the cap moved — an 'idle' grade still tells the
-  // agency "reception steady, holding at 3". Set AFTER narration so the LLM narrator +
-  // grounding verifier never see the machinery; never on the client pack (generateClientBrief
-  // carries none — the client only ever experiences the EFFECT, a tighter or richer brief).
-  if (emphasis && emphasis.status !== 'abstained') pack.engagement_policy = emphasis
+  // the consumer's reception. As of layer 21b we persist the CONTROLLED decision — layer 19's
+  // raw flex AFTER layer 20's measured efficacy has scaled its magnitude — but ONLY its layer-19
+  // cap-policy projection: the controlled status/cap/delta/direction that actually shipped, in the
+  // exact deriveBriefEmphasis shape. We persist the controlled (not the raw) breadth DELIBERATELY:
+  // the brief shipped the controlled cap, so layer 20 must grade THAT to stay honest — persisting
+  // the raw 'widen' while the controller eased the cap back to neutral would mislabel a neutral
+  // brief's reception as a widen outcome and let the loop self-reinforce on a phantom. We persist
+  // ONLY the projection — NOT the controller provenance (control_move, control_reason, step_scale,
+  // base/controlled step counts, emphasis_also_cap) — because that provenance is layer-20/21
+  // vocabulary (`step_scale` is on the 20d FORBIDDEN_EFFICACY list) and is endpoint-only by the same
+  // rule efficacy is: the agency reads it live from /brief-emphasis-control, it never rides the
+  // serialized pack. The projection is the SAME 19b vocabulary that shipped before 21b, so this is
+  // byte-identical to the 19b-only record whenever the controller is an identity pass-through.
+  // Attached whenever the grade produced a real policy (status !== 'abstained'), INDEPENDENT of
+  // whether the cap moved — an 'idle' grade still tells the agency "reception steady, holding
+  // at 3". Set AFTER narration so the LLM narrator + grounding verifier never see the machinery;
+  // never on the client pack (generateClientBrief carries none — the client only ever
+  // experiences the EFFECT, a tighter or richer brief, never the second-order loop behind it).
+  if (controlled && controlled.status !== 'abstained') {
+    // Project the controller's superset down to layer 19's engagement_policy shape. Field names
+    // are identical to deriveBriefEmphasis except the reason, which the superset renames
+    // `emphasis_reason`; the raw-emphasis fallback path (briefEmphasisControlFor's catch) keeps
+    // it as `reason`, so accept either and never let it go undefined.
+    pack.engagement_policy = {
+      status:       controlled.status,
+      also_cap:     controlled.also_cap,
+      base_cap:     controlled.base_cap,
+      min_cap:      controlled.min_cap,
+      max_cap:      controlled.max_cap,
+      delta:        controlled.delta,
+      direction:    controlled.direction,
+      helpful_rate: controlled.helpful_rate,
+      label:        controlled.label,
+      trend:        controlled.trend,
+      n:            controlled.n,
+      reason:       controlled.emphasis_reason != null ? controlled.emphasis_reason
+        : (controlled.reason != null ? controlled.reason : null),
+    }
+  }
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,
