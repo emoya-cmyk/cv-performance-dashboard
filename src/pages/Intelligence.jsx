@@ -4,7 +4,7 @@ import {
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
   Gauge, ShieldAlert, AlertOctagon, Wrench, Minus, Scissors, Stethoscope, RotateCcw, ThumbsUp,
-  ArrowRight,
+  ArrowRight, ArrowLeftRight,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -41,6 +41,7 @@ export default function Intelligence() {
   const [pacing, setPacing]   = useState(null)         // { roster[], month, days_elapsed, days_in_month } — goal-pacing roster (agency-only)
   const [efficacy, setEfficacy] = useState(null)       // { base, plays[], count } — action→recovery efficacy ledger (pooled, anonymous)
   const [pulse, setPulse]     = useState(null)         // { roster[], as_of, window, lookback_days } — intra-week daily-pulse early warning (agency-only)
+  const [reallocation, setReallocation] = useState(null) // { roster[], as_of } — channel-reallocation roster (agency-only, prescriptive)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -54,16 +55,17 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Nine independent reads: the per-finding feed, the synthesized triage roster, the
+      // Ten independent reads: the per-finding feed, the synthesized triage roster, the
       // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
       // common-cause scan, the predictive early-warning roster, the goal-pacing roster, the
-      // action→recovery efficacy ledger (which of our OWN plays actually fix it), and the
-      // intra-week daily-pulse roster (who's sliding RIGHT NOW, days before the week closes).
+      // action→recovery efficacy ledger (which of our OWN plays actually fix it), the
+      // intra-week daily-pulse roster (who's sliding RIGHT NOW, days before the week closes),
+      // and the channel-reallocation roster (one defensible, reversible budget shift per client).
       // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
-      // of the eight synthesis reads stumbles its panel simply hides and the page degrades to
+      // of the nine synthesis reads stumbles its panel simply hides and the page degrades to
       // exactly what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj, pace, eff, pls] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(),
+      const [feed, roster, bench, recov, sys, traj, pace, eff, pls, realloc] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(), api.getReallocation(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -75,6 +77,7 @@ export default function Intelligence() {
       setPacing(pace.status === 'fulfilled' && Array.isArray(pace.value?.roster) ? pace.value : null)
       setEfficacy(eff.status === 'fulfilled' && Array.isArray(eff.value?.plays) ? eff.value : null)
       setPulse(pls.status === 'fulfilled' && Array.isArray(pls.value?.roster) ? pls.value : null)
+      setReallocation(realloc.status === 'fulfilled' && Array.isArray(realloc.value?.roster) ? realloc.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -333,6 +336,15 @@ export default function Intelligence() {
           before the month closes, not the post-mortem after. Agency-only (names peers + their
           targets, like triage + systemic + trajectory); hidden until at least one goal is off pace. */}
       {pacing?.roster?.length > 0 && <PacingPanel data={pacing} />}
+
+      {/* budget reallocation — the first PRESCRIPTIVE layer. Where pacing says WHO will miss,
+          this says WHAT to do about it: among a client's paid channels measuring the SAME
+          outcome, it compares realized cost-per-outcome, reads each channel's spend↔cost TREND
+          (is cost climbing as we feed it?), and proposes ONE small, reversible test shift —
+          "Google Ads is turning out leads ~31% cheaper than Facebook/Meta; test moving $180/wk."
+          Correlational hypotheses to test and watch, never guarantees. Agency-only (cross-account
+          roster + dollar moves); hidden until at least one defensible shift clears the floor. */}
+      {reallocation?.roster?.length > 0 && <ReallocationPanel data={reallocation} />}
 
       {/* systemic signals — the cross-client common-cause scan: the SAME adverse channel /
           metric / direction independently hitting ≥ minClients clients, collapsed into one
@@ -5429,6 +5441,161 @@ function PacingRow({ r }) {
                 <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${conf}%` }} />
               </div>
               <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">month {conf}% in</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Budget reallocation (agency roster, PRESCRIPTIVE) ───────────────────────
+   The first layer that doesn't just diagnose — it PROPOSES. For each client the engine compares
+   the paid channels measuring the SAME outcome on realized cost-per-outcome, reads each channel's
+   spend↔cost TREND (is the cost climbing the more we feed it?), and — when one channel is durably
+   cheaper and the move is defensible — proposes ONE small, reversible TEST shift of weekly budget.
+   Only 'reallocate' verdicts reach here (engine drops 'hold'/'insufficient'); sorted most-defensible
+   first (confidence → gap → $ saved). Correlational hypotheses to test and watch, NEVER guarantees,
+   and never a client scoreboard line — a media-buying call, so it's agency-only by construction. */
+const REALLOC_SHOWN = 6   // cap the rows so a busy book stays a glance
+
+// signal strength → chip + accent. 'strong' = the source's cost is CLIMBING as it scales while the
+// target holds cheaper (the climbing-cost case — sharper indigo); 'tentative' = the target is simply
+// cheaper right now, worth a modest test (softer indigo). Total map so an unexpected strength still
+// renders a sane row. Indigo throughout = the "smart-money" hue, distinct from the rose/amber alarms
+// above and the emerald recovery wins; the winning channel + the savings read in emerald inside the row.
+const REALLOC_STRENGTH_META = {
+  strong:    { label: 'Strong signal', chip: 'bg-indigo-50 text-indigo-700 border-indigo-200',  text: 'text-indigo-600', dot: 'bg-indigo-500' },
+  tentative: { label: 'Worth testing', chip: 'bg-indigo-50/70 text-indigo-500 border-indigo-100', text: 'text-indigo-500', dot: 'bg-indigo-400' },
+}
+const reallocStrengthMeta = (s) => REALLOC_STRENGTH_META[s] || REALLOC_STRENGTH_META.tentative
+
+// $/outcome + weekly $ shift → clean currency. Whole dollars once ≥ $100 or already integer (the
+// common case for cpo + a budget slice); 1–2 dp only for small fractional values so a "$8.50" never
+// renders "$8". null on non-finite → caller hides the clause.
+function fmtReallocUsd(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return null
+  const abs = Math.abs(v)
+  const digits = (Number.isInteger(v) || abs >= 100) ? 0 : abs >= 10 ? 1 : 2
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+// fraction (0.31, 0.12) → "31%" / "12%". null on non-finite → caller hides the clause.
+const fmtReallocPct = (frac) => Number.isFinite(Number(frac)) ? `${Math.round(Number(frac) * 100)}%` : null
+
+function ReallocationPanel({ data }) {
+  const roster = Array.isArray(data?.roster) ? data.roster : []
+  if (roster.length === 0) return null               // no defensible move → degrade to no panel
+  const shown  = roster.slice(0, REALLOC_SHOWN)
+  const hidden = roster.length - shown.length
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+          <ArrowLeftRight className="w-4 h-4 text-indigo-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Budget reallocation</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {roster.length} defensible spend shift{roster.length === 1 ? '' : 's'} · most-defensible first
+        </span>
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <ReallocationRow key={`${r.client_id}:${r.from}:${r.to}:${r.outcome}`} r={r} />)}
+      </div>
+
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more spend shift{hidden === 1 ? '' : 's'} to test</span>
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-indigo-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A move lands here when two paid channels chase the <span className="font-bold text-indigo-600">same outcome</span> and
+          one is durably turning it out cheaper — the engine proposes a small, reversible <span className="font-bold text-indigo-600">test
+          slice</span> of weekly budget and a metric to watch as it scales. These are correlational hypotheses to test and
+          watch, not guarantees. Agency-only — clients never see the cross-account roster, only their own results.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One proposed shift: whose, the cheaper target vs the costlier source on realized $/outcome, the
+   test slice to move, and the per-outcome savings. The left rail + headline gap read in the signal
+   color; the shift line walks source → target with the winner + savings in emerald (the upside);
+   the plain-English message is the media-buyer sentence; the right rail is the headline relative
+   gap over a confidence meter (how much the trend + sample back the call). */
+function ReallocationRow({ r }) {
+  const meta    = reallocStrengthMeta(r.strength)
+  const ol      = (r.outcome_label || 'outcome')
+  const fromCpo = fmtReallocUsd(r.from_cpo)
+  const toCpo   = fmtReallocUsd(r.to_cpo)
+  const shift   = fmtReallocUsd(r.suggested_shift)
+  const saved   = fmtReallocUsd(r.saved_per_outcome)
+  const testPct = fmtReallocPct(r.test_fraction)
+  const gapPct  = fmtReallocPct(r.gap_pct)
+  const conf    = r.confidence == null ? null : Math.max(0, Math.min(100, Math.round(Number(r.confidence) * 100)))
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border', meta.chip)}>
+          <ArrowLeftRight className="w-4 h-4" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{r.client_name || 'Unknown'}</span>
+            <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+              per {ol}
+            </span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', meta.chip)}>
+              {meta.label}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span className="font-bold text-slate-600">{r.from_label || 'source'}</span>
+            {fromCpo && <span className="tabular-nums font-bold text-slate-500">{fromCpo}</span>}
+            <ArrowRight className="w-3 h-3 text-slate-300" />
+            <span className="font-bold text-emerald-600">{r.to_label || 'target'}</span>
+            {toCpo && <span className="tabular-nums font-bold text-emerald-600">{toCpo}</span>}
+            <span className="text-slate-300">/{ol}</span>
+            {shift && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>test <span className="tabular-nums font-bold text-indigo-600">{shift}</span>/wk{testPct ? ` (${testPct})` : ''}</span>
+              </>
+            )}
+            {saved && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>saves <span className="tabular-nums font-bold text-emerald-600">{saved}</span>/{ol}</span>
+              </>
+            )}
+          </div>
+
+          {r.message && (
+            <p className="mt-1.5 text-[11px] font-medium text-slate-400 leading-relaxed">{r.message}</p>
+          )}
+        </div>
+
+        <div className="shrink-0 text-right w-24">
+          {gapPct != null && (
+            <>
+              <div className="text-lg font-black tabular-nums leading-none text-emerald-600">{gapPct}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">lower cost</div>
+            </>
+          )}
+          {conf != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${conf}%` }} />
+              </div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
             </div>
           )}
         </div>

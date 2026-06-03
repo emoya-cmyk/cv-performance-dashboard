@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, ArrowRight, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, ArrowRight, ArrowLeftRight, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -3187,6 +3187,170 @@ function BriefEmphasisControlTuningPanelPreview({ data }) {
   )
 }
 
+/* ── Budget reallocation (intel-v10, layer 24) — agency-only preview twin ──────
+   Mirrors the live ReallocationPanel/ReallocationRow on Intelligence.jsx with NO `cn`
+   (inline template-string classNames, <section>/border-brand-100 shell like the panels
+   above). The roster compares two paid channels chasing the SAME outcome on realized
+   $/outcome, reads a returns trend, and proposes ONE small reversible test slice — a
+   media-buying call, so it is agency-only by construction. Sample numbers; names fictional. */
+const REALLOC_STRENGTH_META_PV = {
+  strong:    { label: 'Strong signal', chip: 'bg-indigo-50 text-indigo-700 border-indigo-200',  dot: 'bg-indigo-500' },
+  tentative: { label: 'Worth testing', chip: 'bg-indigo-50/70 text-indigo-500 border-indigo-100', dot: 'bg-indigo-400' },
+}
+const reallocStrengthMetaPv = (s) => REALLOC_STRENGTH_META_PV[s] || REALLOC_STRENGTH_META_PV.tentative
+function fmtReallocUsdPv(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return null
+  const abs = Math.abs(v)
+  const digits = (Number.isInteger(v) || abs >= 100) ? 0 : abs >= 10 ? 1 : 2
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+const fmtReallocPctPv = (frac) => Number.isFinite(Number(frac)) ? `${Math.round(Number(frac) * 100)}%` : null
+
+// Three fictional shifts: two STRONG (source cost climbing as it scales) + one TENTATIVE
+// (target simply cheaper right now). All on the leads partition (google_ads ↔ meta) — the
+// only multi-channel outcome in the current config. Messages reproduce narrateReallocation
+// verbatim. Sorted confidence desc, mirroring the backend roster order.
+const REALLOC_ROSTER = {
+  as_of: '2026-06-03',
+  roster: [
+    {
+      client_id: 'c-summit', client_name: 'Summit Eyecare',
+      outcome: 'leads', outcome_label: 'lead',
+      from: 'google_ads', to: 'meta', from_label: 'Google Ads', to_label: 'Facebook/Meta',
+      from_cpo: 78, to_cpo: 54, gap_pct: 0.31, saved_per_outcome: 24,
+      suggested_shift: 156, test_fraction: 0.12, strength: 'strong', confidence: 0.82,
+      from_trend: 0.41, to_trend: -0.06,
+      message: "Google Ads's cost per lead has been climbing the more you spend into it, while Facebook/Meta is holding a lower cost per lead — consider testing a shift of about 12% of Google Ads budget toward Facebook/Meta and watch whether Facebook/Meta holds its cost as it scales.",
+    },
+    {
+      client_id: 'c-harbor', client_name: 'Harbor Point Dental',
+      outcome: 'leads', outcome_label: 'lead',
+      from: 'meta', to: 'google_ads', from_label: 'Facebook/Meta', to_label: 'Google Ads',
+      from_cpo: 96, to_cpo: 61, gap_pct: 0.36, saved_per_outcome: 35,
+      suggested_shift: 263, test_fraction: 0.15, strength: 'strong', confidence: 0.74,
+      from_trend: 0.33, to_trend: 0.02,
+      message: "Facebook/Meta's cost per lead has been climbing the more you spend into it, while Google Ads is holding a lower cost per lead — consider testing a shift of about 15% of Facebook/Meta budget toward Google Ads and watch whether Google Ads holds its cost as it scales.",
+    },
+    {
+      client_id: 'c-cedar', client_name: 'Cedar & Oak Interiors',
+      outcome: 'leads', outcome_label: 'lead',
+      from: 'meta', to: 'google_ads', from_label: 'Facebook/Meta', to_label: 'Google Ads',
+      from_cpo: 41, to_cpo: 33, gap_pct: 0.20, saved_per_outcome: 8,
+      suggested_shift: 90, test_fraction: 0.10, strength: 'tentative', confidence: 0.58,
+      from_trend: 0.09, to_trend: 0.04,
+      message: "Google Ads is currently turning out leads at about 20% lower cost than Facebook/Meta — worth testing a modest shift of budget from Facebook/Meta toward Google Ads, keeping an eye on whether Google Ads holds that cost as it takes more spend.",
+    },
+  ],
+}
+
+function ReallocationRowPreview({ r }) {
+  const meta    = reallocStrengthMetaPv(r.strength)
+  const ol      = (r.outcome_label || 'outcome')
+  const fromCpo = fmtReallocUsdPv(r.from_cpo)
+  const toCpo   = fmtReallocUsdPv(r.to_cpo)
+  const shift   = fmtReallocUsdPv(r.suggested_shift)
+  const saved   = fmtReallocUsdPv(r.saved_per_outcome)
+  const testPct = fmtReallocPctPv(r.test_fraction)
+  const gapPct  = fmtReallocPctPv(r.gap_pct)
+  const conf    = r.confidence == null ? null : Math.max(0, Math.min(100, Math.round(Number(r.confidence) * 100)))
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5 border ${meta.chip}`}>
+          <ArrowLeftRight className="w-4 h-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800 truncate max-w-[14rem]">{r.client_name || 'Unknown'}</span>
+            <span className="inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border bg-slate-50 text-slate-500 border-slate-200">
+              per {ol}
+            </span>
+            <span className={`inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${meta.chip}`}>
+              {meta.label}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] font-semibold text-slate-400">
+            <span className="font-bold text-slate-600">{r.from_label || 'source'}</span>
+            {fromCpo && <span className="tabular-nums font-bold text-slate-500">{fromCpo}</span>}
+            <ArrowRight className="w-3 h-3 text-slate-300" />
+            <span className="font-bold text-emerald-600">{r.to_label || 'target'}</span>
+            {toCpo && <span className="tabular-nums font-bold text-emerald-600">{toCpo}</span>}
+            <span className="text-slate-300">/{ol}</span>
+            {shift && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>test <span className="tabular-nums font-bold text-indigo-600">{shift}</span>/wk{testPct ? ` (${testPct})` : ''}</span>
+              </>
+            )}
+            {saved && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span>saves <span className="tabular-nums font-bold text-emerald-600">{saved}</span>/{ol}</span>
+              </>
+            )}
+          </div>
+          {r.message && (
+            <p className="mt-1.5 text-[11px] font-medium text-slate-400 leading-relaxed">{r.message}</p>
+          )}
+        </div>
+        <div className="shrink-0 text-right w-24">
+          {gapPct != null && (
+            <>
+              <div className="text-lg font-black tabular-nums leading-none text-emerald-600">{gapPct}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">lower cost</div>
+            </>
+          )}
+          {conf != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={`h-full rounded-full ${meta.dot}`} style={{ width: `${conf}%` }} />
+              </div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReallocationPanelPreview({ data }) {
+  const roster = Array.isArray(data?.roster) ? data.roster : []
+  if (roster.length === 0) return null
+  const shown  = roster.slice(0, 6)
+  const hidden = roster.length - shown.length
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+          <ArrowLeftRight className="w-4 h-4 text-indigo-500" />
+        </span>
+        <h2 className="text-sm font-black text-slate-900">Budget reallocation</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {roster.length} defensible spend shift{roster.length === 1 ? '' : 's'} · most-defensible first
+        </span>
+      </div>
+      <div className="divide-y divide-slate-50">
+        {shown.map((r) => <ReallocationRowPreview key={`${r.client_id}:${r.from}:${r.to}:${r.outcome}`} r={r} />)}
+      </div>
+      {hidden > 0 && (
+        <div className="px-4 py-2 bg-slate-50/40 border-t border-slate-50 text-center">
+          <span className="text-[11px] font-semibold text-slate-400">+{hidden} more spend shift{hidden === 1 ? '' : 's'} to test</span>
+        </div>
+      )}
+      <div className="px-4 py-2.5 bg-indigo-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A move lands here when two paid channels chase the <span className="font-bold text-indigo-600">same outcome</span> and
+          one is durably turning it out cheaper — the engine proposes a small, reversible <span className="font-bold text-indigo-600">test
+          slice</span> of weekly budget and a metric to watch as it scales. These are correlational hypotheses to test and
+          watch, not guarantees. Agency-only — clients never see the cross-account roster, only their own results.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3575,6 +3739,14 @@ export default function PulseDiagnosisPreview() {
           <BriefEmphasisControlTuningPanelPreview data={BRIEF_EMPHASIS_CONTROL_TUNING} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The rung that <span className="font-bold text-slate-600">tunes the governor's own grip</span>. The governor above is an <span className="font-bold text-slate-600">acute</span> breaker — it watches one trailing window and, the morning the controller is hunting, benches it to baseline. But a breaker that fires the same morning over and over is itself a signal: the controller isn't just hunting <span className="italic">today</span>, it's hunting <span className="font-bold text-slate-600">chronically</span>. This is the <span className="font-bold text-slate-600">gain schedule</span>: it reads a <span className="font-bold text-slate-600">history</span> of the governor's verdicts and, when hunting <span className="font-bold text-rose-600">recurs</span> across mornings, it narrows how far the controller is allowed to swing <span className="italic">at all</span> — a smaller breadth <span className="font-bold text-slate-600">reach</span> — then <span className="font-bold text-sky-600">hands the full range back</span> the moment the loop strings together a clean run. Here the governor's record keeps coming back unstable — <span className="font-bold text-rose-600">three hunting mornings in six</span>, the latest still unstable — so the schedule trims the controller's reach from <span className="tabular-nums">two rows to one</span>: tomorrow it may move the cap only between <span className="tabular-nums">2 and 4</span>, not the full <span className="tabular-nums">1–5</span>, until it proves it can hold. The self-tuning re-tuned, the re-tuning governed — and now <span className="font-bold text-slate-600">the governor's grip itself scheduled</span> from its track record. <span className="font-bold text-slate-600">Non-circular by design</span>: it schedules off the governor's read of the <span className="font-bold text-slate-600">raw</span> controller, so the breaker keeps grading an un-tuned loop and the narrowing can't hide its own cause; the only mark it leaves on a brief is a quieter cap integer. Endpoint-only and honest by abstention: too few governor mornings and it stays at full range; a calm record and it never trims. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned, governed, or gain-scheduled.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Budget reallocation · the first prescriptive money move</p>
+          <ReallocationPanelPreview data={REALLOC_ROSTER} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            Every rung above grades the <span className="font-bold text-slate-600">narration</span> — what the brief says and how well it says it. This is the first rung that moves <span className="font-bold text-indigo-600">money</span>. It looks across the book for two paid channels chasing the <span className="font-bold text-slate-600">same outcome</span> — leads, booked jobs — and compares them on the only thing that pays out, <span className="font-bold text-slate-600">realized cost per outcome</span>, then reads each channel&rsquo;s <span className="font-bold text-slate-600">returns trend</span> from how that cost moves as spend scales. When one channel&rsquo;s cost is <span className="font-bold text-rose-600">climbing as it grows</span> while another holds a <span className="font-bold text-emerald-600">durably cheaper</span> cost, it proposes <span className="font-bold text-slate-600">one</span> small, reversible <span className="font-bold text-indigo-600">test slice</span> of weekly budget toward the cheaper channel — and names the metric to watch as it takes the spend. Ranked most-defensible first by <span className="font-bold text-slate-600">confidence → gap → dollars saved</span>; a <span className="font-bold text-indigo-600">strong</span> signal is a climbing-cost source, a <span className="font-bold text-indigo-500">tentative</span> one is merely cheaper right now. These are <span className="font-bold text-slate-600">correlational hypotheses to test and watch, never guarantees</span> — the engine abstains rather than guess when no move is defensible. <span className="font-bold text-slate-600">Agency-only by construction</span> — a media-buying call across accounts, so a client never sees the cross-account roster, only their own results.
           </p>
         </div>
 
