@@ -260,6 +260,84 @@ async function briefEmphasisControlFor(asOf, days = EMPHASIS_EFFICACY_WINDOW) {
   }
 }
 
+// ── intel-v9 layer 22: watch the CONTROLLER ──────────────────────────────────
+// Layers 19→20→21 form a CLOSED control loop: 19 flexes the supporting-cast cap from
+// reception, 20 measures whether the flex worked, 21 leans/eases the flex MAGNITUDE by that
+// measurement. A closed loop can misbehave — HUNT (oscillate the breadth morning after
+// morning) or SATURATE (pin the cap at a rail for days). Layer 22 watches the CONTROLLER
+// itself: it reconstructs the trajectory of layer-21 decisions and classifies stability,
+// carrying ONE self-healing action — 'damp' on hunting, the signal the morning generator
+// consults to bench the controller and ship layer 19's UN-modulated cap until the thrash
+// settles. The direct single-track sibling of layer 14's lead-policy monitor, on the
+// engagement tower. Pure, dependency-free top-level require (mirrors policyHealth).
+const controlHealth = require('./briefEmphasisControlHealth')
+
+// briefEmphasisControlFor hands back ONE morning's controlled decision; the stability monitor
+// needs the TRAJECTORY. emphasisControlHistoryFor walks the day-anchors of an inclusive window
+// ending at `asOf`, OLDEST->NEWEST, replaying the controller that WOULD have been live each
+// morning (each anchor re-composes 19+20+21 against that day's grades, so this reconstructs the
+// real arc, not N copies of today). Each kept element is the controller superset spread under an
+// { as_of, ... } wrapper — exactly the shape assessEmphasisControlHealth.normControl consumes (it
+// reads also_cap/control_move/direction and tolerates the rare raw-emphasis fallback, which lacks
+// control_move and so reads as a neutral 'none' move — never a false hunt). An abstained/null
+// morning (thin or pre-loop grade) contributes nothing, so it reads as a gap, never a throw.
+// span is clamped to [DEFAULT_MIN_HISTORY, CONTROL_HISTORY_SPAN_MAX]: two is the fewest the
+// monitor will judge, fourteen caps the per-morning replay cost; the default is the monitor's own
+// window so a once-daily generation mints exactly that many controller decisions to assess.
+const CONTROL_HISTORY_SPAN_MAX = 14
+function clampControlSpan(span) {
+  if (span == null || span === '') return controlHealth.DEFAULT_WINDOW
+  const n = Math.floor(Number(span))
+  if (!Number.isFinite(n)) return controlHealth.DEFAULT_WINDOW
+  return Math.max(controlHealth.DEFAULT_MIN_HISTORY, Math.min(CONTROL_HISTORY_SPAN_MAX, n))
+}
+
+async function emphasisControlHistoryFor(asOf, span) {
+  const to  = asOf || defaultAsOf()
+  const n   = clampControlSpan(span)
+  const out = []
+  for (let i = n - 1; i >= 0; i--) {
+    const day = isoDayMinus(to, i)
+    const ctl = await briefEmphasisControlFor(day)
+    if (ctl && ctl.status !== 'abstained') out.push({ as_of: day, ...ctl })
+  }
+  return out
+}
+
+// The controller's stability verdict over that window — pure read, never throws
+// (assessEmphasisControlHealth abstains on thin history). Used by the morning generator's
+// self-healing damp gate AND the agency read endpoint; echoed nowhere to the client.
+async function emphasisControlHealthFor(asOf, span) {
+  return controlHealth.assessEmphasisControlHealth(await emphasisControlHistoryFor(asOf, span))
+}
+
+// Layer 22 self-heal projection. When the controller is benched for HUNTING, recover layer 19's
+// UN-modulated decision from the controller superset (no extra read): the pre-control cap
+// (emphasis_also_cap — layer 19's clamped flex before 21 touched it) becomes the shipped cap,
+// the delta/direction/status are re-derived from it against base_cap, and the controller
+// provenance is zeroed (control_move 'none', reason 'damped_unstable', step_scale null) so the
+// persisted engagement_policy projection reads honestly as a 19-only morning. Pure and total:
+// every numeric field has a Number-coerced fallback, and a fallback-shaped `controlled` (the rare
+// raw-emphasis path, which has no emphasis_also_cap) already carries its own un-modulated also_cap,
+// so reverting it is an idempotent no-op. Never throws.
+function dampEmphasis(c) {
+  const base     = Number(c.base_cap)
+  const cap      = Number(c.emphasis_also_cap != null ? c.emphasis_also_cap : c.also_cap)
+  const safeBase = Number.isFinite(base) ? base : cap
+  const delta    = Number.isFinite(cap) ? cap - safeBase : 0
+  const dir      = delta > 0 ? 'widen' : delta < 0 ? 'tighten' : 'neutral'
+  return {
+    ...c,
+    status:         delta === 0 ? 'idle' : 'tuned',
+    also_cap:       Number.isFinite(cap) ? cap : c.also_cap,
+    delta,
+    direction:      dir,
+    control_move:   'none',
+    control_reason: 'damped_unstable',
+    step_scale:     null,
+  }
+}
+
 // ── intel-v7 layer 14: watch the watcher ─────────────────────────────────────
 // leadPolicyFor hands back ONE morning's policy; the stability monitor needs the
 // TRAJECTORY. leadPolicyHistoryFor walks the day-anchors of an inclusive window
@@ -472,9 +550,21 @@ async function generatePortfolioBrief(asOf) {
   // controlled decision below — layer 20 then grades the breadth the brief genuinely went out
   // with, never a mislabel, keeping the loop stable rather than self-reinforcing on a phantom.
   const controlled    = await briefEmphasisControlFor(day)
-  const applyEmphasis = !!(controlled && controlled.status === 'tuned')
+  // WATCH THE CONTROLLER (layer 22) + SELF-HEAL. Assess the layer-21 controller's OWN stability
+  // over the trailing window. If it is HUNTING (oscillating the breadth morning after morning),
+  // bench it for this morning: ship layer 19's UN-modulated cap instead of the thrashing
+  // controlled cap — the controller's hands come off the wheel until the oscillation settles.
+  // `effective` is the decision the brief actually ships AND the one we persist below, so layer 20
+  // keeps grading the breadth that genuinely went out (damped or not), never a mislabel. Fail-safe:
+  // emphasisControlHealthFor is a pure read over the same fail-safe controller, and any non-hunting
+  // verdict (stable/settling/constrained/idle/abstained) leaves `controlled` untouched — the engine
+  // behaves byte-identically to 21b until a hunt is actually proven over the window.
+  const controlHealthVerdict = await emphasisControlHealthFor(day)
+  const effective     = (controlHealth.shouldDampControl(controlHealthVerdict) && controlled)
+    ? dampEmphasis(controlled) : controlled
+  const applyEmphasis = !!(effective && effective.status === 'tuned')
   const briefing      = ((applyPolicy || applyEmphasis) && Array.isArray(pulse.roster))
-    ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? controlled.also_cap : undefined })
+    ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? effective.also_cap : undefined })
     : pulse.briefing
   const pack  = buildPortfolioBriefPack({ ...pulse, briefing })
   const { text, model, grounded } = await generateBriefText(pack)
@@ -530,27 +620,40 @@ async function generatePortfolioBrief(asOf) {
   // at 3". Set AFTER narration so the LLM narrator + grounding verifier never see the machinery;
   // never on the client pack (generateClientBrief carries none — the client only ever
   // experiences the EFFECT, a tighter or richer brief, never the second-order loop behind it).
-  if (controlled && controlled.status !== 'abstained') {
-    // Project the controller's superset down to layer 19's engagement_policy shape. Field names
-    // are identical to deriveBriefEmphasis except the reason, which the superset renames
-    // `emphasis_reason`; the raw-emphasis fallback path (briefEmphasisControlFor's catch) keeps
-    // it as `reason`, so accept either and never let it go undefined.
+  if (effective && effective.status !== 'abstained') {
+    // Project the shipped decision's superset down to layer 19's engagement_policy shape. This is
+    // `effective` — the controlled decision normally, or layer 19's UN-modulated decision when the
+    // layer-22 monitor benched a hunting controller above — so what we persist is exactly the
+    // breadth that went out, and layer 20 grades reality whether or not we damped. Field names are
+    // identical to deriveBriefEmphasis except the reason, which the superset renames
+    // `emphasis_reason`; the raw-emphasis fallback path (briefEmphasisControlFor's catch) keeps it
+    // as `reason`, so accept either and never let it go undefined.
     pack.engagement_policy = {
-      status:       controlled.status,
-      also_cap:     controlled.also_cap,
-      base_cap:     controlled.base_cap,
-      min_cap:      controlled.min_cap,
-      max_cap:      controlled.max_cap,
-      delta:        controlled.delta,
-      direction:    controlled.direction,
-      helpful_rate: controlled.helpful_rate,
-      label:        controlled.label,
-      trend:        controlled.trend,
-      n:            controlled.n,
-      reason:       controlled.emphasis_reason != null ? controlled.emphasis_reason
-        : (controlled.reason != null ? controlled.reason : null),
+      status:       effective.status,
+      also_cap:     effective.also_cap,
+      base_cap:     effective.base_cap,
+      min_cap:      effective.min_cap,
+      max_cap:      effective.max_cap,
+      delta:        effective.delta,
+      direction:    effective.direction,
+      helpful_rate: effective.helpful_rate,
+      label:        effective.label,
+      trend:        effective.trend,
+      n:            effective.n,
+      reason:       effective.emphasis_reason != null ? effective.emphasis_reason
+        : (effective.reason != null ? effective.reason : null),
     }
   }
+  // WATCH THE CONTROLLER (layer 22): the controller's OWN stability verdict over the trailing
+  // window drives the self-heal above (shouldDampControl → effective), but — exactly like the
+  // layer-21 controller it watches — the verdict RIDES NO PACK, not even the agency/portfolio pack.
+  // Its shape is dense with control vocabulary (control.moves.lean_in/ease_off, last_move, the
+  // 'damp' recommended_action, verdict_reason 'control_hunting'): precisely the machinery the 21d
+  // endpoint-only split keeps OUT of the serialized pack, so the LLM narrator + grounding verifier
+  // never see it and no client egress can ever carry it. The agency reads it LIVE from
+  // /brief-emphasis-control-health (emphasisControlHealthFor recomputes it fresh per request) — it
+  // is surfaced, never persisted. The only trace it leaves on the brief is its EFFECT: the damped
+  // `effective` breadth projected into engagement_policy above, which is pure layer-19 cap vocabulary.
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,
@@ -657,6 +760,8 @@ module.exports = {
   listRecentBriefs,
   buildEmphasisObservations,
   briefEmphasisEfficacyFor,
+  emphasisControlHistoryFor,
+  emphasisControlHealthFor,
   leadPolicyHistoryFor,
   leadPolicyHealthFor,
   leadPolicyGovernanceFor,

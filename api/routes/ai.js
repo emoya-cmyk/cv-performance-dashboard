@@ -50,7 +50,7 @@ const {
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
   leadPolicyGovernanceAuditFor, leadPolicyRemediationFor,
-  briefEmphasisEfficacyFor,
+  briefEmphasisEfficacyFor, emphasisControlHealthFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -68,6 +68,7 @@ const { narrateBriefEngagement } = require('../lib/briefEngagement')
 const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngagementLearning')
 const { narrateEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
 const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEmphasisControl')
+const { narrateEmphasisControlHealth } = require('../lib/briefEmphasisControlHealth')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -673,6 +674,44 @@ router.get('/brief-emphasis-control', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-emphasis-control error', err.message)
     res.status(500).json({ error: 'Failed to load brief emphasis control' })
+  }
+})
+
+// ── GET /api/ai/brief-emphasis-control-health ─────────────────────────────────
+// Layer 22 watches the layer-21 controller for instability. Layer 19 flexes the supporting-cast
+// cap on reception; layer 20 grades whether those flexes paid off; layer 21 feeds that grade back
+// into 19's MAGNITUDE (lean the flex one row further, ease it one row back, or hold). A controller
+// that reverses itself morning after morning — lean_in, ease_off, lean_in, ease_off — is HUNTING,
+// not converging, and one that pins to a bound every day is SATURATING; either way the supporting
+// cast it governs churns for no gain. THIS reconstructs the controller's recent decision track by
+// replaying briefEmphasisControlFor across the window (the same per-morning call the brief ships,
+// so the track is the real one, not a persisted projection that drops control_move/step_scale),
+// then classifies it: control_hunting (oscillating → recommend damp), pinned_high/pinned_low
+// (saturating → review the bounds), controller_quiet (idle), control_converged (stable, trust it),
+// or control_settling (early, hold). On hunting the engine's brief self-heals by damping the flex
+// back to layer 19's un-modulated cap for that morning; this endpoint surfaces the same verdict the
+// engine acts on. AGENCY-ONLY by construction — every input is per-client reception telemetry no
+// client may see, so it shares the portfolio 403 gate (resolvePortfolioScope) and
+// narrateEmphasisControlHealth returns '' for the client audience unconditionally. ?days=N sizes the
+// history window (default 6, clamped 2..14); ?as_of anchors its end (default today, UTC). Too few
+// graded mornings → an honest abstained verdict, a clean 200; only a genuine DB fault is a 500.
+router.get('/brief-emphasis-control-health', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const health = await emphasisControlHealthFor(asOf, span)
+    res.json({
+      ...health,
+      requested: { as_of: asOf || null, days: health.window_used },
+      narrative: narrateEmphasisControlHealth(health, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-emphasis-control-health error', err.message)
+    res.status(500).json({ error: 'Failed to load brief emphasis control health' })
   }
 })
 

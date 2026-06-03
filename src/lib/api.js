@@ -278,6 +278,19 @@ export const api = {
   // `narrative` (empty unless the controller actually moved the cap). `days` sizes the efficacy
   // window the controller reads (default 90; clamp 1..365).
   getBriefEmphasisControl:  (days)       => get(`/api/ai/brief-emphasis-control${days ? `?days=${days}` : ''}`),
+  // WATCH THE CONTROLLER (intel-v9 22, agency-only, 403 for client tokens — the OUTWARD twin of
+  // getLeadPolicyHealth). getBriefEmphasisControl is the layer-21 controller that scales the
+  // MAGNITUDE of layer 19's cap flex from layer 20's efficacy grade; THIS watches that controller
+  // for instability across a HISTORY of recent mornings — it flags HUNTING (the controller reverses
+  // itself lean_in<->ease_off day after day, never converging) and SATURATING (its move pins to a
+  // bound run after run). Carries one self-healing recommended_action ('damp' on hunting — the same
+  // signal the morning brief consults before it applies the controlled flex; on damp the brief eases
+  // the magnitude back to layer 19's un-modulated cap for that morning). Returns the
+  // assessEmphasisControlHealth shape ({ status, recommended_action, as_of, window_used, history_len,
+  // bounds, control, verdict_reason }) plus echoed `requested` + one agency-voiced `narrative`
+  // (empty unless the controller is genuinely unstable, saturating, or proven-stable). `days` sizes
+  // the history window (mornings to assess, clamp 2..14); absent → the monitor's own default window.
+  getBriefEmphasisControlHealth: (days)  => get(`/api/ai/brief-emphasis-control-health${days ? `?days=${days}` : ''}`),
   // CONSUMER OWN-VOTE (intel-v8 18d, client-scoped — the OUTWARD half of the engagement loop).
   // getBriefEngagement above reads the whole-book aggregate (agency-only, 403 for a client token);
   // THESE two are all a client ever touches — their own 👍/👎 on their own morning brief, one day.
