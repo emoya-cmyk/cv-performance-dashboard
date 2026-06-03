@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, ArrowRight, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -2682,6 +2682,123 @@ function BriefEmphasisEfficacyPanelPreview({ data }) {
   )
 }
 
+// ── emphasis control — intel-v9 (21c) preview twin ─────────────────────────────────────────────
+// Mirrors the live BriefEmphasisControlPanel: reads GET /api/ai/brief-emphasis-control (agency-only).
+// The two panels above are the ACT and MEASURE halves of the engagement loop — layer 19 flexes
+// tomorrow's supporting-cast cap on every reception grade, layer 20 grades whether that flex paid off
+// and emits a bounded step-scale per direction. This is the rung that feeds that grade BACK into the
+// loop: it adjusts the MAGNITUDE of the next flex by one gentle step — lean in (reach one row further)
+// when the direction is measured to be paying off, ease off (pull one row back) when it isn't, hold
+// when the measurement is neutral or not yet graded. reception → flex (19) → efficacy (20) → scaled
+// flex (21), the loop closed. Safety is asymmetric by design: leaning in is earned twice (reception
+// says widen AND past widening measured as sustaining), easing off is always free, and the cap never
+// leaves its [MIN_CAP, MAX_CAP] rails. Static 'leaning in' render off a fixture that pairs with the
+// efficacy fixture above (widening is paying off, so the controller reaches one row further).
+const EMPHASIS_CONTROL_TONE_PV = {
+  lean_in:  { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: ArrowUpCircle, label: 'Leaning in',  shipText: 'text-emerald-700', shipBox: 'border-emerald-200 bg-emerald-50' },
+  ease_off: { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: RotateCcw,     label: 'Easing off',  shipText: 'text-amber-700',   shipBox: 'border-amber-200 bg-amber-50' },
+  hold:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Minus,         label: 'Holding',     shipText: 'text-slate-500',   shipBox: 'border-slate-200 bg-slate-50' },
+  none:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Inbox,         label: 'Standing by', shipText: 'text-slate-500',   shipBox: 'border-slate-200 bg-slate-50' },
+}
+function preFlexLabelPv(base, pre) {
+  if (base == null || pre == null) return 'steady'
+  if (pre > base) return `widen +${pre - base}`
+  if (pre < base) return `tighten −${base - pre}`
+  return 'steady'
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-emphasis-control. Pairs with the efficacy fixture above:
+// layer 19 widened tomorrow's cap one row off the baseline (3 → 4), and since WIDENING measured as
+// paying off (step-scale ×1.12, 'endorsed'), the controller LEANS IN — adding one more step so the
+// shipped cap reaches 5 instead of 4. control_move 'lean_in', reason 'efficacy_endorsed', status
+// 'tuned'. narrative is verbatim narrateEmphasisControl(ctrl, { audience: 'agency' }).
+const BRIEF_EMPHASIS_CONTROL = {
+  status: 'tuned',
+  control_move: 'lean_in',
+  control_reason: 'efficacy_endorsed',
+  direction: 'widen',
+  step_scale: 1.12,
+  base_step: 1, controlled_step: 2,
+  base_cap: 3, min_cap: 1, max_cap: 5,
+  emphasis_also_cap: 4, also_cap: 5,
+  helpful_rate: 0.65, label: 'well-received', trend: 'up', n: 7,
+  requested: { as_of: null, days: 90 },
+  narrative: 'Widening has been measuring as paying off, so the brief is leaning into it — tomorrow’s supporting cast reaches one row further, to five, instead of stopping at four.',
+}
+
+function BriefEmphasisControlPanelPreview({ data }) {
+  const move       = data.control_move || 'none'
+  const tone       = EMPHASIS_CONTROL_TONE_PV[move] || EMPHASIS_CONTROL_TONE_PV.none
+  const MoveIcon   = tone.icon
+  const days       = data.requested?.days || 90
+  const narrative  = (data.narrative || '').trim()
+  const engaged    = move === 'lean_in' || move === 'ease_off' || move === 'hold'
+  const scale      = Number(data.step_scale)
+  const scaleLabel = Number.isFinite(scale) ? `×${scale.toFixed(2)}` : '×1.00'
+  const scaleColor = Number.isFinite(scale) && scale > 1 ? 'text-emerald-700'
+    : Number.isFinite(scale) && scale < 1 ? 'text-amber-700' : 'text-slate-500'
+  const preCap     = data.emphasis_also_cap
+  const cap        = data.also_cap
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <SlidersHorizontal className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Emphasis control</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">The self-tuning, re-tuned from its own grade · last {days} days</p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`} title={`Controller move: ${move}`}>
+          <MoveIcon className="w-3 h-3" /> {tone.label}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        {engaged ? (
+          <>
+            {/* the loop closing, left → right: 19 proposed → 20 measured → 21 shipped */}
+            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1.5">
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Reception flex</p>
+                <p className="mt-1 text-2xl font-black text-slate-900 tabular-nums leading-none">{preCap}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">{preFlexLabelPv(data.base_cap, preCap)}</p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-slate-300 shrink-0 mx-auto" />
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Measured</p>
+                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${scaleColor}`}>{scaleLabel}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">efficacy</p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-slate-300 shrink-0 mx-auto" />
+              <div className={`rounded-xl border-2 px-2 py-2.5 text-center ${tone.shipBox}`}>
+                <p className={`text-[9px] font-bold uppercase tracking-wide ${tone.shipText}`}>Shipped</p>
+                <p className="mt-1 text-2xl font-black text-slate-900 tabular-nums leading-none">{cap}</p>
+                <p className={`mt-1 text-[10px] font-bold ${tone.shipText}`}>{tone.label}</p>
+              </div>
+            </div>
+            {narrative && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </>
+        ) : (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Inbox className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">The controller is standing by — it engages once the reception loop flexes and that flex earns a measured grade.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The rung that <span className="font-semibold text-slate-500">closes the loop</span> — reception flexes the brief's breadth, efficacy grades the flex, and this feeds that grade back into the next flex's size.
+          {' '}<span className="font-semibold text-emerald-600">Lean in</span> when a direction is paying off · <span className="font-semibold text-amber-600">ease off</span> when it isn't · hold otherwise.
+          {' '}Leaning in is earned twice, easing off is always free, and the cap never leaves its rails.
+          {' '}Agency-only; a reader never sees their attention being tuned.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3046,6 +3163,14 @@ export default function PulseDiagnosisPreview() {
           <BriefEmphasisEfficacyPanelPreview data={BRIEF_EMPHASIS_EFFICACY} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The rung that closes the loop on the loop. The panel above flexes tomorrow's brief on every reception grade — but it flexes with <span className="font-bold text-slate-600">fixed steps and never checks whether the flex worked</span>. This is the first rung that <span className="font-bold text-slate-600">grades the self-tuning's own moves</span>: it pairs each morning's emphasis decision with the reception that <span className="font-bold text-slate-600">followed</span> — free, off history already on disk — and scores each direction against the control of mornings the brief held steady. <span className="font-bold text-emerald-600">Widening should sustain</span> reception; <span className="font-bold text-amber-600">tightening should recover</span> it. Here widening is holding up — 65% sustained, <span className="font-bold text-emerald-600">+25pp over the 40% control</span> — so the learned step-scale leans in to ×1.12; tightening is in line with the control, so it holds at ×1.00. The scale stays <span className="font-bold text-slate-600">bounded 0.5×–1.25×</span> — easy to ease off a losing bet, earned to lean into a winning one — the very knob a future controller feeds back to make the panel above self-improving. Honest by abstention: a direction under a handful of decided outcomes shows no rate, and a thin history reads <span className="font-bold text-slate-600">Listening</span>, never a verdict off noise. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Emphasis control · the self-tuning, re-tuned from its own grade</p>
+          <BriefEmphasisControlPanelPreview data={BRIEF_EMPHASIS_CONTROL} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung that <span className="font-bold text-slate-600">closes the second-order loop</span>. The two panels above are the loop's <span className="font-bold text-slate-600">act</span> and <span className="font-bold text-slate-600">measure</span> halves — layer 19 flexes tomorrow's brief on every reception grade, layer 20 grades whether the flex paid off — but until this rung nothing fed that grade <span className="font-bold text-slate-600">back</span>: 19 kept flexing with the same fixed step forever, deaf to its own track record. This is the <span className="font-bold text-slate-600">controller</span>: it pairs 19's reception-driven flex with 20's measured step-scale for that same direction and adjusts the flex's <span className="font-bold text-slate-600">magnitude</span> by one gentle step. Here widening measured as paying off (<span className="font-bold text-emerald-600">×1.12</span>), so it <span className="font-bold text-emerald-600">leans in</span> — tomorrow's supporting cast reaches one row further, to five, instead of stopping at four. <span className="font-bold text-emerald-600">reception → flex → efficacy → scaled flex</span>, the loop closed. Safety is <span className="font-bold text-slate-600">asymmetric by design</span>: leaning in is <span className="font-bold text-emerald-600">earned twice</span> — reception must say widen <span className="italic">and</span> past widening must have measured as sustaining — easing off is <span className="font-bold text-amber-600">always free</span>, and the cap never leaves its <span className="tabular-nums">1–5</span> rails, so the headline plus one row always survive. Honest by abstention: no flex to scale, or no measured efficacy, and it passes 19's call through untouched. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned.
           </p>
         </div>
 
