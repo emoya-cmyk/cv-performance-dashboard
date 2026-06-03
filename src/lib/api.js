@@ -424,6 +424,15 @@ export const api = {
   // getSystemic/getTrajectory) it never rides getClientInsights() — a client's OWN pace rides
   // inside getClientInsights() (.pacing), own numbers only. No params (current month, clock = now).
   getPacing:          ()         => get('/api/insights/pacing'),
+  // getReallocation() → portfolio CHANNEL-REALLOCATION roster: the first PRESCRIPTIVE grain. For each
+  // client it compares paid channels on realized cost-per-outcome WITHIN one outcome type, reads each
+  // channel's returns trend from its own spend↔cpo correlation, and surfaces only clients with a
+  // defensible budget shift right now, most-defensible first ("Google Ads turns out leads at $38 vs
+  // Facebook's $61; move 10% and measure") — a hypothesis to TEST, not an autopilot move. AGENCY-ONLY
+  // and the most sensitive boundary (it names other clients AND prescribes dollar moves), so — like
+  // getSystemic/getTrajectory/getPacing/getPulse — it NEVER rides getClientInsights(): the whole layer
+  // is withheld from clients, nothing folds into the per-client payload. No params (trailing 26 weeks).
+  getReallocation:    ()         => get('/api/insights/reallocation'),
   // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
   // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
   // flags every client × flow metric whose trailing week has slid out of that client's OWN recent

@@ -80,6 +80,7 @@ const {
   getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
+  getPortfolioReallocation,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -322,6 +323,29 @@ router.get('/pacing', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET pacing error', err.message)
     res.status(500).json({ error: 'Failed to load pacing roster' })
+  }
+})
+
+// ── GET /api/insights/reallocation ────────────────────────────────────────────
+// Portfolio CHANNEL-REALLOCATION ROSTER (intel-v10): the first PRESCRIPTIVE grain. Every other
+// endpoint diagnoses ("leads slid", "will miss goal"); this one PRESCRIBES where the next budget
+// dollar should go. For each client it compares paid channels on realized cost-per-outcome WITHIN a
+// single outcome type (never $/lead vs $/booked-job), reads each channel's returns trend from its own
+// spend↔cpo correlation, and surfaces only clients with a defensible shift right now — most-defensible
+// first ("Google Ads turns out leads at $38 vs Facebook's $61; move 10% and measure"). A hypothesis to
+// TEST, never an autopilot move. AGENCY-ONLY and the most sensitive boundary of all: it names other
+// clients AND carries dollar budget advice, so — like /systemic · /trajectory · /pacing · /pulse — it
+// lives here behind requireAuth and NEVER rides the per-client GET /:clientId (or shared-link) payload;
+// narrateReallocation is silent for the client audience and getClientReallocation is deliberately NOT
+// folded into /:clientId. Declared before the :clientId route so the literal "reallocation" can never be
+// captured as a client id. No params: the window is the trailing 26 weeks, the clock is "now".
+router.get('/reallocation', async (_req, res) => {
+  try {
+    const out = await getPortfolioReallocation()
+    res.json({ ...out, count: out.roster.length })
+  } catch (err) {
+    console.error('[insights] GET reallocation error', err.message)
+    res.status(500).json({ error: 'Failed to load reallocation roster' })
   }
 })
 

@@ -213,6 +213,17 @@ const { rankEarlyWarnings } = require('./trajectory')
 // See lib/pacing.js — numbers in, verdict out (the engine supplies the real clock below).
 const { classifyPacing, rankPacing } = require('./pacing')
 
+// Channel reallocation (PURE, intel-v10 — the first PRESCRIPTIVE budget layer): compares a client's
+// paid channels on realized cost-per-outcome, reads each channel's returns TREND from its own
+// spend↔cpo correlation, and proposes the single most defensible budget shift (or abstains). Unlike
+// pacing's per-client verdict, this is AGENCY-ONLY — narrateReallocation returns '' for the client
+// audience UNCONDITIONALLY, and the proposal NEVER rides a client/shared-link payload. The engine below
+// supplies the per-channel WEEKLY spend+outcome windows it reasons over (built from fact_metric, the
+// portable atomic grain — never the Postgres-only weekly_reports wide columns). See lib/channelEfficiency.js.
+const {
+  analyzeReallocation, narrateReallocation, reallocationRails, CHANNEL_LABEL: REALLOC_CHANNEL_LABEL,
+} = require('./channelEfficiency')
+
 // Action→recovery efficacy (PURE): the recommendation layer (recommendedAction) proposes a
 // PLAY for every adverse finding; the recovery classifier (lib/outcomes) later proves whether
 // that finding's problem RECOVERED or merely LAPSED. Those two organs were never connected —
@@ -2328,6 +2339,241 @@ async function getClientPacing(clientId, { asOf, weeks = 26 } = {}) {
 }
 
 // ============================================================================
+// CHANNEL REALLOCATION (intel-v10) — the first PRESCRIPTIVE layer: where should the next
+// budget dollar go? It reads each client's paid channels on realized cost-per-outcome over a
+// trailing window of WEEKLY spend+outcome points and asks lib/channelEfficiency for the single
+// most defensible shift (or an abstention). AGENCY-ONLY by construction — the narration is silent
+// for the client audience and the proposal never rides a client/shared-link payload (mirrors
+// /systemic · /trajectory · the pacing ROSTER). Computed on read; no migration, no persisted state.
+//
+// Comparability guard — cpo is only meaningful WITHIN one outcome type ($/lead vs $/lead, never
+// $/lead vs $/booked-job), so the channels are partitioned by their outcome and each partition is
+// reasoned about independently; the best proposal across partitions wins. Today the live comparison
+// is google_ads vs meta (both leads); lsa (booked_jobs) sits alone → no counterpart → it abstains
+// rather than be mis-compared. Add a second booked_jobs channel later and that partition lights up
+// for free. Source of truth is fact_metric ⋈ dim_channel: 'spend' for every channel, plus each
+// channel's own outcome key ('leads' for google_ads/meta, 'booked_jobs' for lsa) — all portable
+// across the SQLite shim and Postgres (the wide weekly_reports ads_leads/lsa_leads columns are not).
+const REALLOC_CHANNELS = [
+  { channel: 'google_ads', outcome: 'leads',       outcome_label: 'lead' },
+  { channel: 'meta',       outcome: 'leads',       outcome_label: 'lead' },
+  { channel: 'lsa',        outcome: 'booked_jobs', outcome_label: 'booked job' },
+]
+const REALLOC_LOOKBACK_WEEKS    = 26
+const REALLOC_CHANNEL_KEYS      = REALLOC_CHANNELS.map(c => c.channel)
+const REALLOC_OUTCOME_BY_CHANNEL = new Map(REALLOC_CHANNELS.map(c => [c.channel, c.outcome]))
+const REALLOC_LABEL_BY_OUTCOME   = new Map(REALLOC_CHANNELS.map(c => [c.outcome, c.outcome_label]))
+// the union of metric_keys to pull: 'spend' (every channel) + each distinct outcome key
+const REALLOC_METRIC_KEYS = Array.from(new Set(['spend', ...REALLOC_CHANNELS.map(c => c.outcome)]))
+// outcome partitions in config order, e.g. [['leads',['google_ads','meta']], ['booked_jobs',['lsa']]]
+const REALLOC_OUTCOME_GROUPS = (() => {
+  const order = [], byOutcome = new Map()
+  for (const def of REALLOC_CHANNELS) {
+    if (!byOutcome.has(def.outcome)) { byOutcome.set(def.outcome, []); order.push(def.outcome) }
+    byOutcome.get(def.outcome).push(def.channel)
+  }
+  return order.map(outcome => [outcome, byOutcome.get(outcome)])
+})()
+
+// Fold a flat list of summed (channel, date, metric_key, total) fact rows for ONE client into the
+// per-channel WEEKLY window shape channelEfficiency reasons over: [{ channel, points: [{spend, outcomes}] }],
+// points oldest→newest. Each fact day is bucketed into its Monday-started ISO week (weekStartOf, UTC, no
+// DST drift); within a (channel, week) we accumulate 'spend' into spend and the channel's OWN outcome key
+// into outcomes. A channel with no rows still emits (empty points) so the module sees & abstains on it,
+// and the channel set/order is always the configured one (not whatever the data happened to contain).
+function bucketReallocSeries(rows) {
+  const byChannel = new Map()   // channelKey → Map(weekStart → { spend, outcomes })
+  for (const r of rows || []) {
+    const channel    = r.channel
+    const outcomeKey = REALLOC_OUTCOME_BY_CHANNEL.get(channel)
+    if (!outcomeKey) continue                                  // not a channel we judge
+    const v = Number(r.total)
+    if (!Number.isFinite(v)) continue
+    const wk = weekStartOf(isoDate(r.date))
+    let weeks = byChannel.get(channel)
+    if (!weeks) { weeks = new Map(); byChannel.set(channel, weeks) }
+    let bucket = weeks.get(wk)
+    if (!bucket) { bucket = { spend: 0, outcomes: 0 }; weeks.set(wk, bucket) }
+    if (r.metric_key === 'spend')           bucket.spend    += v
+    else if (r.metric_key === outcomeKey)   bucket.outcomes += v
+  }
+  return REALLOC_CHANNELS.map(({ channel }) => {
+    const weeks = byChannel.get(channel)
+    const points = weeks
+      ? [...weeks.keys()].sort().map(wk => ({ spend: weeks.get(wk).spend, outcomes: weeks.get(wk).outcomes }))
+      : []
+    return { channel, points }
+  })
+}
+
+// Order two outcome-partition results: a live 'reallocate' beats 'hold' beats 'insufficient'; among
+// reallocations the higher-confidence move wins, then the bigger relative gap. Pure, total, no mutation.
+function reallocStatusRank(s) { return s === 'reallocate' ? 2 : s === 'hold' ? 1 : 0 }
+function pickBetterReallocEntry(a, b) {
+  if (!a) return b
+  if (!b) return a
+  const ra = reallocStatusRank(a.proposal && a.proposal.status)
+  const rb = reallocStatusRank(b.proposal && b.proposal.status)
+  if (ra !== rb) return ra > rb ? a : b
+  const ca = Number(a.proposal && a.proposal.confidence) || 0
+  const cb = Number(b.proposal && b.proposal.confidence) || 0
+  if (ca !== cb) return ca > cb ? a : b
+  const ga = Number(a.proposal && a.proposal.gap_pct) || 0
+  const gb = Number(b.proposal && b.proposal.gap_pct) || 0
+  return ga >= gb ? a : b
+}
+
+// Run channelEfficiency PER outcome partition (cpo only compares within one outcome type), then choose
+// the single most actionable proposal across partitions. Pure over the bucketed series — no I/O. Returns
+// the chosen proposal tagged with its outcome + human outcome label, every partition's own result
+// (by_outcome, for an agency drill-down), and the flat per-channel assessment across all partitions.
+function analyzeChannelReallocation(channels) {
+  const byChannel = new Map((channels || []).map(c => [c.channel, c]))
+  const by_outcome = []
+  const assessed   = []
+  let best = null
+  for (const [outcome, members] of REALLOC_OUTCOME_GROUPS) {
+    const groupChannels = members.map(k => byChannel.get(k)).filter(Boolean)
+    const res = analyzeReallocation(groupChannels)               // { channels, proposal }
+    for (const a of res.channels) assessed.push(a)
+    const entry = {
+      outcome,
+      outcome_label: REALLOC_LABEL_BY_OUTCOME.get(outcome) || 'outcome',
+      proposal: res.proposal,
+      channels: res.channels,
+    }
+    by_outcome.push(entry)
+    best = pickBetterReallocEntry(best, entry)
+  }
+  const proposal = best ? best.proposal
+                        : { status: 'insufficient', from: null, to: null,
+                            reason: 'no paid channels with adequate spend/outcome history to compare' }
+  return {
+    proposal,
+    proposal_outcome:       best ? best.outcome : null,
+    proposal_outcome_label: best ? best.outcome_label : null,
+    by_outcome,
+    channels: assessed,
+  }
+}
+
+// Build one client's per-channel WEEKLY spend+outcome window series from the atomic grain. Reads
+// fact_metric ⋈ dim_channel for the configured paid channels and metric keys over a weeks*7-day
+// trailing window, summed per (channel, date, metric_key) in SQL, then JS-bucketed into ISO weeks
+// (date_trunc differs across SQLite/Postgres — we bucket in JS to stay byte-identical on both). Returns
+// the [{ channel, points:[{spend, outcomes}] }] shape analyzeChannelReallocation/channelEfficiency expect.
+async function loadChannelEfficiencySeries(clientId, { asOf, weeks = REALLOC_LOOKBACK_WEEKS } = {}) {
+  const end   = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const span  = (Number.isFinite(Number(weeks)) ? Number(weeks) : REALLOC_LOOKBACK_WEEKS) * 7
+  const start = new Date(Date.parse(end + 'T00:00:00Z') - span * 86400000).toISOString().slice(0, 10)
+  const nCh   = REALLOC_CHANNEL_KEYS.length
+  const chPh  = REALLOC_CHANNEL_KEYS.map((_, i) => `$${i + 4}`).join(', ')         // $4..$(3+nCh)
+  const mkPh  = REALLOC_METRIC_KEYS.map((_, i) => `$${i + 4 + nCh}`).join(', ')    // $(4+nCh)..
+  const { rows } = await query(
+    `SELECT c.key AS channel, f.date AS date, f.metric_key AS metric_key, SUM(f.metric_value) AS total
+       FROM fact_metric f
+       JOIN dim_channel c ON c.id = f.channel_id
+      WHERE f.client_id = $1 AND f.date BETWEEN $2 AND $3
+        AND c.key IN (${chPh}) AND f.metric_key IN (${mkPh})
+      GROUP BY c.key, f.date, f.metric_key
+      ORDER BY f.date`,
+    [clientId, start, end, ...REALLOC_CHANNEL_KEYS, ...REALLOC_METRIC_KEYS]
+  )
+  return bucketReallocSeries(rows)
+}
+
+// getClientReallocation(clientId, opts) — ONE client's reallocation analysis: the chosen proposal, every
+// outcome partition's own result, and the per-channel cpo assessment. AGENCY-FACING (used by the roster
+// below and an agency drill-down) — it is NOT folded into GET /:clientId, because the whole layer is
+// withheld from clients. Data-less client → a clean 'insufficient' proposal, never a throw. asOf optional
+// (the route/scheduler pass none → today; tests pin a fixed clock).
+async function getClientReallocation(clientId, { asOf, weeks = REALLOC_LOOKBACK_WEEKS } = {}) {
+  const day      = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const channels = await loadChannelEfficiencySeries(clientId, { asOf: day, weeks })
+  const analysis = analyzeChannelReallocation(channels)
+  return { as_of: day, ...analysis }
+}
+
+// getPortfolioReallocation(opts) — the agency ROSTER of clients with an actionable budget shift right now,
+// most-defensible first. AGENCY-ONLY (it names other clients and carries the agency narration — the same
+// cross-tenant boundary /systemic · /trajectory · the pacing roster respect: the caller mounts it behind
+// requireAuth and must NEVER let it ride a per-client/shared-link payload). One bulk fact read across the
+// whole book (no N+1, mirroring getPortfolioPacing), bucketed per client and reasoned about with the SAME
+// pure core as the per-client path. Only 'reallocate' clients make the roster; everyone else (holds,
+// abstentions, cold-start, no paid channels) simply contributes nothing and never throws.
+async function getPortfolioReallocation({ asOf, weeks = REALLOC_LOOKBACK_WEEKS } = {}) {
+  const day   = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const span  = (Number.isFinite(Number(weeks)) ? Number(weeks) : REALLOC_LOOKBACK_WEEKS) * 7
+  const start = new Date(Date.parse(day + 'T00:00:00Z') - span * 86400000).toISOString().slice(0, 10)
+  const nCh   = REALLOC_CHANNEL_KEYS.length
+  const chPh  = REALLOC_CHANNEL_KEYS.map((_, i) => `$${i + 3}`).join(', ')         // $3..$(2+nCh)
+  const mkPh  = REALLOC_METRIC_KEYS.map((_, i) => `$${i + 3 + nCh}`).join(', ')    // $(3+nCh)..
+
+  const [factRows, clients] = await Promise.all([
+    query(
+      `SELECT f.client_id AS client_id, c.key AS channel, f.date AS date, f.metric_key AS metric_key, SUM(f.metric_value) AS total
+         FROM fact_metric f
+         JOIN dim_channel c ON c.id = f.channel_id
+        WHERE f.date BETWEEN $1 AND $2
+          AND c.key IN (${chPh}) AND f.metric_key IN (${mkPh})
+        GROUP BY f.client_id, c.key, f.date, f.metric_key
+        ORDER BY f.date`,
+      [start, day, ...REALLOC_CHANNEL_KEYS, ...REALLOC_METRIC_KEYS]
+    ),
+    query(`SELECT id, name FROM clients`),
+  ])
+
+  const nameById = new Map()
+  for (const c of clients.rows) nameById.set(String(c.id), c.name)
+
+  // group the bulk fact rows by client, preserving the date ORDER BY
+  const rowsByClient = new Map()
+  for (const r of factRows.rows) {
+    const id = String(r.client_id)
+    let arr = rowsByClient.get(id)
+    if (!arr) { arr = []; rowsByClient.set(id, arr) }
+    arr.push(r)
+  }
+
+  const roster = []
+  for (const [id, rows] of rowsByClient) {
+    const channels = bucketReallocSeries(rows)
+    const { proposal, proposal_outcome, proposal_outcome_label } = analyzeChannelReallocation(channels)
+    if (!proposal || proposal.status !== 'reallocate') continue
+    const labels = {
+      [proposal.from]: REALLOC_CHANNEL_LABEL[proposal.from] || proposal.from,
+      [proposal.to]:   REALLOC_CHANNEL_LABEL[proposal.to]   || proposal.to,
+    }
+    roster.push({
+      client_id:     id,
+      client_name:   nameById.get(id) || null,
+      outcome:       proposal_outcome,
+      outcome_label: proposal_outcome_label,
+      ...reallocationRails(proposal),                 // from,to,from_cpo,to_cpo,suggested_shift,test_fraction,strength
+      from_label:    labels[proposal.from],
+      to_label:      labels[proposal.to],
+      gap_pct:           proposal.gap_pct,
+      saved_per_outcome: proposal.saved_per_outcome,
+      from_trend:        proposal.from_trend,
+      to_trend:          proposal.to_trend,
+      confidence:        proposal.confidence,
+      hypothesis:        proposal.hypothesis,
+      assumes:           proposal.assumes,
+      reason:            proposal.reason,
+      message: narrateReallocation(proposal, { audience: 'agency', labels, outcomeLabel: proposal_outcome_label }),
+    })
+  }
+
+  // worst/most-defensible first: highest confidence, then biggest relative gap, then most $ saved/outcome
+  roster.sort((a, b) =>
+    ((Number(b.confidence) || 0)        - (Number(a.confidence) || 0)) ||
+    ((Number(b.gap_pct) || 0)           - (Number(a.gap_pct) || 0))    ||
+    ((Number(b.saved_per_outcome) || 0) - (Number(a.saved_per_outcome) || 0)))
+
+  return { as_of: day, roster }
+}
+
+// ============================================================================
 // INTRA-WEEK PULSE (intel-v7) — the early-warning organ over the ATOMIC DAILY grain.
 //
 // Everything above judges each client's latest COMPLETED ISO week against its own
@@ -2813,6 +3059,12 @@ module.exports = {
   snapshotPortfolioHealth, getPortfolioTrajectory,
   // goal-pacing: agency roster (who will MISS goal, worst-first) + per-client own verdicts (no peers)
   getPortfolioPacing, getClientPacing,
+  // channel reallocation (intel-v10): the first PRESCRIPTIVE layer. AGENCY-ONLY (names clients, carries
+  // the agency narration) -> getPortfolioReallocation mounts behind requireAuth and NEVER rides a client
+  // payload; getClientReallocation/analyzeChannelReallocation are exported for the route + tests/drill-down,
+  // NOT folded into GET /:clientId. loadChannelEfficiencySeries/bucketReallocSeries exported for wiring tests.
+  getPortfolioReallocation, getClientReallocation, analyzeChannelReallocation,
+  loadChannelEfficiencySeries, bucketReallocSeries,
   // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
   // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
   // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.
