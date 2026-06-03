@@ -822,3 +822,199 @@ test('the 14d series guard is load-bearing — a lone weight-trajectory trips as
     'a real stability verdict spliced into a client pack must be rejected',
   )
 })
+
+// ── Section G — layer 15d: the GOVERNOR is agency-only at the SOURCE and the EGRESS ──
+// 15b proved the WIRING: the portfolio pack carries lead_policy_governance while a surgically
+// governed policy (or none) reaches the client. This closes the loop the way 13d/14d did for
+// their layers — at the NARRATOR (the last egress gate every surface ultimately calls) and with
+// a dedicated leak-proof pass over a LIVE client brief — but now for the governor's vocabulary.
+// The governor consumes the stability verdict and AUTONOMOUSLY applies the safe per-lane
+// corrective; that control-plane telemetry (which lane it reset, the pre-governance weights it
+// kept for rollback, the held / floor-respected advisories) is the agency's to see and the
+// client's never. We drive governLeadPolicy onto each of its four statuses with REAL assessed
+// verdicts (honest coverage, not a lucky ''), assert the narrator is '' for the client across
+// ALL four while the agency hears only 'corrected', then prove a live client brief — under the
+// most machinery-laden regime — carries none of it, and that the new guard is load-bearing.
+const { governLeadPolicy, narrateLeadPolicyGovernance } = require('../lib/briefLeadPolicyGovernor')
+
+// The governor's vocabulary — compound, snake_case control-plane identifiers that could never
+// surface in a human morning-brief sentence — that must NEVER cross to the client at any depth.
+// Disjoint from Section D's lead-policy set and Section F's stability set; 15d adds the third
+// confinement pass so a governance leak is caught by NAME, not merely by a generic token sweep.
+const FORBIDDEN_GOV_KEYS = [
+  'lead_policy_governance',   // the agency-only pack attach key
+  'governed',                 // the governed-status sub-object {status}
+  'interventions',            // the per-lane corrective log
+  'from_weight', 'to_weight', // an intervention's weight transition — raw tuning, never a client field
+  'floored_respected',        // a counts field unique to the governor
+]
+// The action verbs + reason/counts tokens that must never cross as a VALUE either — a serialized
+// scan catches a leak smuggled in as a string (e.g. an intervention's action:'neutralize').
+const FORBIDDEN_GOV_TOKENS = /lead_policy_governance|governed_oscillation|hold_at_bound|respect_floor|floored_respected|from_weight|to_weight|neutralize/
+function assertNoGovernanceMachinery(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_GOV_KEYS.includes(k), `${where}: client pack must not carry governor field "${k}" (at ${path})`)
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(!FORBIDDEN_GOV_TOKENS.test(JSON.stringify(pack)), `${where}: governor vocabulary leaked into the serialized client pack`)
+}
+
+// A current tuned-policy snapshot for the governor to act ON (reuses Section F's lane cells).
+const govPolicy = (lanes) => ({
+  status: 'tuned', neutral_rate: 0.5, min_sample: 4,
+  bounds: { min: 0.8, max: 1.2 }, safety_floor_lanes: ['act_now'], lanes,
+})
+
+// One (trajectory → REAL verdict, current policy) pair per governance status, each landing
+// UNAMBIGUOUSLY on a single status (asserted below, so a drifting threshold trips the fixture,
+// not a silent false pass). The verdict is assessed by assessLeadPolicyHealth over the same
+// trajectory shapes Section F proves — so the status is EARNED, never hand-stamped. `loud` marks
+// the one status the agency is meant to hear (a correction); the rest the narrator stays mute on.
+const GOVERNANCE_CASES = [
+  // a non-floored lane thrashing (oscillating) that still carries weight → the governor RESETS it.
+  { status: 'corrected', loud: true,
+    history: [
+      hSnap({ verify: hLane(1.1, 'promote') }), hSnap({ verify: hLane(0.9, 'demote') }),
+      hSnap({ verify: hLane(1.1, 'promote') }), hSnap({ verify: hLane(0.9, 'demote') }),
+    ],
+    policy: govPolicy({ act_now: hLane(1, 'neutral', true), verify: hLane(1.1, 'promote'), worth_a_look: hLane(1, 'neutral') }) },
+  // a lane pinned at the ceiling (saturated_high), nothing thrashing → the governor only ADVISES:
+  // it holds the lane at the bound (no weight change) and reports it → advised.
+  { status: 'advised', loud: false,
+    history: [
+      hSnap({ tailwind: hLane(1.1, 'promote') }), hSnap({ tailwind: hLane(1.2, 'promote') }),
+      hSnap({ tailwind: hLane(1.2, 'promote') }), hSnap({ tailwind: hLane(1.2, 'promote') }),
+    ],
+    policy: govPolicy({ act_now: hLane(1, 'neutral', true), tailwind: hLane(1.2, 'promote') }) },
+  // a converged, healthy lane (stable) → nothing to correct or advise → clean.
+  { status: 'clean', loud: false,
+    history: [ hSnap({ tailwind: hLane(1.10, 'promote') }), hSnap({ tailwind: hLane(1.10, 'promote') }) ],
+    policy: govPolicy({ act_now: hLane(1, 'neutral', true), tailwind: hLane(1.10, 'promote') }) },
+  // a single morning → the verdict abstains → the governor refuses to act on a loop it cannot
+  // currently assess → abstained (fail-safe).
+  { status: 'abstained', loud: false,
+    history: [ hSnap({ verify: hLane(1.1, 'promote') }) ],
+    policy: govPolicy({ verify: hLane(1.1, 'promote') }) },
+]
+
+test('governLeadPolicy lands on each of its four statuses from a REAL assessed verdict (15d)', () => {
+  for (const c of GOVERNANCE_CASES) {
+    const verdict = assessLeadPolicyHealth(c.history)
+    const result = governLeadPolicy(c.policy, verdict)
+    // the fixture really does build the status it claims — honest coverage, not a lucky pass.
+    assert.equal(result.status, c.status, `fixture for "${c.status}" must govern to that status (got "${result.status}")`)
+  }
+})
+
+test('narrateLeadPolicyGovernance is silent for the client across ALL four governance statuses (15d)', () => {
+  for (const c of GOVERNANCE_CASES) {
+    const verdict = assessLeadPolicyHealth(c.history)
+    const result = governLeadPolicy(c.policy, verdict)
+    // the client egress is '' for EVERY status — what the governor did is internal control, full stop.
+    assert.equal(
+      narrateLeadPolicyGovernance(result, { audience: 'client' }), '',
+      `client narration must be '' for governance status "${c.status}"`,
+    )
+  }
+})
+
+test('narrateLeadPolicyGovernance speaks to the AGENCY only when it CORRECTED — token-clean (15d)', () => {
+  for (const c of GOVERNANCE_CASES) {
+    const verdict = assessLeadPolicyHealth(c.history)
+    const result = governLeadPolicy(c.policy, verdict)
+    const agency = narrateLeadPolicyGovernance(result, { audience: 'agency' })
+    assert.equal(typeof agency, 'string')
+    if (c.loud) {
+      // a correction is the one event worth telling the agency about (a learned weight was reset)…
+      assert.ok(agency.length > 0, `agency SHOULD hear a "${c.status}" governance (proving the client '' is a deliberate choice)`)
+      // …and even that candid sentence carries no machine identifier — from ANY of the three layers.
+      assert.ok(!FORBIDDEN_GOV_TOKENS.test(agency),    'agency governance narration must carry no governor identifier')
+      assert.ok(!FORBIDDEN_HEALTH_TOKENS.test(agency), 'agency governance narration must carry no stability identifier')
+      assert.ok(!FORBIDDEN_TOKENS.test(agency),        'agency governance narration must carry no lead-policy identifier')
+    } else {
+      // advised / clean / abstained are "nothing the agency must act on" — the narrator stays mute.
+      assert.equal(agency, '', `agency stays silent on governance status "${c.status}" — no correction to report`)
+    }
+  }
+})
+
+test('generateClientBrief exposes NONE of the governor — even when it surgically corrected a live policy (15d)', async () => {
+  await ready()
+  const c = await freshClient('Governance Confinement Roofing Co')
+  // the richest control-plane regime: a thrashing lane is reset (CORRECTED governance, carrying
+  // interventions + a pre-governance snapshot) WHILE an earned lane survives (a live tuned policy).
+  stubOscillatingWithEarned()
+
+  const res = await generateClientBrief(c, AS_OF)
+
+  // The brief still ships, grounded, in the morning voice…
+  assert.equal(res.grounded, true)
+  assert.match(res.brief_text, /^Good morning\./)
+  // …carrying none of the governor's control plane, at any depth.
+  assert.ok(!('lead_policy_governance' in res.pack), 'client pack must not carry the governance verdict')
+  assertNoGovernanceMachinery(res.pack, 'generateClientBrief under a corrected governance')
+  // belt-and-suspenders: the lead-policy and stability layers stay confined too — this regime
+  // attaches all three on the agency side, so the client getting none of any proves the split.
+  assertCleanClientPack(res.pack, 'generateClientBrief under a corrected governance')
+  assertNoStabilityMachinery(res.pack, 'generateClientBrief under a corrected governance')
+
+  // and the persisted read-back — the row a client actually fetches — is just as clean.
+  const row = await getClientBrief(c, AS_OF)
+  assertNoGovernanceMachinery(row.pack, 'getClientBrief read-back under a corrected governance')
+})
+
+test('the agency portfolio pack DOES carry the governor — confinement is a split, and the 15d guard detects it (15d)', async () => {
+  await ready()
+  stubOscillatingWithEarned() // corrected governance: a reset lane + a surviving earned lane
+  await freshClient('Portfolio Governance Split A')
+
+  const res = await generatePortfolioBrief(AS_OF)
+
+  // The agency surface gets the very control plane the client is denied — a deliberate audience
+  // split, not a blanket suppression that would also blind the agency. And running the CLIENT
+  // guard over the AGENCY pack must THROW: proof the guard genuinely detects governance, so its
+  // silence on the client pack above is a real all-clear, not a vacuous pass.
+  assert.ok('lead_policy_governance' in res.pack, 'portfolio pack must carry the governance verdict')
+  assert.equal(res.pack.lead_policy_governance.status, 'corrected')
+  assert.throws(
+    () => assertNoGovernanceMachinery(res.pack, 'portfolio-pack-probe'),
+    /governor field|governor vocabulary/,
+    'the agency pack carries governance machinery — the client guard MUST trip on it',
+  )
+})
+
+test('the 15d governance guard is load-bearing — a lone intervention log, a string verb, or a real verdict trips it (15d)', () => {
+  // A pack clean of every other machinery key but carrying a single governor `interventions` log
+  // is caught BY NAME (before 15d no governance key sat on any forbidden list).
+  assert.throws(
+    () => assertNoGovernanceMachinery({ focus: { metric: 'leads', interventions: [{ lane: 'verify', action: 'neutralize' }] } }, 'interventions-probe'),
+    /interventions/,
+    'an `interventions` log anywhere in a client pack must be rejected by name',
+  )
+  // a governor action verb smuggled in as a plain string VALUE is caught by the token sweep.
+  assert.throws(
+    () => assertNoGovernanceMachinery({ note: 'we would hold_at_bound the lane' }, 'token-probe'),
+    /governor vocabulary/,
+    'a governor action verb leaked as a string must be rejected by the token sweep',
+  )
+  // …and the guard is not vacuously throwing — a structurally similar clean pack passes.
+  assert.doesNotThrow(
+    () => assertNoGovernanceMachinery({ focus: { metric: 'leads', trend: 'down' } }, 'clean-probe'),
+    'a clean pack with no governor machinery must pass',
+  )
+  // belt-and-suspenders: a REAL governance result spliced into a client pack can never ride along.
+  const verdict = assessLeadPolicyHealth(GOVERNANCE_CASES[0].history)
+  const real = governLeadPolicy(GOVERNANCE_CASES[0].policy, verdict)
+  assert.equal(real.status, 'corrected', 'sanity: the real result is a corrected governance')
+  assert.ok(Array.isArray(real.interventions) && real.interventions.length > 0, 'sanity: it carries an interventions log')
+  assert.throws(
+    () => assertNoGovernanceMachinery({ insight: { lead_policy_governance: real } }, 'real-governance-probe'),
+    /governor field|governor vocabulary/,
+    'a real governance verdict spliced into a client pack must be rejected',
+  )
+})
