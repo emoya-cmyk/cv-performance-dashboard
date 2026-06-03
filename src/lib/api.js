@@ -215,6 +215,16 @@ export const api = {
   regeneratePortfolioBrief: (asOf)       => post('/api/ai/brief', asOf ? { as_of: asOf } : {}),
   getClientBrief:           (clientId, asOf) => get(`/api/ai/brief/${clientId}${asOf ? `?as_of=${asOf}` : ''}`),
   regenerateClientBrief:    (clientId, asOf) => post(`/api/ai/brief/${clientId}`, asOf ? { as_of: asOf } : {}),
+  // getBriefHealth (intel-v7 10): the AI's narration self-grade — over the recent brief
+  // history, how many of the NARRATABLE morning briefs the model actually WROTE versus
+  // silently fell back to the safe template (read off `model`, never `grounded`), plus the
+  // always-on grounded invariant surfaced separately. AGENCY-ONLY: it names the internal
+  // machinery (model ids, fallback streaks) a client never sees, so the route shares the
+  // portfolio-brief 403 posture — a client token is refused. `days` tunes the look-back
+  // (default 30, clamped 1..365 server-side). Returns the full summarizeBriefQuality shape
+  // ({ total, window, grounded_rate, all_grounded, overall, by_audience }) plus an echoed
+  // `requested` window and one agency-voiced `narrative` sentence off the overall bucket.
+  getBriefHealth:           (days)       => get(`/api/ai/brief-health${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

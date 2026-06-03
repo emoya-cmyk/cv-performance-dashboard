@@ -139,6 +139,63 @@ async function getBrief(scopeKey, asOf) {
 const getClientBrief    = (clientId, asOf) => getBrief(clientId, asOf)
 const getPortfolioBrief = (asOf)           => getBrief(PORTFOLIO_KEY, asOf)
 
+// Subtract n whole days from a 'YYYY-MM-DD' anchor, returning another 'YYYY-MM-DD'.
+// Used only to compute the inclusive lower bound of the history window. Date math
+// here (vs the pure briefQuality module) is consistent with defaultAsOf's own
+// `new Date()` — the brief layer is the clock-aware boundary, the summarizer is not.
+function isoDayMinus(ymd, n) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ''))
+  if (!m) return ymd
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - n * 86400000
+  return new Date(t).toISOString().slice(0, 10)
+}
+
+// Window length in days, clamped to [1, 365]. BYTE-IDENTICAL to routes/ai.resolveDays
+// so the lib defends exactly the way the route validates — a direct caller that skips
+// the route (a morning job) gets the same window as an HTTP request would, and the
+// echoed `requested.days` can never disagree with the span actually read. Null/blank/
+// non-finite → the 30-day default; everything else floors then clamps (so 0 and -5 both
+// become 1, not the surprising `0 || 30 → 30` an `|| default` would have produced).
+function clampDays(days) {
+  if (days == null || days === '') return 30
+  const n = Math.floor(Number(days))
+  if (!Number.isFinite(n)) return 30
+  return Math.max(1, Math.min(365, n))
+}
+
+/**
+ * Read recent persisted briefs for the narration-health audit (lib/briefQuality).
+ * Returns NORMALIZED rows (pack parsed, grounded a real boolean) over an inclusive
+ * day window ending at `asOf`, ascending by (as_of, scope_key) so the summarizer
+ * sees a stable order. This is a pure read — it NEVER generates, so an audit can't
+ * mint LLM calls or perturb the very history it grades.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.asOf]    window end 'YYYY-MM-DD'; defaults to today (UTC).
+ * @param {number} [opts.days=30] window length in days (clamped to 1..365).
+ * @param {string} [opts.audience] optional 'client' | 'agency' filter.
+ * @param {string} [opts.scopeKey] optional single-scope filter (a clientId or PORTFOLIO_KEY).
+ * @returns {Promise<Array>} normalized brief rows (possibly empty).
+ */
+async function listRecentBriefs({ asOf, days = 30, audience, scopeKey } = {}) {
+  const to    = asOf || defaultAsOf()
+  const win   = clampDays(days)
+  const from  = isoDayMinus(to, win - 1)
+
+  const clauses = ['as_of >= $1', 'as_of <= $2']
+  const params  = [from, to]
+  if (audience) { params.push(audience); clauses.push(`audience = $${params.length}`) }
+  if (scopeKey) { params.push(scopeKey); clauses.push(`scope_key = $${params.length}`) }
+
+  const { rows } = await query(
+    `SELECT * FROM ai_briefs
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY as_of ASC, scope_key ASC`,
+    params
+  )
+  return rows.map(normalizeBriefRow)
+}
+
 // Return the stored brief if present, else generate + persist one. Used by the
 // in-app brief card route so the LLM is called at most once per scope per day.
 async function getOrGenerateClientBrief(clientId, asOf) {
@@ -160,6 +217,7 @@ module.exports = {
   getPortfolioBrief,
   getOrGenerateClientBrief,
   getOrGeneratePortfolioBrief,
+  listRecentBriefs,
   defaultAsOf,
   PORTFOLIO_KEY,
 }

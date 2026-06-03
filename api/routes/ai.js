@@ -23,6 +23,13 @@
 //        The agency portfolio morning brief (the whole book's pulse). AGENCY-ONLY
 //        — the prose names other clients — so a client-scoped token is refused.
 //
+//   GET  /api/ai/brief-health[?days=N][?as_of=YYYY-MM-DD]
+//        Narration-reliability self-grade: read the recent stored briefs (a pure,
+//        non-generating read) and report, among the NARRATABLE ones, how many the
+//        model actually wrote vs fell back to the safe template — plus the always-
+//        on grounding invariant. AGENCY-ONLY: it names the machinery (models, fall-
+//        back streaks) a client must never see. See lib/briefQuality.js.
+//
 //   POST /api/ai/ask   { question }
 //        Natural-language portfolio queries. The question is parsed into a typed,
 //        whitelisted query-spec, compiled to parameterised SQL (never text→SQL),
@@ -41,7 +48,9 @@ const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
 const {
   generateClientBrief, generatePortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
+  listRecentBriefs,
 } = require('../lib/brief')
+const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -69,6 +78,18 @@ function resolveAsOf(raw) {
     return { error: 'as_of must be an ISO date (YYYY-MM-DD)' }
   }
   return { asOf: String(raw) }
+}
+
+// History-window length for the narration-health audit. A lenient tuning knob, not a
+// key: absent or unparseable → the 30-day default; otherwise clamped to [1, 365]. This
+// MIRRORS the same clamp inside lib/brief.listRecentBriefs (defence-in-depth — the route
+// validates the request, the lib defends regardless), and we pass the resolved value in
+// so the echoed `requested.days` can never disagree with the window actually read.
+function resolveDays(raw) {
+  if (raw == null || raw === '') return 30
+  const n = Math.floor(Number(raw))
+  if (!Number.isFinite(n)) return 30
+  return Math.max(1, Math.min(365, n))
 }
 
 // The portfolio brief is narrated prose that NAMES other clients (headline +
@@ -232,6 +253,38 @@ router.post('/brief', async (req, res) => {
   }
 })
 
+// ── GET /api/ai/brief-health ──────────────────────────────────────────────────
+// Narration-reliability self-grade over the recent brief history. AGENCY-ONLY: it
+// names the internal machinery (model ids, fallback streaks) a client must never see,
+// so it shares the portfolio-brief 403 posture (resolvePortfolioScope). ?days=N tunes
+// the look-back (default 30, clamped 1..365); ?as_of=YYYY-MM-DD anchors the window end
+// (default today, UTC). The read is PURE — listRecentBriefs never (re)generates — so an
+// audit can't mint LLM calls or perturb the very history it grades. We return the full
+// summarizeBriefQuality shape (overall + per-audience buckets, grounded invariant), echo
+// the requested window, and attach one agency-voiced narration sentence off the overall
+// bucket. coverage (model !== 'template') and grounded_rate stay ORTHOGONAL by design —
+// "is the AI still writing?" vs "are the numbers still verified?" — never conflated.
+router.get('/brief-health', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days)
+
+  try {
+    const rows    = await listRecentBriefs({ asOf, days })
+    const summary = summarizeBriefQuality(rows)
+    res.json({
+      ...summary,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateBriefHealth(summary.overall, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-health error', err.message)
+    res.status(500).json({ error: 'Failed to load brief health' })
+  }
+})
+
 // ── POST /api/ai/ask ──────────────────────────────────────────────────────────
 // Body: { question: string, clientId?: string }. Returns the deterministic rows
 // plus a grounded one-line answer, scoped to whatever the caller is allowed to
@@ -328,3 +381,8 @@ module.exports = router
 // Exposed for unit tests — the route's hard client-scope boundary. Attaching it
 // to the exported router leaves the express mount (router-as-middleware) intact.
 module.exports.resolveAskScope = resolveAskScope
+// Exposed for unit tests — the brief-health route's two pure guards: the lenient
+// day-window clamp and the agency-only portfolio gate (a client token must never
+// reach the narration machinery). Same attach-to-router idiom as above.
+module.exports.resolveDays = resolveDays
+module.exports.resolvePortfolioScope = resolvePortfolioScope
