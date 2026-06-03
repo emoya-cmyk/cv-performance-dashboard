@@ -576,6 +576,7 @@ function stubOscillating() {
 const FORBIDDEN_HEALTH_KEYS = [
   'lead_policy_health', 'recommended_action', 'verdict_reason', 'revert_to_neutral',
   'floor_masked', 'high_run', 'low_run', 'mask_runs', 'window_used', 'history_len',
+  'series', // the per-lane weight trajectory — pure machinery, never a client field
 ]
 const FORBIDDEN_HEALTH_TOKENS = /lead_policy_health|recommended_action|verdict_reason|revert_to_neutral|floor_masked|high_run|low_run|mask_runs|window_used|history_len/
 function assertNoStabilityMachinery(pack, where) {
@@ -646,4 +647,119 @@ test('generateClientBrief exposes NONE of the stability monitor — under a heal
   const row = await getClientBrief(c, AS_OF)
   assertCleanClientPack(row.pack, 'getClientBrief read-back under oscillation')
   assertNoStabilityMachinery(row.pack, 'getClientBrief read-back under oscillation')
+})
+
+// ── Section F — layer 14d: the stability monitor is AGENCY-ONLY at the SOURCE ───────
+// 14b proved the WIRING keeps the monitor off the client pack across a live brief; this closes
+// the loop at the NARRATOR — the last egress gate every surface ultimately calls. We drive
+// assessLeadPolicyHealth with hand-built trajectories that each land on exactly ONE of its seven
+// verdict statuses, then assert the narrator's contract at the source: the CLIENT audience gets
+// '' for ALL seven (loop health is internal calibration, never client-facing), while the AGENCY
+// hears the four states worth knowing about (unstable / constrained / flagged / stable) and
+// stays silent on the three that are "no news is good news" (settling / idle / abstained). Each
+// agency string is also scanned for FORBIDDEN_HEALTH_TOKENS, so even the candid agency sentence
+// carries no machine identifier. Finally we prove the 14d guard ADDITION is load-bearing: a pack
+// clean but for a lone `series` weight-trajectory now trips assertNoStabilityMachinery by name.
+const { assessLeadPolicyHealth, narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
+
+// 14a house style: a lane cell, and a status:'tuned' snapshot the monitor will normalise.
+const hLane = (weight, direction, floored = false) => ({
+  weight,
+  direction: direction || (weight > 1 ? 'promote' : weight < 1 ? 'demote' : 'neutral'),
+  adjusted: weight !== 1,
+  safetyFloored: !!floored,
+})
+const hSnap = (lanes, as_of) => ({
+  status: 'tuned', neutral_rate: 0.5, min_sample: 4,
+  bounds: { min: 0.8, max: 1.2 }, safety_floor_lanes: ['act_now'],
+  lanes, ...(as_of ? { as_of } : {}),
+})
+
+// One trajectory per verdict status — each lands on a single dominant lane-state so the status is
+// unambiguous (asserted below, so a drifting threshold trips the fixture, not a silent false pass).
+// `loud` marks the four statuses the agency is meant to hear; the rest the agency stays mute on.
+const HEALTH_CASES = [
+  // oscillating non-floored lane (promote↔demote, 3 flips ≥ 2) → unstable
+  { status: 'unstable', loud: true, history: [
+    hSnap({ verify: hLane(1.1, 'promote') }), hSnap({ verify: hLane(0.9, 'demote') }),
+    hSnap({ verify: hLane(1.1, 'promote') }), hSnap({ verify: hLane(0.9, 'demote') }),
+  ] },
+  // a lane pinned at the 1.2 ceiling for 3 trailing mornings (high_run ≥ 3) → constrained
+  { status: 'constrained', loud: true, history: [
+    hSnap({ tailwind: hLane(1.1, 'promote') }), hSnap({ tailwind: hLane(1.2, 'promote') }),
+    hSnap({ tailwind: hLane(1.2, 'promote') }), hSnap({ tailwind: hLane(1.2, 'promote') }),
+  ] },
+  // the safety floor catching act_now for 3 trailing mornings (mask_runs ≥ 3) → flagged
+  { status: 'flagged', loud: true, history: [
+    hSnap({ act_now: hLane(1, 'neutral', true) }), hSnap({ act_now: hLane(1, 'neutral', true) }),
+    hSnap({ act_now: hLane(1, 'neutral', true) }),
+  ] },
+  // an active lane still drifting upward (spread 0.08 > ε, no bound-run, no flip) → settling (mute)
+  { status: 'settling', loud: false, history: [
+    hSnap({ verify: hLane(1.04, 'promote') }), hSnap({ verify: hLane(1.08, 'promote') }),
+    hSnap({ verify: hLane(1.12, 'promote') }),
+  ] },
+  // an active lane converged (spread 0 ≤ ε) → stable
+  { status: 'stable', loud: true, history: [
+    hSnap({ tailwind: hLane(1.10, 'promote') }), hSnap({ tailwind: hLane(1.10, 'promote') }),
+  ] },
+  // every lane parked at neutral weight 1, never floored → idle (agency mute)
+  { status: 'idle', loud: false, history: [
+    hSnap({ verify: hLane(1, 'neutral') }), hSnap({ verify: hLane(1, 'neutral') }),
+  ] },
+  // a single morning — below min-history → abstained, lanes {} (agency mute)
+  { status: 'abstained', loud: false, history: [ hSnap({ verify: hLane(1.1, 'promote') }) ] },
+]
+
+test('narrateLeadPolicyHealth is silent for the client across ALL seven verdict statuses (14d)', () => {
+  for (const c of HEALTH_CASES) {
+    const verdict = assessLeadPolicyHealth(c.history)
+    // the fixture really does build the status it claims — honest coverage, not a lucky '':
+    assert.equal(verdict.status, c.status, `fixture for "${c.status}" must assess to that status`)
+    // the client egress is '' for EVERY status — loop health is internal calibration, full stop.
+    assert.equal(
+      narrateLeadPolicyHealth(verdict, { audience: 'client' }), '',
+      `client narration must be '' for status "${c.status}"`,
+    )
+  }
+})
+
+test('narrateLeadPolicyHealth speaks to the AGENCY only for the four loud statuses — token-clean (14d)', () => {
+  for (const c of HEALTH_CASES) {
+    const verdict = assessLeadPolicyHealth(c.history)
+    const agency = narrateLeadPolicyHealth(verdict, { audience: 'agency' })
+    assert.equal(typeof agency, 'string')
+    if (c.loud) {
+      assert.ok(agency.length > 0, `agency SHOULD hear status "${c.status}" (proving the client '' is a deliberate choice)`)
+      assert.ok(
+        !FORBIDDEN_HEALTH_TOKENS.test(agency),
+        `agency narration for "${c.status}" must carry no machine identifier`,
+      )
+    } else {
+      assert.equal(agency, '', `agency stays silent on "${c.status}" — no news is good news`)
+    }
+  }
+})
+
+test('the 14d series guard is load-bearing — a lone weight-trajectory trips assertNoStabilityMachinery (14d)', () => {
+  // A pack clean of every other machinery key but carrying a single `series` weight-trajectory:
+  // before 14d added 'series' to FORBIDDEN_HEALTH_KEYS this slipped through; now it is caught by name.
+  assert.throws(
+    () => assertNoStabilityMachinery({ focus: { metric: 'leads', series: [1.1, 0.9, 1.1] } }, 'series-probe'),
+    /series/,
+    'a `series` array anywhere in a client pack must be rejected by name',
+  )
+  // …and the guard is not vacuously throwing — a structurally similar pack with no machinery passes.
+  assert.doesNotThrow(
+    () => assertNoStabilityMachinery({ focus: { metric: 'leads', trend: 'down' } }, 'clean-probe'),
+    'a clean pack with no stability machinery must pass',
+  )
+  // belt-and-suspenders: a REAL assessed verdict (every lane carries a `series`) can never ride a pack.
+  const real = assessLeadPolicyHealth(HEALTH_CASES[0].history) // the unstable verdict
+  assert.ok(Array.isArray(real.lanes.verify.series), 'sanity: the real verdict carries a per-lane series')
+  assert.throws(
+    () => assertNoStabilityMachinery({ insight: { lead_policy_health: real } }, 'real-verdict-probe'),
+    /stability-monitor field/,
+    'a real stability verdict spliced into a client pack must be rejected',
+  )
 })
