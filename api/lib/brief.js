@@ -42,6 +42,12 @@ const { governLeadPolicy }                               = require('./briefLeadP
 // governor keeps neutralising?) and recommends escalation when it doesn't — the LEARN/ADJUST
 // half that closes the governor's loop. Pure and dependency-free, so a top-level require is safe.
 const leadAudit                                          = require('./briefLeadPolicyAudit')
+// intel-v7 layer 17 — the remediator. Turns the auditor's `escalate` recommendation into a
+// concrete bounded reversible structural fix (widen a lane's dead-band → tighten its bounds →
+// pin it), staged for one agency click and never auto-applied — the ADJUST rung that gives the
+// auditor's escalation a consumer and closes the loop SENSE→ACT→AUDIT→REMEDIATE. Pure and
+// dependency-free, so a top-level require is safe.
+const leadRemediation                                    = require('./briefLeadPolicyRemediation')
 
 // The portfolio brief spans every client, so it has no client id to key on; it
 // lives under this single reserved scope. Exported so the route layer and tests
@@ -255,6 +261,22 @@ async function leadPolicyGovernanceAuditFor(asOf, span) {
   return leadAudit.auditLeadPolicyGovernance(await leadPolicyGovernanceHistoryFor(asOf, span))
 }
 
+// intel-v7 layer 17 — the remediator's verdict. Reads the auditor's churning verdict over the
+// trailing window AND the live derived policy, then — per churning, NON-floored lane — stages the
+// least-aggressive bounded reversible structural fix (widen the dead-band → tighten the bounds →
+// pin the lane), escalating by what's ALREADY been tried on that lane. This is the ADJUST rung
+// that gives the auditor's `escalate` a concrete consumer, closing SENSE→ACT→AUDIT→REMEDIATE.
+// Staged for one agency click, NEVER auto-applied; the safety floor (act_now) is never remediated.
+// Agency-only calibration; echoed NOWHERE to the client. The audit is read over the requested
+// span (its own window when absent); the policy is the live snapshot, span-invariant. Pure read,
+// never throws (proposeLeadPolicyRemediation abstains when the audit abstains, is steady when it
+// isn't escalating). Reuses the single-pass decision so the policy window is assembled once.
+async function leadPolicyRemediationFor(asOf, span) {
+  const audit      = await leadPolicyGovernanceAuditFor(asOf, span)
+  const { policy } = await leadPolicyDecisionFor(asOf)
+  return leadRemediation.proposeLeadPolicyRemediation(audit, policy)
+}
+
 /**
  * Build, narrate, verify and persist a client's morning brief for one day.
  * @param {string} clientId
@@ -321,7 +343,7 @@ async function generatePortfolioBrief(asOf) {
   // the oscillating lanes in place and keeps the earned ones live, superseding layer 14's
   // blunt all-or-nothing revert; the governance + health records below tell the agency WHAT
   // it corrected and WHY. Apply whenever the governed order still tunes something ('tuned').
-  const { governed: leadPolicy, governance, health } = await leadPolicyDecisionFor(day)
+  const { policy: rawPolicy, governed: leadPolicy, governance, health } = await leadPolicyDecisionFor(day)
   const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned')
   const briefing    = (applyPolicy && Array.isArray(pulse.roster))
     ? summarizePortfolioPulse(pulse.roster, { leadPolicy })
@@ -347,6 +369,17 @@ async function generatePortfolioBrief(asOf) {
   // the policy applied. Set after narration so the narrator/verifier never see it, never on
   // the client pack. Retained alongside the governance record above for full diagnosis.
   if (health && health.status !== 'abstained') pack.lead_policy_health = health
+  // REMEDIATE THE TUNER (layer 17): when the auditor finds the governor's safe corrective keeps
+  // RECURRING on a lane (the learner re-oscillates faster than neutralise can keep up), the
+  // remediator stages the least-aggressive bounded reversible structural fix for that lane —
+  // widen its dead-band, tighten its bounds, or pin it — escalating by what's already been tried.
+  // Reuses the raw (pre-governance) policy already in hand so only the audit walk is added. Agency-
+  // only, attached ONLY when a fix is actually STAGED (a steady/abstained loop is omitted, mirroring
+  // the governance gate above); the client pack never carries it. Staged for one agency click, never
+  // auto-applied. Set after narration so the LLM narrator + grounding verifier never see it.
+  const remediation = leadRemediation.proposeLeadPolicyRemediation(
+    await leadPolicyGovernanceAuditFor(day), rawPolicy)
+  if (leadRemediation.shouldStageRemediation(remediation)) pack.lead_policy_remediation = remediation
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,
@@ -456,6 +489,7 @@ module.exports = {
   leadPolicyGovernanceFor,
   leadPolicyGovernanceHistoryFor,
   leadPolicyGovernanceAuditFor,
+  leadPolicyRemediationFor,
   leadPolicyDecisionFor,
   defaultAsOf,
   PORTFOLIO_KEY,

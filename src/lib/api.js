@@ -281,6 +281,16 @@ export const api = {
   // quiet_mornings }, lanes, window_used, history_len }) plus echoed `requested` + one agency-voiced
   // `narrative` spoken only when a lane is churning. `days` sizes the audit window. Never client-facing.
   getLeadPolicyGovernanceAudit: (days)   => get(`/api/ai/lead-policy-governance-audit${days ? `?days=${days}` : ''}`),
+  // The ADJUST rung that closes the lead-policy loop. When the auditor escalates a recurring
+  // neutralize correction, the remediator proposes ONE concrete bounded reversible structural fix
+  // per churning lane (widen dead-band → tighten bounds → pin neutral, deepening by what's already
+  // been tried), staged for a single agency click; safety-floored lanes (act_now) are never touched.
+  // Returns the proposeLeadPolicyRemediation shape ({ status: 'remediation_proposed'|'steady'|
+  // 'abstained', proposals: [{ lane, remedy, severity, from, to, reversible, rationale }],
+  // abstained_lanes, lanes_considered, as_of, remediation_reason }) plus echoed `requested` + one
+  // agency-voiced `narrative` spoken only when a fix is staged. `days` sizes the audit window the
+  // proposal rests on. Never client-facing.
+  getLeadPolicyGovernanceRemediation: (days) => get(`/api/ai/lead-policy-governance-remediation${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

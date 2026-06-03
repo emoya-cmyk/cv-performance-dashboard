@@ -49,7 +49,7 @@ const {
   generateClientBrief, generatePortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
-  leadPolicyGovernanceAuditFor,
+  leadPolicyGovernanceAuditFor, leadPolicyRemediationFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -59,6 +59,7 @@ const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy'
 const { narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
 const { narrateLeadPolicyGovernance } = require('../lib/briefLeadPolicyGovernor')
 const { narrateLeadPolicyGovernanceAudit } = require('../lib/briefLeadPolicyAudit')
+const { narrateLeadPolicyRemediation } = require('../lib/briefLeadPolicyRemediation')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -456,6 +457,36 @@ router.get('/lead-policy-governance-audit', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET lead-policy-governance-audit error', err.message)
     res.status(500).json({ error: 'Failed to load lead policy governance audit' })
+  }
+})
+
+// ── GET /api/ai/lead-policy-governance-remediation ────────────────────────────
+// The ADJUST rung that closes the lead-policy loop: when the auditor escalates a
+// recurring neutralize correction, the remediator turns that escalation into a
+// concrete, bounded, reversible structural fix (widen dead-band → tighten bounds
+// → pin neutral), staged for one agency click. Pure agency calibration, so it
+// reuses the same 403 gate and agency-only narration; the client never sees any
+// of this. ?days=N sizes how many governance mornings to audit before proposing;
+// absent → the auditor's own window.
+router.get('/lead-policy-governance-remediation', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  // Same span discipline as the sibling lead-policy reads: pass through only when
+  // explicitly requested, otherwise let the auditor inside fall to its own window.
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const remediation = await leadPolicyRemediationFor(asOf, span)
+    res.json({
+      ...remediation,
+      requested: { as_of: asOf || null, days: span ?? null },
+      narrative: narrateLeadPolicyRemediation(remediation, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET lead-policy-governance-remediation error', err.message)
+    res.status(500).json({ error: 'Failed to load lead policy governance remediation' })
   }
 })
 
