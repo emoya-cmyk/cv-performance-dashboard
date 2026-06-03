@@ -3,7 +3,7 @@ import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
-  Gauge, ShieldAlert,
+  Gauge, ShieldAlert, AlertOctagon, Wrench,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -597,6 +597,64 @@ function BriefHealthStat({ label, view }) {
   )
 }
 
+/* ── the narrator's own self-check banner (intel-v7 11c) ───────────────────────────
+   The panel grades how OFTEN the analyst writes; this banner answers the sharper
+   operational question the read endpoint now folds in as `health.delivery`: has narration
+   been falling back so persistently that someone should step in? It is the UI face of
+   assessBriefDelivery's worst-of-two-stream verdict — amber while the voice is slipping
+   (degraded, streak ≥ 2), rose once it has stalled (≥ 3) — carrying the one self-heal step
+   to take. Silent BY CONSTRUCTION on a healthy or quiet narrator (delivery.alert === false),
+   so a calm book shows nothing here and the alarm never trains anyone to ignore it. Agency-
+   only like the whole panel; clients never see it and — because every fallback brief is
+   grounded-by-construction — never received a wrong number while the narrator was failing. */
+const BRIEF_DELIVERY_TONE = {
+  stalled:  { wrap: 'border-rose-200 bg-rose-50',   icon: 'text-rose-500',  kicker: 'text-rose-600',  head: 'text-rose-900',  body: 'text-rose-800/80',  chip: 'border-rose-200 bg-white text-rose-700',  label: 'Narration stalled' },
+  degraded: { wrap: 'border-amber-200 bg-amber-50', icon: 'text-amber-500', kicker: 'text-amber-600', head: 'text-amber-900', body: 'text-amber-800/80', chip: 'border-amber-200 bg-white text-amber-700', label: 'Narration degrading' },
+}
+// The reassurance lib/briefDelivery appends to every alert narrative, restated here so we can
+// peel it (and the action) back off the one-line server narrative and lay the three parts out.
+const BRIEF_GROUNDED_TAIL = 'Every number stayed grounded throughout.'
+
+function BriefDeliveryBanner({ delivery }) {
+  if (!delivery || !delivery.alert) return null
+  const t      = BRIEF_DELIVERY_TONE[delivery.status] || BRIEF_DELIVERY_TONE.degraded
+  const Icon   = delivery.status === 'stalled' ? AlertOctagon : AlertTriangle
+  const action = (delivery.action || '').trim()
+  // The server narrative is one line: "<what happened> <self-heal step> <grounded tail>".
+  // Peel the two known, deterministic suffixes so the description leads as the headline, the
+  // action rides its own chip, and the grounded reassurance gets a quiet footnote — nothing
+  // renders twice. If the contract ever drifts, `body` simply keeps the whole sentence.
+  let body = (delivery.narrative || '').trim()
+  if (body.endsWith(BRIEF_GROUNDED_TAIL)) body = body.slice(0, -BRIEF_GROUNDED_TAIL.length).trim()
+  if (action && body.endsWith(action))    body = body.slice(0, -action.length).trim()
+  if (!body) body = `The ${delivery.audience === 'agency' ? 'portfolio' : 'client'} morning brief keeps falling back to the safe template.`
+
+  return (
+    <div className={cn('mb-4 rounded-xl border px-3.5 py-3', t.wrap)} role="alert">
+      <div className="flex items-start gap-2.5">
+        <Icon className={cn('w-4 h-4 mt-0.5 shrink-0', t.icon)} />
+        <div className="min-w-0 flex-1">
+          <p className={cn('text-[10px] font-black uppercase tracking-wider', t.kicker)}>
+            Narrator self-check · {t.label}
+          </p>
+          <p className={cn('mt-0.5 text-[13px] font-bold leading-snug', t.head)}>{body}</p>
+          {action && (
+            <div className="mt-2 flex items-start gap-1.5">
+              <span className={cn('mt-px inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider shrink-0', t.chip)}>
+                <Wrench className="w-2.5 h-2.5" /> Self-heal
+              </span>
+              <span className={cn('text-[11px] font-medium leading-snug', t.body)}>{action}</span>
+            </div>
+          )}
+          <p className={cn('mt-2 text-[10px] font-medium leading-snug', t.body)}>
+            Clients were never affected — their dashboards and digests already fell back to the same safe, fully-grounded template, so every number they saw stayed correct.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BriefHealthPanel() {
   const [status, setStatus] = useState('loading')   // loading | done | error
   const [health, setHealth] = useState(null)
@@ -664,6 +722,8 @@ function BriefHealthPanel() {
       </div>
 
       <div className="px-4 py-4">
+        <BriefDeliveryBanner delivery={health?.delivery} />
+
         {status === 'loading' && (
           <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
             <Loader2 className="w-4 h-4 animate-spin" /> Grading the brief history…
@@ -731,7 +791,10 @@ function BriefHealthPanel() {
               </p>
             )}
 
-            {streak >= 2 && (
+            {/* Legacy raw-streak hint — superseded by the graded <BriefDeliveryBanner> above
+                whenever the server sends health.delivery. Kept only as a backward-compatible
+                fallback for an older payload, so the two never double up on the same alarm. */}
+            {streak >= 2 && !health?.delivery && (
               <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600">
                 <AlertTriangle className="w-3 h-3 shrink-0" /> The last {streak} briefs fell back to the template — the narration model may be unreachable.
               </p>

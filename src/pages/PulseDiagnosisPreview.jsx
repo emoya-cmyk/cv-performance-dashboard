@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, Eye, CheckCircle2, Radar, Target, SlidersHorizontal } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -799,6 +799,89 @@ const BRIEF_HEALTH = {
     'Heads up — the last 2 fell back to the template.',
 }
 
+// Same shape, the failure case the banner exists for: the AGENCY brief stalled — its last 3 portfolio
+// mornings all fell back to the safe template (an expired key / rate limit / outage), while the CLIENT
+// stream kept writing freely. assessBriefDelivery grades per-audience worst-of, so the agency stall
+// drives a rose 'stalled' verdict even though clients never slipped. `delivery` is verbatim what
+// GET /api/ai/brief-health returns (narrative = narrateBriefDelivery(signal, { audience: 'agency' })).
+const BRIEF_HEALTH_STALLED = {
+  total: 12,
+  window: { from: '2026-05-27', to: '2026-06-02', days: 7 },
+  grounded_rate: 1,
+  all_grounded: true,
+  overall: {
+    total: 12, narratable: 9, quiet: 3, narrated: 5, fellback: 4,
+    coverage: 0.5556, models: { 'claude-opus-4-7': 5, template: 4 },
+    latest: { as_of: '2026-06-02', state: 'fellback' }, streak_fellback: 3, health: 'mixed',
+  },
+  by_audience: {
+    client: { total: 7, narratable: 5, quiet: 2, narrated: 4, fellback: 1, coverage: 0.8,  models: { 'claude-opus-4-7': 4, template: 1 }, latest: { as_of: '2026-06-02', state: 'narrated' }, streak_fellback: 0, health: 'rich' },
+    agency: { total: 5, narratable: 4, quiet: 1, narrated: 1, fellback: 3, coverage: 0.25, models: { 'claude-opus-4-7': 1, template: 3 }, latest: { as_of: '2026-06-02', state: 'fellback' }, streak_fellback: 3, health: 'template-only' },
+  },
+  requested: { as_of: null, days: 30 },
+  narrative:
+    'The AI wrote 5 of 9 morning briefs in its own words; the rest used the safe template — all grounded to your verified numbers. ' +
+    'Heads up — the last 3 fell back to the template.',
+  delivery: {
+    status: 'stalled', severity: 'critical', alert: true, reason: 'stalled-streak',
+    streak: 3, coverage: 0.25, narratable: 4, latest_as_of: '2026-06-02', audience: 'agency',
+    action: 'Check the narration model now — an expired API key, a rate limit, or a provider outage — then regenerate.',
+    narrative:
+      'The portfolio morning brief has fallen back to the safe template 3 times running (most recent 2026-06-02). ' +
+      'Check the narration model now — an expired API key, a rate limit, or a provider outage — then regenerate. ' +
+      'Every number stayed grounded throughout.',
+    streams: {
+      client: { audience: 'client', status: 'ok',      reason: 'ok',             alert: false, streak: 0, coverage: 0.8,  narratable: 5, latest_as_of: '2026-06-02' },
+      agency: { audience: 'agency', status: 'stalled', reason: 'stalled-streak', alert: true,  streak: 3, coverage: 0.25, narratable: 4, latest_as_of: '2026-06-02' },
+    },
+  },
+}
+
+// ── the narrator's own self-check banner (intel-v7 11c) — preview twin of BriefDeliveryBanner on
+// Intelligence.jsx (cn → template strings so the preview matches this file). Fires ONLY when a
+// per-audience fallback run crosses the graded threshold (amber = degrading ≥2, rose = stalled ≥3);
+// silent on healthy/quiet. The narrative already embeds the self-heal action + grounded tail, so the
+// banner peels both known suffixes off and re-renders them as their own chip + reassurance line —
+// nothing shows twice. Agency-only: a client never sees that the writer itself stumbled.
+const BRIEF_DELIVERY_TONE = {
+  stalled:  { wrap: 'border-rose-200 bg-rose-50',   icon: 'text-rose-500',  kicker: 'text-rose-600',  head: 'text-rose-900',  body: 'text-rose-800/80',  chip: 'border-rose-200 bg-white text-rose-700',  label: 'Narration stalled' },
+  degraded: { wrap: 'border-amber-200 bg-amber-50', icon: 'text-amber-500', kicker: 'text-amber-600', head: 'text-amber-900', body: 'text-amber-800/80', chip: 'border-amber-200 bg-white text-amber-700', label: 'Narration degrading' },
+}
+const BRIEF_GROUNDED_TAIL = 'Every number stayed grounded throughout.'
+
+function BriefDeliveryBannerPreview({ delivery }) {
+  if (!delivery || !delivery.alert) return null
+  const t      = BRIEF_DELIVERY_TONE[delivery.status] || BRIEF_DELIVERY_TONE.degraded
+  const Icon   = delivery.status === 'stalled' ? AlertOctagon : AlertTriangle
+  const action = (delivery.action || '').trim()
+  let body = (delivery.narrative || '').trim()
+  if (body.endsWith(BRIEF_GROUNDED_TAIL)) body = body.slice(0, -BRIEF_GROUNDED_TAIL.length).trim()
+  if (action && body.endsWith(action))    body = body.slice(0, -action.length).trim()
+  if (!body) body = `The ${delivery.audience === 'agency' ? 'portfolio' : 'client'} morning brief keeps falling back to the safe template.`
+  return (
+    <div className={`mb-4 rounded-xl border px-3.5 py-3 ${t.wrap}`} role="alert">
+      <div className="flex items-start gap-2.5">
+        <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${t.icon}`} />
+        <div className="min-w-0 flex-1">
+          <p className={`text-[10px] font-black uppercase tracking-wider ${t.kicker}`}>Narrator self-check · {t.label}</p>
+          <p className={`mt-0.5 text-[13px] font-bold leading-snug ${t.head}`}>{body}</p>
+          {action && (
+            <div className="mt-2 flex items-start gap-1.5">
+              <span className={`mt-px inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider shrink-0 ${t.chip}`}>
+                <Wrench className="w-2.5 h-2.5" /> Self-heal
+              </span>
+              <span className={`text-[11px] font-medium leading-snug ${t.body}`}>{action}</span>
+            </div>
+          )}
+          <p className={`mt-2 text-[10px] font-medium leading-snug ${t.body}`}>
+            Clients were never affected — their dashboards and digests already fell back to the same safe, fully-grounded template, so every number they saw stayed correct.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BriefHealthPanelPreview({ data }) {
   const o = data.overall
   const tone = BRIEF_HEALTH_TONE[o.health] || BRIEF_HEALTH_TONE['no-data']
@@ -825,6 +908,7 @@ function BriefHealthPanelPreview({ data }) {
         )}
       </div>
       <div className="px-4 py-4">
+        <BriefDeliveryBannerPreview delivery={data.delivery} />
         <div className="flex items-end gap-3 flex-wrap">
           <div className="flex items-baseline gap-1.5">
             <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">{coveragePct}%</span>
@@ -842,7 +926,7 @@ function BriefHealthPanelPreview({ data }) {
           <BriefHealthStatPreview label="Portfolio brief" view={briefCoverageView(data.by_audience.agency)} />
         </div>
         {models && <p className="mt-2 text-[10px] font-medium text-slate-400 truncate">Writers: {models}</p>}
-        {o.streak_fellback >= 2 && (
+        {o.streak_fellback >= 2 && !data.delivery && (
           <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600">
             <AlertTriangle className="w-3 h-3 shrink-0" /> The last {o.streak_fellback} briefs fell back to the template — the narration model may be unreachable.
           </p>
@@ -864,7 +948,7 @@ export default function PulseDiagnosisPreview() {
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) → (9)</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) → (11)</p>
           <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record → self-tuning → morning brief</h1>
           <p className="text-sm text-slate-500 font-medium mt-1.5 max-w-3xl leading-relaxed">
             The pulse already says <span className="font-bold text-slate-700">what</span> moved this week, and (2) adds the{' '}
@@ -943,6 +1027,29 @@ export default function PulseDiagnosisPreview() {
             writing?&rdquo; can never be confused with &ldquo;are the numbers still verified?&rdquo; A two-in-a-row fallback trips an early-warning, and quiet
             mornings (nothing worth narrating) never count as misses. <span className="font-bold text-slate-600">Agency-only</span> — model names and
             fallback streaks stay out of the client&rsquo;s morning brief entirely.
+          </p>
+        </div>
+
+        {/* ── NARRATOR SELF-CHECK — the delivery alarm the reliability panel raises when its OWN
+            writer stalls (layer 11c), full width. Same panel as above, fed the failure fixture: the
+            agency brief's last three portfolio mornings all fell back, so a rose banner leads with the
+            graded verdict + one self-heal step, and the legacy streak line steps aside. The twin's
+            point: prove the alarm is silent on the healthy panel above and loud only here, and that it
+            reassures clients were never touched. Rides a separate agency-only channel (BRIEF_ALERT_TO),
+            never a client digest. ─────────────────────────────────────────────────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Narration reliability <span className="text-rose-400">· self-check firing</span></p>
+          <BriefHealthPanelPreview data={BRIEF_HEALTH_STALLED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The same panel, the morning its own writer stalls. When a single audience&rsquo;s brief falls back{' '}
+            <span className="font-bold text-rose-600">three mornings running</span>, the self-check stops being a footnote and becomes the
+            lead: a <span className="font-bold text-rose-600">rose banner</span> states the graded verdict, attaches the one{' '}
+            <span className="font-bold text-slate-600">self-heal step</span> (check the model — expired key, rate limit, or outage — then
+            regenerate), and the old streak line steps aside so the alarm never doubles up. Graded{' '}
+            <span className="font-bold text-slate-600">per audience</span>, so the portfolio brief can raise the alarm while the client stream
+            keeps <span className="font-bold text-emerald-600">writing freely</span> — and because every fallback is grounded-by-construction,
+            the banner says it plainly: <span className="font-bold text-slate-600">clients were never affected</span>. It rides a separate
+            agency-only alert channel, never a client&rsquo;s digest.
           </p>
         </div>
 
