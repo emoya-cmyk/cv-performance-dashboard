@@ -25,6 +25,7 @@
 const { query }                                          = require('../db')
 const { getClientPulse, getPortfolioPulse }              = require('./insights')
 const { buildClientBriefPack, buildPortfolioBriefPack }  = require('./pulseBrief')
+const { summarizePortfolioPulse, summarizeClientPulse }  = require('./pulseBriefing')
 const { generateBriefText }                              = require('./ai')
 
 // The portfolio brief spans every client, so it has no client id to key on; it
@@ -106,6 +107,29 @@ async function clientImpactReinforcement(asOf) {
   }
 }
 
+// The TUNE half of the self-improving lead loop (intel-v7 layer 13). Reads the SAME
+// editorial-precision grade clientImpactReinforcement narrates and turns it into a
+// bounded per-lane nudge: deriveLeadPolicy converts each triage lane's recent hit_rate
+// into a weight in [0.8, 1.2], floors act_now at >=1.0 (a learned-noisy emergency lane
+// can never be DOWN-weighted — burying a real crisis is worse than crying wolf), and
+// returns status 'tuned' ONLY when a graded lane actually crossed the min-sample bar.
+// 'abstained' (ungraded) and 'idle' (graded, nothing moved yet) both leave the brief
+// byte-identical to the live pulse, so the morning brief equals the dashboard until the
+// loop has truly LEARNED something. Fail-safe by construction: any error in the grading
+// replay yields null and the caller falls back to the untuned briefing. Same lazy-require
+// cycle break as above (briefImpactEngine -> ./brief), and the require cache makes the
+// second call in a single brief run free.
+async function leadPolicyFor(asOf) {
+  try {
+    const { getBriefImpact }   = require('./briefImpactEngine')
+    const { deriveLeadPolicy } = require('./briefLeadPolicy')
+    const impact = await getBriefImpact({ asOf })
+    return deriveLeadPolicy(impact)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Build, narrate, verify and persist a client's morning brief for one day.
  * @param {string} clientId
@@ -115,7 +139,19 @@ async function clientImpactReinforcement(asOf) {
 async function generateClientBrief(clientId, asOf) {
   const day   = asOf || defaultAsOf()
   const pulse = await getClientPulse(clientId, { asOf: day })
-  const pack  = buildClientBriefPack(pulse)
+
+  // TUNE the lead before packing. When the grade has learned that a lane earns its place,
+  // summarizeClientPulse re-aims ONLY the headline/focus (counts/posture/confidence are
+  // permutation-invariant and never move); otherwise this is a stable no-op and `briefing`
+  // is the live pulse's own briefing, byte-identical to the dashboard. The CLIENT pack
+  // never carries the policy object — only the re-aimed focus crosses the egress, never a
+  // weight, hit_rate or lane label. pulse.signals is rankPulse(enriched), a pure sort, so
+  // recomputing from it is set-identical to what getClientPulse already summarised.
+  const leadPolicy = await leadPolicyFor(day)
+  const briefing   = (leadPolicy && leadPolicy.status === 'tuned' && Array.isArray(pulse.signals))
+    ? summarizeClientPulse(pulse.signals, { leadPolicy })
+    : pulse.briefing
+  const pack  = buildClientBriefPack({ ...pulse, briefing })
   const { text, model, grounded } = await generateBriefText(pack)
 
   // Honest reinforcement — only when our morning leads have EARNED it (else ''). Set
@@ -142,8 +178,24 @@ async function generateClientBrief(clientId, asOf) {
 async function generatePortfolioBrief(asOf) {
   const day   = asOf || defaultAsOf()
   const pulse = await getPortfolioPulse({ asOf: day })
-  const pack  = buildPortfolioBriefPack(pulse)
+
+  // TUNE the lead before packing (agency surface). When the grade has learned a lane
+  // earns its place, summarizePortfolioPulse re-aims ONLY headline/also — counts, posture
+  // and confidence are permutation-invariant and never move; otherwise this is a stable
+  // no-op and `briefing` is the live pulse's own briefing. pulse.roster is rankPulse(roster),
+  // a pure sort, so recomputing from it is set-identical to what getPortfolioPulse summarised.
+  const leadPolicy = await leadPolicyFor(day)
+  const briefing   = (leadPolicy && leadPolicy.status === 'tuned' && Array.isArray(pulse.roster))
+    ? summarizePortfolioPulse(pulse.roster, { leadPolicy })
+    : pulse.briefing
+  const pack  = buildPortfolioBriefPack({ ...pulse, briefing })
   const { text, model, grounded } = await generateBriefText(pack)
+
+  // The learned-policy panel is AGENCY-ONLY telemetry (lane weights, hit_rates, what moved).
+  // Set AFTER narration so the LLM narrator + grounding verifier never see the machinery —
+  // mirrors clientImpactReinforcement's placement. Only ever attached to the portfolio
+  // (agency) pack; the client pack carries no lead_policy (see generateClientBrief).
+  if (leadPolicy && leadPolicy.status === 'tuned') pack.lead_policy = leadPolicy
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,

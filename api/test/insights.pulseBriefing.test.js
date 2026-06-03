@@ -11,6 +11,7 @@ const {
   confidenceLabel,
 } = require('../lib/pulseBriefing')
 const { rankPulseSignals } = require('../lib/pulseTriage')
+const { deriveLeadPolicy } = require('../lib/briefLeadPolicy')
 
 // --- fixture helper: the RAW signal shape rankPulseSignals consumes -----------------
 // (severity/adverse/reliability/reliability_label/accuracy_label/delta_pct/z + ids).
@@ -286,4 +287,141 @@ test('summarizeClientPulse — posture watch when the top adverse signal is not 
   assert.equal(b.posture, 'watch')
   assert.equal(b.also_count, 0)
   assert.equal(b.focus.lane, 'worth_a_look')
+})
+
+// =====================================================================================
+// intel-v7 (13b) — applyLeadPolicyToFeed: the ONE bounded, learned, safety-floored
+// re-aim of the lead slot. A tuned policy may nudge WHICH adverse row leads; it can
+// never reorder the census, leap a rank, or bury an act_now emergency. Absent / idle /
+// abstained / sub-sample policy is a STABLE NO-OP. The lead is the only thing that moves;
+// counts, posture and confidence are read over the whole action set, order-free.
+// The math is geometric: each candidate is scored decay**rank with decay = 1/bounds.max,
+// so a max-promoted follower at rank i+1 ties (never beats) a neutral predecessor at i —
+// a swap requires the predecessor to be actively DEMOTED. act_now is safety-floored at
+// weight ≥ 1, so no lower lane can ever pass it.
+// =====================================================================================
+
+// a graded briefImpact-shaped grade with hand-set per-lane records. rawLaneWeight reads
+// only { judged, hit_rate }; label is cosmetic. hit_rate 1.0 → weight 1.2 (promote),
+// 0.0 → 0.8 (demote), and judged < 4 → untouched (insufficient_sample).
+const laneRec = (judged, hit_rate, label = 'x') => ({ judged, hit_rate, label })
+const gradedImpact = (byLane) => ({ status: 'graded', by_lane: byLane })
+
+// two adverse warning rows of DIFFERENT credibility → two distinct, non-act_now lanes.
+// triageLane keys off reliability_label, NOT gradedness: a reliable warning → worth_a_look,
+// a noisy warning → monitor. (An UNgraded warning is "not shaky" → ALSO worth_a_look, which
+// would collide — so the runner-up is explicitly noisy.) Bravo's low reliability (0.30) also
+// floors its triage priority below Alpha's, so it deterministically ranks second (act[1]).
+// Order is still read at runtime so the assertions never hard-code which row triage leads.
+function twoLaneRoster() {
+  return [
+    sig({ client_name: 'Alpha', metric: 'leads', label: 'Leads', severity: 'warning', reliability: 0.85, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -18, z: -2.0 }),
+    sig({ client_name: 'Bravo', metric: 'jobs', label: 'Jobs', severity: 'warning', reliability: 0.30, reliability_label: 'noisy', accuracy_label: 'learning', delta_pct: -14, z: -1.5 }), // noisy → monitor
+  ]
+}
+
+test('applyLeadPolicyToFeed — absent / abstained / idle / sub-sample policy is a STABLE NO-OP', () => {
+  const roster = twoLaneRoster()
+  const act = rankPulseSignals(roster, { adverseOnly: true })
+  const L0 = act[0].lane
+  const noOps = [
+    undefined,
+    null,
+    deriveLeadPolicy({}),                                  // not graded → 'abstained'
+    deriveLeadPolicy({ status: 'graded', by_lane: {} }),  // graded, nothing to tune → 'idle'
+    deriveLeadPolicy(gradedImpact({ [L0]: laneRec(2, 0) })), // graded but < min_sample → 'idle'
+  ]
+  for (const leadPolicy of noOps) {
+    const tag = leadPolicy ? leadPolicy.status : String(leadPolicy)
+    const b = summarizePortfolioPulse(roster, { leadPolicy })
+    assert.deepEqual(b.headline, act[0], `policy "${tag}" must not move the headline`)
+    assert.deepEqual(b.also, act.slice(1, 4), `policy "${tag}" must not reorder the page`)
+  }
+})
+
+test('applyLeadPolicyToFeed — a demoted lead + a promoted runner-up is a near-tie swap', () => {
+  const roster = twoLaneRoster()
+  const act = rankPulseSignals(roster, { adverseOnly: true })
+  const L0 = act[0].lane, L1 = act[1].lane
+  // preconditions: distinct lanes, and the incumbent is demotable (not safety-floored act_now)
+  assert.notEqual(L0, L1, 'fixture must put the top two adverse rows in different lanes')
+  assert.notEqual(L0, 'act_now', 'the incumbent must be demotable — act_now is floored')
+  // learned: the lead's lane has been over-calling (0/8), the runner-up earning (8/8)
+  const policy = deriveLeadPolicy(gradedImpact({ [L0]: laneRec(8, 0), [L1]: laneRec(8, 1) }))
+  assert.equal(policy.status, 'tuned')
+  const b = summarizePortfolioPulse(roster, { leadPolicy: policy })
+  assert.deepEqual(b.headline, act[1], 'the earning runner-up takes the lead')
+  assert.deepEqual(b.also[0], act[0], 'the demoted incumbent slides exactly one slot, never off the page')
+})
+
+test('applyLeadPolicyToFeed — a safety-floored act_now lead is NEVER displaced, even by a max-promoted rival', () => {
+  const roster = [
+    sig({ client_name: 'Acme', metric: 'leads', label: 'Leads', severity: 'critical', reliability: 0.9, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -48, z: -3.1 }),
+    sig({ client_name: 'Beta', metric: 'revenue', label: 'Revenue', severity: 'warning', reliability: 0.85, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -18, z: -1.5 }),
+  ]
+  const act = rankPulseSignals(roster, { adverseOnly: true })
+  const L0 = act[0].lane, L1 = act[1].lane
+  assert.equal(L0, 'act_now', 'the critical reliable lead is the safety lane')
+  assert.notEqual(L1, 'act_now')
+  // the WORST possible act_now record (0/8) AND a perfectly-earned rival (8/8)
+  const policy = deriveLeadPolicy(gradedImpact({ act_now: laneRec(8, 0), [L1]: laneRec(8, 1) }))
+  assert.equal(policy.lanes.act_now.safetyFloored, true, 'an act_now demotion is refused')
+  assert.equal(policy.lanes.act_now.weight, 1, 'floored to neutral, never below')
+  assert.equal(policy.lanes[L1].weight, 1.2, 'the rival is max-promoted')
+  const b = summarizePortfolioPulse(roster, { leadPolicy: policy })
+  assert.deepEqual(b.headline, act[0], 'the emergency keeps the lead — a promoted rival can tie but never pass it')
+  assert.equal(b.headline.lane, 'act_now')
+})
+
+test('applyLeadPolicyToFeed — a max-promoted row two ranks down cannot leapfrog two leads', () => {
+  const roster = [
+    sig({ client_name: 'Acme', metric: 'leads', label: 'Leads', severity: 'critical', reliability: 0.9, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -48, z: -3.4 }),
+    sig({ client_name: 'Beta', metric: 'revenue', label: 'Revenue', severity: 'critical', reliability: 0.88, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -40, z: -2.6 }),
+    sig({ client_name: 'Gamma', metric: 'jobs', label: 'Jobs', severity: 'warning', reliability: 0.85, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -16, z: -1.4 }),
+  ]
+  const act = rankPulseSignals(roster, { adverseOnly: true })
+  const L2 = act[2].lane
+  assert.notEqual(L2, act[0].lane, 'the promoted row sits in a lower lane than the two leads')
+  // promote ONLY L2 to the max; the two leads' lane is left ABSENT → neutral weight 1
+  const policy = deriveLeadPolicy(gradedImpact({ [L2]: laneRec(8, 1) }))
+  assert.equal(policy.status, 'tuned')
+  const b = summarizePortfolioPulse(roster, { leadPolicy: policy })
+  assert.deepEqual(b.headline, act[0], 'the top lead is untouched — one max promotion only buys a tie with the immediate predecessor')
+  assert.deepEqual(b.also, act.slice(1, 4), 'and the order below it is preserved too')
+})
+
+test('applyLeadPolicyToFeed — counts, posture and confidence are permutation-invariant', () => {
+  const roster = twoLaneRoster()
+  const act = rankPulseSignals(roster, { adverseOnly: true })
+  const policy = deriveLeadPolicy(gradedImpact({ [act[0].lane]: laneRec(8, 0), [act[1].lane]: laneRec(8, 1) }))
+  const b0 = summarizePortfolioPulse(roster)
+  const b1 = summarizePortfolioPulse(roster, { leadPolicy: policy })
+  assert.notDeepEqual(b0.headline, b1.headline, 'the policy actually moved the lead (non-vacuous)')
+  assert.deepEqual(b0.counts, b1.counts, 'the census never depends on who leads')
+  assert.equal(b0.posture, b1.posture, 'posture is read over the whole action set')
+  assert.deepEqual(b0.confidence, b1.confidence, 'confidence is order-free')
+})
+
+test('applyLeadPolicyToFeed (client) — focus re-aims but stays machinery-free; no lead_policy leaks', () => {
+  const signals = [
+    sig({ client_id: undefined, client_name: undefined, metric: 'leads', label: 'Leads', severity: 'warning', reliability: 0.85, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -18, z: -2.0 }),
+    sig({ client_id: undefined, client_name: undefined, metric: 'jobs', label: 'Jobs', severity: 'warning', reliability: 0.30, reliability_label: 'noisy', accuracy_label: 'learning', delta_pct: -14, z: -1.5 }),
+  ]
+  const act = rankPulseSignals(signals, { adverseOnly: true })
+  const L0 = act[0].lane, L1 = act[1].lane
+  assert.notEqual(L0, L1)
+  assert.notEqual(L0, 'act_now')
+  const policy = deriveLeadPolicy(gradedImpact({ [L0]: laneRec(8, 0), [L1]: laneRec(8, 1) }))
+  const b = summarizeClientPulse(signals, { leadPolicy: policy })
+  // the focus re-aimed off the demoted lead onto the earning runner-up
+  assert.equal(b.focus.metric, act[1].metric, 'focus follows the learned lead')
+  assert.notEqual(b.focus.metric, act[0].metric)
+  // …and it is STILL exactly the five client-visible keys — no tuning machinery rode along
+  assert.deepEqual(Object.keys(b.focus).sort(), ['delta_pct', 'direction', 'label', 'lane', 'metric'])
+  const blob = JSON.stringify(b)
+  for (const word of ['tuning', 'baseline', 'lead_weight', 'base_score', '__lead', 'lead_policy', 'safetyFloored', 'weight']) {
+    assert.ok(!blob.includes(word), `the client briefing must not leak "${word}"`)
+  }
+  assert.ok(!('lead_policy' in b), 'no lead policy crosses the client egress')
+  assert.equal(b.also_count, 1, 'the census (also_count) is unchanged by the re-aim')
 })

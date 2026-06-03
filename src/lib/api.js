@@ -235,6 +235,13 @@ export const api = {
   // judged, hits, misses, unknown, by_lane, by_audience }) plus echoed `requested` + one
   // agency-voiced `narrative` sentence.
   getBriefImpact:           (days)       => get(`/api/ai/brief-impact${days ? `?days=${days}` : ''}`),
+  // The TUNE half of the lead loop (agency-only, 403 for client tokens). brief-impact MEASURES
+  // whether shipped leads held up; lead-policy turns that grade into the bounded per-lane policy
+  // the morning brief applies — each triage lane's hit_rate → a weight in [0.8, 1.2], act_now
+  // floored at >=1.0 so a learned-noisy emergency lane is never down-weighted. Returns the full
+  // deriveLeadPolicy shape ({ status, neutral_rate, bounds, safety_floor_lanes, lanes, promoted,
+  // demoted, floored, adjusted_count }) plus echoed `requested` + one agency-voiced `narrative`.
+  getLeadPolicy:            (days)       => get(`/api/ai/lead-policy${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

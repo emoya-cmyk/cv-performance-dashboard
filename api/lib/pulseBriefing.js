@@ -1,6 +1,7 @@
 'use strict'
 
 const { rankPulseSignals } = require('./pulseTriage')
+const { applyLeadPolicy } = require('./briefLeadPolicy')
 
 // ============================================================
 // lib/pulseBriefing.js — intel-v7 (7): the morning's ONE thing, synthesised.
@@ -30,6 +31,20 @@ const { rankPulseSignals } = require('./pulseTriage')
 // FRAMING: a portfolio-level count, a one-word posture, and a confidence read on the
 // day's call. No new metric number is fabricated — the headline reuses the signal's own
 // triage sentence verbatim; the briefing only counts what is already on the roster.
+//
+// THE ONE BOUNDED EXCEPTION — a learned lead nudge (intel-v7 13b)
+// ----------------------------------------------------------------
+// Both summarize fns take an optional opts.leadPolicy. With NONE — the live getXPulse hot
+// path always passes none — the feed is rankPulseSignals untouched and everything above
+// holds verbatim. When the generated morning brief ([[brief]]) supplies a *tuned*
+// [[briefLeadPolicy]] — the system having learned from its OWN front-page track record
+// (briefImpact) which triage lanes earn the top slot and which keep overcalling —
+// applyLeadPolicyToFeed may nudge WHICH adverse row leads, inside a hard safety envelope: it
+// can only swap a near-tie with an immediately-preceding DEMOTED lane, never leap a rank, and
+// can NEVER push a lower lane above a higher-ranked act_now (which deriveLeadPolicy floors to
+// weight ≥ 1). Counts, posture, and the confidence read are permutation-invariant, so they
+// never move — only the headline/focus re-aims. The geometric-spacing proof lives on
+// applyLeadPolicyToFeed; an abstained/idle/absent policy is a STABLE NO-OP by construction.
 //
 // THE CONFIDENCE READ — the system grading its own briefing
 // ---------------------------------------------------------
@@ -116,6 +131,43 @@ function composeClientFallback(s) {
   return `Your ${lc(s.label)} ${s.direction === 'down' ? 'needs a look' : 'is worth a look'} this week.`
 }
 
+// ── intel-v7 (13b): the ONE authorized, bounded re-rank of the lead slot ──────────────
+// A learned lead policy ([[briefLeadPolicy]].deriveLeadPolicy) is the TUNE half of the
+// brief's editorial-precision loop: from our OWN front-page track record (briefImpact) it
+// learns which triage lanes have earned the top slot and which keep overcalling, expressed
+// as a bounded per-lane weight. applyLeadPolicyToFeed lets that learning nudge — and ONLY
+// nudge — which adverse row becomes the headline/focus. It is a STABLE NO-OP unless the
+// policy is actually 'tuned' (an abstained/idle/absent policy, or a feed of <2 rows, returns
+// the input unchanged), so the live getXPulse hot path (which passes no policy) stays
+// byte-identical to rankPulseSignals; only the generated morning brief ([[brief]]) ever
+// supplies a policy.
+//
+// HOW THE NUDGE STAYS BOUNDED (why this can't reorder the board). We encode each candidate's
+// CURRENT triage rank as a geometric score base = decay**i with decay = 1/maxWeight (maxWeight
+// = the SAME upper bound the policy's weights top out at), then hand it to applyLeadPolicy,
+// which scales base by the lane weight. That exact spacing IS the safety proof: a maximally-
+// PROMOTED follower at rank i+1 scores decay**(i+1)·maxW = decay**i — a dead TIE with its
+// neutral predecessor at rank i — and applyLeadPolicy's sort is stable, so the incumbent keeps
+// the slot. A follower can climb ONLY past an immediate predecessor the policy DEMOTED (weight
+// < 1): a true near-tie swap, never a leap over a neutral rank, never a two-step climb. And
+// because act_now is safety-FLOORED to weight ≥ 1 in deriveLeadPolicy, no lower-ranked lane can
+// ever pass a higher-ranked act_now (decay**j·maxW = decay**(j-1) ≤ decay**i for any j > i) —
+// the policy can re-aim the lead but can NEVER bury an emergency. We pass protectLanes:[]
+// precisely because that floor already delivers the safety guarantee; a global act_now pin
+// (applyLeadPolicy's default) would override triage's own severity×reliability order and
+// re-introduce the noisy-critical-cries-wolf failure the triage layer exists to prevent.
+function applyLeadPolicyToFeed(act, leadPolicy) {
+  if (!leadPolicy || leadPolicy.status !== 'tuned' || act.length < 2) return act
+  const bMax  = leadPolicy.bounds && Number(leadPolicy.bounds.max)
+  const maxW  = Number.isFinite(bMax) && bMax > 1 ? bMax : 1.2
+  const decay = 1 / maxW
+  const scored = act.map((r, i) => ({ ...r, __lead: decay ** i }))
+  const ranked = applyLeadPolicy(scored, leadPolicy, { scoreKey: '__lead', protectLanes: [] })
+  // Strip the scratch + applyLeadPolicy bookkeeping fields so each row stays byte-identical to
+  // the raw roster row it came from (no __lead / base_score / lead_weight leaks downstream).
+  return ranked.map(({ __lead, base_score, lead_weight, ...row }) => row)
+}
+
 // summarizePortfolioPulse(roster) — AGENCY briefing over the whole-book pulse roster (the
 // `roster` field of getPortfolioPulse: every firing, tailwinds included). Derives the
 // action feed with the SAME [[pulseTriage]] ranking the roster's own act_today uses, so
@@ -123,9 +175,10 @@ function composeClientFallback(s) {
 // posture, a grounded headline sentence, up to three supporting rows, and a confidence
 // read on the day's call. Keeps machinery (names clients, headline row carries tuning) —
 // agency-only, GET /pulse.
-function summarizePortfolioPulse(roster) {
+function summarizePortfolioPulse(roster, opts = {}) {
   const rows = Array.isArray(roster) ? roster : []
   const act = rankPulseSignals(rows, { adverseOnly: true }) // identical to getPortfolioPulse's act_today
+  const led = applyLeadPolicyToFeed(act, opts.leadPolicy)   // 13b: bounded learned lead nudge (NO-OP unless tuned)
   const tailwinds = rows.filter((r) => r && !r.adverse).length
 
   const adverse = act.length
@@ -160,7 +213,7 @@ function summarizePortfolioPulse(roster) {
     return { status: 'quiet', posture, counts, headline: null, headline_text, also: [], also_text: '', confidence }
   }
 
-  const headline = act[0]
+  const headline = led[0]
   const name     = headline.client_name || 'a client'
   const onlyName = clients === 1 ? (headline.client_name || null) : null
   const lead     = countPhrase(adverse, clients, onlyName)
@@ -175,7 +228,7 @@ function summarizePortfolioPulse(roster) {
     headline_text = `${lead} today. First up, ${name}: ${reason}`
   }
 
-  const also = act.slice(1, 4)
+  const also = led.slice(1, 4)
   const also_text = also.length
     ? `Next: ${also.map((r) => `${r.client_name || 'a client'} — ${lc(r.label)} (${LANE_TAG[r.lane] || 'review'})`).join(', ')}.`
     : ''
@@ -188,9 +241,10 @@ function summarizePortfolioPulse(roster) {
 // client-toned triage sentence (narrateTriage's client branch reads only lane + label, so
 // it can carry no machinery), and `focus` exposes ONLY client-visible fields. No z,
 // baseline, or tuning_* ever appears — it rides the client egress untouched.
-function summarizeClientPulse(signals) {
+function summarizeClientPulse(signals, opts = {}) {
   const rows = Array.isArray(signals) ? signals : []
   const act = rankPulseSignals(rows, { adverseOnly: true })
+  const led = applyLeadPolicyToFeed(act, opts.leadPolicy)   // 13b: bounded learned lead nudge (NO-OP unless tuned)
   const tailwinds = rows.filter((r) => r && !r.adverse).length
 
   const adverse = act.length
@@ -204,7 +258,7 @@ function summarizeClientPulse(signals) {
     return { status: 'quiet', posture, headline_text, focus: null, also_count: 0 }
   }
 
-  const top = act[0]
+  const top = led[0]
   const also_count = adverse - 1
   const core = top.triage_client_reason || composeClientFallback(top)
   const tail = also_count > 0

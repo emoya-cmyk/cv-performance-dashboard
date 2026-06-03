@@ -56,6 +56,7 @@ const { getBriefImpact }       = require('../lib/briefImpactEngine')
 const { narrateBriefImpact }   = require('../lib/briefImpact')
 const { PORTFOLIO_KEY }        = require('../lib/brief')
 const { resolvePortfolioScope } = require('../routes/ai')
+const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -200,4 +201,51 @@ test('GET /api/ai/brief-impact shares the portfolio 403 posture (resolvePortfoli
   const denied = resolvePortfolioScope({ user: { role: 'client', id: CLIENT_ID } })
   assert.equal(denied.status, 403, 'a client-scoped token is refused')
   assert.match(denied.error, /not authorized/, 'with the portfolio-brief refusal message')
+})
+
+// ── 3. the lead-policy read seam (13b): GET /api/ai/lead-policy derives a TUNED policy
+//    from the very same real join, and that policy is agency-gated + client-silent. This
+//    is the exact call chain the route runs — resolvePortfolioScope gate → getBriefImpact
+//    → deriveLeadPolicy → narrateLeadPolicy — proven end-to-end on the crash corpus, not
+//    on a hand-built impact object. The MEASURE half (12a/b) earned a clean 'earned' on
+//    `paid`; here the TUNE half (13a/b) turns that track record into a learned promotion.
+test('GET /api/ai/lead-policy — agency-gated, derives a well-formed tuned policy from the real join, and stays client-silent', async () => {
+  // same gate the route applies before it ever reads
+  assert.deepEqual(resolvePortfolioScope({ user: { role: 'agency' } }), {}, 'agency may read the learned lead policy')
+  assert.equal(resolvePortfolioScope({ user: { role: 'client', id: CLIENT_ID } }).status, 403, 'a client token is refused the portfolio-wide policy')
+
+  // rebuild the exact flat-then-crash corpus from test 1, independent of test order
+  await reset()
+  await db.query('INSERT INTO clients (id, name) VALUES ($1,$2)', [CLIENT_ID, CLIENT_NAME])
+  const leads = Array.from({ length: SPAN + 1 }, (_, i) => (i < 64 ? 200 : 5))
+  await seedDaily(CLIENT_ID, 'leads', leads)
+  for (const idx of [73, 75, 77, 79, 81, 83]) {
+    await seedBrief({ scopeKey: CLIENT_ID, asOf: isoAtIdx(idx), audience: 'client', clientId: CLIENT_ID, pack: clientFocus('leads', 'down', 'paid') })
+  }
+
+  // the route body, verbatim in spirit: grade the corpus, then learn from the grade
+  const impact = await getBriefImpact({ asOf: ASOF, days: 30 })
+  assert.equal(impact.status, 'graded', 'the join produced a gradeable record')
+  assert.equal(impact.by_lane.paid.hit_rate, 1, 'paid earned a perfect confirm record on the crash')
+
+  const policy = deriveLeadPolicy(impact)
+  assert.equal(policy.status, 'tuned', 'a clean earned record on paid moves the policy off neutral')
+  // bounds are well-formed: a symmetric band straddling 1.0, never inverted
+  assert.ok(policy.bounds && policy.bounds.max > 1 && policy.bounds.min > 0 && policy.bounds.min < 1,
+    `bounds straddle neutral: ${JSON.stringify(policy.bounds)}`)
+  // the learned move on paid is a PROMOTION pinned to the max of the band (hit_rate 1.0 → 1.2)
+  assert.ok(policy.lanes.paid, 'paid carries a learned entry')
+  assert.equal(policy.lanes.paid.direction, 'promote', 'a perfect record promotes the lane')
+  assert.equal(policy.lanes.paid.weight, policy.bounds.max, 'a perfect 1.0 hit rate pins to the top of the band')
+  assert.equal(policy.lanes.paid.adjusted, true)
+  assert.equal(policy.lanes.paid.judged, 6, 'tuned off the six judged client crash leads this corpus resolved')
+  // act_now is never demoted by this corpus — the safety lane carries no learned entry here,
+  // and the floor list still names it (the asymmetry is structural, not data-dependent)
+  assert.ok(policy.safety_floor_lanes.includes('act_now'), 'the safety floor still protects act_now')
+
+  // the agency one-liner speaks the learned promotion; the client voice stays silent
+  const agencyNarr = narrateLeadPolicy(policy, { audience: 'agency' })
+  assert.match(agencyNarr, /front-page track record/, 'agency narration names the learned track record')
+  assert.match(agencyNarr, /lead more with paid/, 'and the specific learned promotion')
+  assert.equal(narrateLeadPolicy(policy, { audience: 'client' }), '', 'lead-selection tuning is never client-facing')
 })

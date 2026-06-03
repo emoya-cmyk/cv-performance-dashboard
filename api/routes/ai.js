@@ -54,6 +54,7 @@ const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuali
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
 const { getBriefImpact } = require('../lib/briefImpactEngine')
 const { narrateBriefImpact } = require('../lib/briefImpact')
+const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -321,6 +322,36 @@ router.get('/brief-impact', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-impact error', err.message)
     res.status(500).json({ error: 'Failed to load brief impact' })
+  }
+})
+
+// ── GET /api/ai/lead-policy ─────────────────────────────────────────────────────
+// The TUNE half of the self-improving lead loop. brief-impact (above) MEASURES whether
+// shipped leads held up; this turns that same editorial-precision grade into the bounded
+// per-lane policy the morning brief actually applies — each triage lane's recent hit_rate
+// becomes a weight in [0.8, 1.2], with act_now FLOORED at >=1.0 so a learned-noisy
+// emergency lane can never be down-weighted (burying a real crisis is worse than crying
+// wolf). status is 'tuned' only when a graded lane crossed the min-sample bar; 'idle' /
+// 'abstained' mean the brief stays byte-identical to the live pulse. Agency-only by
+// construction — the policy exposes lane weights, hit_rates and what moved, machinery no
+// client should read — so it shares brief-impact's 403 gate and agency-voiced narration.
+router.get('/lead-policy', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days)
+
+  try {
+    const policy = deriveLeadPolicy(await getBriefImpact({ asOf, days }))
+    res.json({
+      ...policy,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateLeadPolicy(policy, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET lead-policy error', err.message)
+    res.status(500).json({ error: 'Failed to load lead policy' })
   }
 })
 
