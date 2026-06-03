@@ -1937,3 +1937,221 @@ test('20b — briefEmphasisEfficacyFor reads the agency/PORTFOLIO_KEY day-window
   // …and the consumer hears NONE of it — the efficacy loop is agency-only telemetry.
   assert.equal(narrateEmphasisEfficacy(eff, { audience: 'client' }), '')
 })
+
+// ============================================================
+// 20d — EMPHASIS-EFFICACY CONFINEMENT: the loop that grades the reception flex is
+// agency-only telemetry; it rides no client byte — and, unlike 19d's policy, no pack.
+// ------------------------------------------------------------
+// intel-v9 layer 20 closes the SECOND-order loop. Layer 19 flexes tomorrow's
+// supporting-cast cap on today's reception grade with FIXED steps and never checks
+// whether the flex paid off; layer 20 measures it — did a sustained widen keep
+// reception up (against the CONTROL of mornings the brief held steady)? did a tighten
+// recover it? — and emits a BOUNDED step-scale a future layer-21 controller can feed
+// back into 19 (summarizeEmphasisEfficacy → recommendation.{widen,tighten}_step_scale).
+// That scorecard is the densest agency instrument yet: a control arm, per-direction
+// Wilson lifts, a verdict and a machine reason. The consumer must receive NONE of it.
+//
+// Layer 20's confinement is STRICTER than 19d's by construction. Where 19d's
+// engagement_policy DOES ride the PORTFOLIO pack (agency telemetry, gated off the client
+// pack), the efficacy summary rides NO pack at all — it exists only as the return of
+// briefEmphasisEfficacyFor / the agency-gated /brief-emphasis-efficacy route, computed at
+// read time over the persisted policy history. So the agency surface that must trip the
+// client guard is the SUMMARY OBJECT ITSELF, not a pack field — and we additionally prove
+// neither the client NOR the portfolio pack ever carries the efficacy vocabulary.
+// narrateEmphasisEfficacy is '' for the client UNCONDITIONALLY (before any status check),
+// the precedent of 18d/19d. 20a proves the scorer/narrator in isolation, 20b the read-path
+// wiring with the genuine end-to-end payload; here we prove the EGRESS SPLIT.
+const { summarizeEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
+
+// The efficacy summary ALWAYS carries the control arm (control_rate, control_n) at its
+// root and the step-scale pair (widen_step_scale, tighten_step_scale) in its
+// recommendation — for BOTH the graded and the honest-abstention 'insufficient' shape —
+// and every scored direction carries lower_lift + median_delta. Guarding those six keys is
+// therefore a COMPLETE structural guard: no summary shape can ride along without tripping.
+// NOT bare `rate`/`n`/`prior`/`verdict`/`reason`/`direction`/`successes` (generic, shared
+// with a lone honest vote or a client focus). And — deliberately — NOT the verdict VALUES
+// `steady`/`tempered`/`endorsed`/`insufficient`: `steady` is the agency narrative's own
+// plain English ("held steady") AND a client focus trend; `tempered` is live client
+// diagnosis prose (pulseDiagnose.js "tempered the rise"); `endorsed`/`insufficient` are
+// generic words. Forbidding any bare verdict word would false-positive legit egress. The
+// verdict is caught STRUCTURALLY instead — it cannot ride without the step-scale keys
+// beside it — and by its distinctive machine REASONS below (mirrors 19d: forbid the
+// compound `steady_reception`, never bare `steady`).
+const FORBIDDEN_EFFICACY_KEYS = [
+  'widen_step_scale', 'tighten_step_scale',
+  'control_rate', 'control_n',
+  'lower_lift', 'median_delta',
+]
+// Distinctive efficacy tokens only — the structural keys as strings (plus the bare
+// `step_scale` stem, catching any future *_step_scale), and the seven machine REASON
+// values. None appears in the agency narrative (which says "holding up" / "leaning in" /
+// "easing off" / "in line with holding steady", never the tokens) nor in any client prose.
+const FORBIDDEN_EFFICACY_TOKENS =
+  /widen_step_scale|tighten_step_scale|step_scale|control_rate|control_n|lower_lift|median_delta|widen_overserving|tighten_not_recovering|widen_sustaining|tighten_recovering|in_line_with_control|no_measured_outcomes|thin_history/
+
+function assertNoEfficacy(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_EFFICACY_KEYS.includes(k),
+          `${where}: client egress must not carry emphasis-efficacy field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_EFFICACY_TOKENS.test(JSON.stringify(pack)),
+    `${where}: emphasis-efficacy vocabulary leaked into the serialized client egress`
+  )
+  // Belt-and-suspenders: a clean efficacy egress must also clear the 19d emphasis sweep
+  // (which itself delegates to the 18d aggregate sweep) — the three layers stack.
+  assertNoEmphasis(pack, where)
+}
+
+// A genuine graded scorecard scored from synthetic observations — five sustained-widen
+// mornings (each next reception within the noise band, delta ≥ -0.05 → all "success")
+// measured against three held-neutral controls whose reception never rose +0.05 (control
+// rate 0). This is the exact OBSERVATION shape buildEmphasisObservations produces and the
+// object the /brief-emphasis-efficacy route serializes; 20b proves it end-to-end from the
+// persisted history, so here we score it directly (no DB). It lands deterministically on
+// the SAME endorsed/widen_sustaining/×1.25 verdict 20b's seeded history produces.
+const SUSTAINED_WIDEN_OBS = [
+  { as_of: '2026-04-08', direction: 'widen',   rate_before: 0.80, base_cap: 3, rate_after: 0.81, n_after: 12 },
+  { as_of: '2026-04-09', direction: 'widen',   rate_before: 0.81, base_cap: 3, rate_after: 0.80, n_after: 12 },
+  { as_of: '2026-04-10', direction: 'widen',   rate_before: 0.80, base_cap: 3, rate_after: 0.82, n_after: 12 },
+  { as_of: '2026-04-11', direction: 'widen',   rate_before: 0.82, base_cap: 3, rate_after: 0.81, n_after: 12 },
+  { as_of: '2026-04-12', direction: 'widen',   rate_before: 0.81, base_cap: 3, rate_after: 0.80, n_after: 12 },
+  { as_of: '2026-04-13', direction: 'neutral', rate_before: 0.80, base_cap: 3, rate_after: 0.79, n_after: 12 },
+  { as_of: '2026-04-14', direction: 'neutral', rate_before: 0.79, base_cap: 3, rate_after: 0.80, n_after: 12 },
+  { as_of: '2026-04-15', direction: 'neutral', rate_before: 0.80, base_cap: 3, rate_after: 0.78, n_after: 12 },
+]
+const EFF_GRADED = summarizeEmphasisEfficacy(SUSTAINED_WIDEN_OBS)
+const EFF_INSUFFICIENT = summarizeEmphasisEfficacy([]) // no observations → honest abstention
+
+test('20d — narrateEmphasisEfficacy is silent for the CLIENT unconditionally; the agency hears the self-tuning, identifier-free', () => {
+  // Sanity: the synthetic history scored into a real, MOVED graded scorecard — the same
+  // endorsed widen 20b earns end-to-end — so the agency narration below is non-vacuous.
+  assert.equal(EFF_GRADED.status, 'graded', 'five widen observations score into a graded scorecard')
+  assert.equal(EFF_GRADED.directions.widen.successes, 5, 'all five sustained-widen mornings count as successes')
+  assert.equal(EFF_GRADED.recommendation.verdict, 'endorsed', 'a confident sustained widen is endorsed')
+  assert.equal(EFF_GRADED.recommendation.reason, 'widen_sustaining')
+  assert.equal(EFF_INSUFFICIENT.status, 'insufficient', 'no observations → honest abstention')
+
+  // THE INVARIANT: the consumer never hears the efficacy loop — for ANY summary shape
+  // (graded-and-moved, abstained, malformed, junk), narration is '' UNCONDITIONALLY.
+  for (const [name, s] of [
+    ['graded', EFF_GRADED], ['insufficient', EFF_INSUFFICIENT],
+    ['null', null], ['malformed', { status: 'graded' }], ['junk', 'nope'],
+  ]) {
+    assert.equal(narrateEmphasisEfficacy(s, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  // The agency DOES hear the moved scorecard — proving the client silence is a deliberate
+  // split, not a dead feature…
+  const agency = narrateEmphasisEfficacy(EFF_GRADED, { audience: 'agency' })
+  assert.ok(agency.length > 0, 'the agency hears the self-tuning verdict on a moved scorecard')
+  assert.match(agency, /^Widening is holding up —/)
+  // …but stays mute when nothing is earned — an abstained scorecard tunes nothing.
+  assert.equal(narrateEmphasisEfficacy(EFF_INSUFFICIENT, { audience: 'agency' }), '', 'an abstained scorecard is narrated to no one')
+
+  // Even the candid agency sentence carries no machine identifier — it could not seed a
+  // leak even if mis-routed (it says "step ×1.25", "held steady", never "widen_step_scale"/
+  // "control_rate"/"widen_sustaining") — and clears the 19d + 18d sweeps too.
+  assert.ok(!FORBIDDEN_EFFICACY_TOKENS.test(agency), 'agency efficacy sentence carries no efficacy identifier')
+  assert.ok(!FORBIDDEN_EMPHASIS_TOKENS.test(agency), 'agency efficacy sentence carries no emphasis identifier')
+  assert.ok(!FORBIDDEN_ENGAGEMENT_TOKENS.test(agency), 'agency efficacy sentence carries no aggregate identifier')
+})
+
+test('20d — a real efficacy scorecard trips the client guard, while neither the client nor the portfolio pack carries its vocabulary: an endpoint-only split', async () => {
+  await ready()
+
+  // THE AGENCY SURFACE: the scorecard the route returns is dense with the control arm,
+  // per-direction lifts and a verdict → the client guard MUST trip on it, confirming the
+  // cleanliness below is a real split, not a vacuous pass. (20b proves this same object is
+  // the genuine end-to-end briefEmphasisEfficacyFor payload; we score it directly here.)
+  assert.throws(
+    () => assertNoEfficacy(EFF_GRADED, 'efficacy-scorecard-probe'),
+    /emphasis-efficacy field|emphasis-efficacy vocabulary/,
+    'the efficacy scorecard is dense with machinery — the client guard MUST trip on it')
+
+  // THE CLIENT SURFACE: the consumer pack carries none of the efficacy machinery — and,
+  // carried from 19d, none of the emphasis policy nor the 18d aggregate either (the
+  // belt-and-suspenders delegation inside assertNoEfficacy enforces all three layers).
+  const c = await freshClient('Emphasis Efficacy Confinement Roofing Co')
+  const cli = await generateClientBrief(c, AS_OF)
+  assert.equal(cli.grounded, true)
+  assert.match(cli.brief_text, /^Good morning\./)
+  assertNoEfficacy(cli.pack, 'generateClientBrief')
+  // the persisted read-back — the row the client actually fetches — is just as clean.
+  const cliRow = await getClientBrief(c, AS_OF)
+  assertNoEfficacy(cliRow.pack, 'getClientBrief read-back')
+
+  // STRICTER THAN 19d: the efficacy summary rides NO pack — not even the agency/portfolio
+  // pack (it is computed only at read time by briefEmphasisEfficacyFor / the route). The
+  // portfolio pack may legitimately carry the 19d engagement_policy, so the full
+  // belt-and-suspenders assertNoEfficacy would rightly trip on THAT (the delegated 19d
+  // sweep), not on efficacy; we assert the narrower, layer-20-specific truth that the
+  // EFFICACY vocabulary in particular never rides the portfolio pack.
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok(
+    !FORBIDDEN_EFFICACY_TOKENS.test(JSON.stringify(port.pack)),
+    'the efficacy vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_EFFICACY_KEYS.includes(k), `the portfolio pack must not carry the efficacy field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+})
+
+test('20d — the efficacy guard is load-bearing: a smuggled step-scale, control rate, lift, or reason value trips it; legit client fields never do', () => {
+  // each structural key is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoEfficacy({ rec: { widen_step_scale: 1.25 } }, 'step-scale-probe'),
+    /emphasis-efficacy field/, 'a lone widen_step_scale must be rejected by name')
+  assert.throws(() => assertNoEfficacy({ box: { control_rate: 0.5 } }, 'control-rate-probe'),
+    /emphasis-efficacy field/, 'a lone control_rate must be rejected by name')
+  assert.throws(() => assertNoEfficacy({ box: { control_n: 3 } }, 'control-n-probe'),
+    /emphasis-efficacy field/, 'a lone control_n must be rejected by name')
+  assert.throws(() => assertNoEfficacy({ dir: { lower_lift: 0.1 } }, 'lower-lift-probe'),
+    /emphasis-efficacy field/, 'a lone lower_lift must be rejected by name')
+  assert.throws(() => assertNoEfficacy({ dir: { median_delta: 0.02 } }, 'median-delta-probe'),
+    /emphasis-efficacy field/, 'a lone median_delta must be rejected by name')
+  // a machine REASON smuggled in as a plain string is caught by the token sweep.
+  assert.throws(() => assertNoEfficacy({ note: 'the loop verdict: widen_sustaining today' }, 'reason-token-probe'),
+    /emphasis-efficacy vocabulary/, "a reason identifier ('widen_sustaining') leaked as a string must be rejected")
+  assert.throws(() => assertNoEfficacy({ note: 'reading in_line_with_control' }, 'control-reason-probe'),
+    /emphasis-efficacy vocabulary/, "'in_line_with_control' leaked as a string must be rejected")
+  assert.throws(() => assertNoEfficacy({ note: 'thin_history for now' }, 'thin-history-probe'),
+    /emphasis-efficacy vocabulary/, "'thin_history' leaked as a string must be rejected")
+  // the whole scorecard trips (control arm + step scales present).
+  assert.throws(() => assertNoEfficacy(EFF_GRADED, 'full-scorecard-probe'),
+    /emphasis-efficacy field|emphasis-efficacy vocabulary/, 'the full scorecard must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the client focus (Section D): direction + delta_pct + a 'steady' metric trend. `steady`
+  //   is the verdict VALUE we deliberately did NOT forbid — it is also a plain metric trend and
+  //   the agency narrative's own English — so it must pass clean here.
+  assert.doesNotThrow(
+    () => assertNoEfficacy({ focus: { direction: 'down', delta_pct: -40, label: 'Leads', lane: 'act_now', metric: 'leads', trend: 'steady' } }, 'client-focus-probe'),
+    'the client focus (direction + delta_pct + steady trend) is legit and must pass clean')
+  //   bare `steady` AND bare `tempered` in plain brief prose — `tempered` is live client
+  //   diagnosis copy (pulseDiagnose.js "tempered the rise"), so the efficacy guard forbidding
+  //   it would break a real client brief. Both must pass.
+  assert.doesNotThrow(
+    () => assertNoEfficacy({ note: 'Leads held steady this week; the recent rise was tempered.' }, 'steady-tempered-prose-probe'),
+    "bare 'steady'/'tempered' in client prose are disjoint from the efficacy tokens and must pass")
+  //   the supporting-cast array the cap shapes — the EFFECT the client sees, not the knob.
+  assert.doesNotThrow(
+    () => assertNoEfficacy({ briefing: { also: [{ metric: 'leads', label: 'Leads' }, { metric: 'revenue', label: 'Revenue' }] } }, 'supporting-cast-probe'),
+    'the supporting-cast array must pass — it is the EFFECT, not the machinery')
+  //   the consumer's own engagement vote — the only engagement bytes they ever receive.
+  assert.doesNotThrow(
+    () => assertNoEfficacy({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+})
