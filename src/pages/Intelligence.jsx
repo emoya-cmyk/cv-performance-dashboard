@@ -249,6 +249,13 @@ export default function Intelligence() {
           self-tuning" → "and the self-tuning re-tuning itself from the grade." Agency-only, USE_API-gated. */}
       {USE_API && <BriefEmphasisControlPanel />}
 
+      {/* controller stability (22c) — the GOVERNOR on the self-tuning loop: watches the
+          controller (21) across mornings for HUNTING / SATURATION and self-heals a runaway
+          tuner by benching it to baseline. Sits right after the controller it polices so the
+          page reads "the self-tuning re-tuning itself" → "and the governor watching that
+          re-tuning for instability, stepping in when it won't settle." Agency-only, USE_API-gated. */}
+      {USE_API && <BriefEmphasisControlHealthPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -1797,6 +1804,236 @@ function BriefEmphasisControlPanel() {
           {' '}<span className="font-semibold text-emerald-600">Lean in</span> when a direction is paying off · <span className="font-semibold text-amber-600">ease off</span> when it isn't · hold otherwise.
           {' '}Leaning in is earned twice, easing off is always free, and the cap never leaves its rails.
           {' '}Agency-only; a reader never sees their attention being tuned.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* ── controller stability — intel-v9 (22c): the GOVERNOR watching the controller ──────────────
+   Layers 19→20→21 are a closed second-order loop: reception flexes the brief's breadth (19),
+   efficacy grades the flex (20), the controller re-tunes the flex from that grade (21). A closed
+   feedback loop can still misbehave over TIME — a controller that keeps reversing itself (HUNTING)
+   or one pinned to a rail for days (SATURATION) is unstable even when each single move looked
+   reasonable. This is the rung that watches the controller ACROSS mornings and, when it won't
+   settle, self-heals by benching the tuner back to baseline (the 'damp' action the engine applies
+   before it serializes tomorrow's policy). It reads GET /api/ai/brief-emphasis-control-health,
+   agency-only. The hero is the controller's chosen breadth stepped across the trailing window
+   against its [min, base, max] rails — instability is legible at a glance: a hunt zig-zags, a pin
+   rides a rail, convergence flattens onto one row. PRIVACY (load-bearing): this verdict speaks
+   pure control vocabulary (hunting / saturate / damp) and therefore rides NO serialized pack — it
+   is recomputed only here, at read time, and the narrator returns '' for the client audience
+   (proven in 22d). Sits right after the controller it polices. Self-fetching, USE_API-gated,
+   agency-only. */
+const CONTROL_HEALTH_TONE = {
+  unstable:    { pill: 'border-rose-200 bg-rose-50 text-rose-700',          icon: Activity,      label: 'Hunting',   line: 'stroke-rose-500' },
+  constrained: { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: AlertTriangle, label: 'Pinned',    line: 'stroke-amber-500' },
+  stable:      { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: CheckCircle2,  label: 'Converged', line: 'stroke-emerald-500' },
+  settling:    { pill: 'border-sky-200 bg-sky-50 text-sky-700',             icon: Gauge,         label: 'Settling',  line: 'stroke-sky-500' },
+  idle:        { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Inbox,         label: 'Idle',      line: 'stroke-slate-300' },
+  abstained:   { pill: 'border-slate-200 bg-slate-50 text-slate-400',       icon: Clock,         label: 'Building',  line: 'stroke-slate-300' },
+}
+
+// recommended_action → the self-heal lane, shown as a tile. 'damp' is the one autonomous repair:
+// it benches the tuner to baseline. The rest are advisory postures the engine takes no action on.
+const CONTROL_HEALTH_ACTION = {
+  damp:          { label: 'Self-healing',  icon: Wrench,        cls: 'text-rose-700',    box: 'border-rose-200 bg-rose-50' },
+  review_bounds: { label: 'Review bounds', icon: AlertTriangle, cls: 'text-amber-700',   box: 'border-amber-200 bg-amber-50' },
+  trust:         { label: 'Trust',         icon: ShieldCheck,   cls: 'text-emerald-700', box: 'border-emerald-200 bg-emerald-50' },
+  hold:          { label: 'Hold',          icon: Minus,         cls: 'text-slate-500',   box: 'border-slate-200 bg-slate-50' },
+  none:          { label: 'Standing by',   icon: Inbox,         cls: 'text-slate-400',   box: 'border-slate-200 bg-slate-50' },
+}
+
+// move on each morning's node → dot fill on the track, so the eye reads WHY a step moved.
+const CONTROL_MOVE_DOT = { lean_in: 'fill-emerald-500', ease_off: 'fill-amber-500', hold: 'fill-slate-300', none: 'fill-slate-200' }
+
+// verdict_reason → one plain clause for the calm/abstained states (engaged states speak via the
+// agency narrative). Kept free of machine tokens so it reads as prose on the agency surface.
+const CONTROL_HEALTH_REASON = {
+  control_settling:     'The tuner is mid-search — adjusting, but neither swinging nor stuck. No intervention yet.',
+  controller_quiet:     'The tuner has been hands-off all window — there is nothing to steady.',
+  insufficient_history: 'Not enough mornings yet to judge the tuner’s stability — it builds as the brief ships.',
+}
+
+// The controller's chosen breadth (cap) stepped across the trailing window, against its [min,
+// base, max] rails. A step-line, not a smooth curve — the cap is a discrete row count, and a
+// stepped path makes a hunt's reversals and a pin's flat ride read at a glance. Pure SVG, no deps.
+function ControlHealthTrack({ series, bounds, tone }) {
+  const pts = Array.isArray(series) ? series : []
+  const W = 320, H = 76, padX = 8, padTop = 10, padBot = 10
+  const innerW = W - padX * 2, innerH = H - padTop - padBot
+  const loD = Math.min(bounds.min, bounds.base) - 0.5
+  const hiD = Math.max(bounds.max, bounds.base) + 0.5
+  const yFor = (v) => padTop + (1 - (v - loD) / (hiD - loD)) * innerH
+  const xFor = (i) => pts.length <= 1 ? padX + innerW / 2 : padX + (i / (pts.length - 1)) * innerW
+  let d = ''
+  pts.forEach((p, i) => {
+    const x = xFor(i), y = yFor(p.cap)
+    if (i === 0) d += `M ${x.toFixed(1)} ${y.toFixed(1)}`
+    else { const py = yFor(pts[i - 1].cap); d += ` L ${x.toFixed(1)} ${py.toFixed(1)} L ${x.toFixed(1)} ${y.toFixed(1)}` }
+  })
+  const rail = (v, dash) => (
+    <line x1={padX} x2={W - padX} y1={yFor(v)} y2={yFor(v)} className="stroke-slate-200" strokeWidth="1" strokeDasharray={dash || undefined} />
+  )
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Controller breadth across the trailing window against its rails">
+      {bounds.max > bounds.base && rail(bounds.max)}
+      {rail(bounds.base, '3 3')}
+      {bounds.min < bounds.base && rail(bounds.min)}
+      {pts.length > 0 && <path d={d} fill="none" className={tone.line} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
+      {pts.map((p, i) => (
+        <circle key={i} cx={xFor(i)} cy={yFor(p.cap)} r={i === pts.length - 1 ? 4 : 3} className={cn(CONTROL_MOVE_DOT[p.move] || CONTROL_MOVE_DOT.none, 'stroke-white')} strokeWidth="1.5" />
+      ))}
+    </svg>
+  )
+}
+
+function BriefEmphasisControlHealthPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [health, setHealth] = useState(null)
+  const [error, setError]   = useState('')
+
+  const fetchHealth = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const h = await api.getBriefEmphasisControlHealth()
+      setHealth(h); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load controller stability'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchHealth() }, [fetchHealth])
+
+  const vstatus    = health?.status || 'abstained'
+  const tone       = CONTROL_HEALTH_TONE[vstatus] || CONTROL_HEALTH_TONE.abstained
+  const StatusIcon = tone.icon
+  const action     = health?.recommended_action || 'none'
+  const act        = CONTROL_HEALTH_ACTION[action] || CONTROL_HEALTH_ACTION.none
+  const ActIcon    = act.icon
+  const ctl        = health?.control || {}
+  const bounds     = health?.bounds || { min: 1, base: 3, max: 5 }
+  const series     = Array.isArray(ctl.series) ? ctl.series : []
+  const windowN    = health?.requested?.days || health?.window_used || 6
+  const hasChart   = vstatus !== 'abstained' && series.length >= 2
+  const damping    = action === 'damp'
+  const narrative  = (health?.narrative || '').trim()
+  const reasonLine = CONTROL_HEALTH_REASON[health?.verdict_reason] || ''
+  const subLine    = narrative || reasonLine
+  const pillLabel  = vstatus === 'constrained'
+    ? (health?.verdict_reason === 'pinned_low' ? 'Pinned low' : 'Pinned high')
+    : tone.label
+  const flips      = Number.isFinite(Number(ctl.flips)) ? Number(ctl.flips) : 0
+  const settledRun = Number.isFinite(Number(ctl.settled_run)) ? Number(ctl.settled_run) : 0
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Controller stability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            The governor watching the tuner for hunting &amp; saturation · trailing {windowN} mornings
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Controller health: ${vstatus}`}>
+            <StatusIcon className="w-3 h-3" /> {pillLabel}
+          </span>
+        )}
+        <button
+          onClick={fetchHealth}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Watching the tuner settle…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load controller stability'}</p>
+            <button
+              onClick={fetchHealth}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && vstatus === 'abstained' && (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{reasonLine || 'Not enough mornings yet to judge the tuner’s stability — it builds as the brief ships.'}</p>
+          </div>
+        )}
+
+        {status === 'done' && vstatus !== 'abstained' && (
+          <>
+            {damping && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5">
+                <Wrench className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-rose-700 leading-relaxed">
+                  Self-healing — the tuner is reversing itself faster than it’s converging, so the governor benched it to baseline for tomorrow’s brief.
+                </p>
+              </div>
+            )}
+
+            {hasChart && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 pt-3 pb-2">
+                <ControlHealthTrack series={series} bounds={bounds} tone={tone} />
+                <div className="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> lean-in</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> ease-off</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300" /> hold</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-slate-300" /> baseline</span>
+                </div>
+              </div>
+            )}
+
+            <div className={cn('grid grid-cols-3 gap-1.5', hasChart && 'mt-3')}>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Swings</p>
+                <p className={cn('mt-1 text-2xl font-black tabular-nums leading-none', vstatus === 'unstable' ? 'text-rose-700' : 'text-slate-900')}>{flips}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">reversals</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Settled</p>
+                <p className={cn('mt-1 text-2xl font-black tabular-nums leading-none', vstatus === 'stable' ? 'text-emerald-700' : 'text-slate-900')}>{settledRun}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">in a row</p>
+              </div>
+              <div className={cn('rounded-xl border-2 px-2 py-2.5 text-center flex flex-col items-center justify-center', act.box)}>
+                <p className={cn('text-[9px] font-bold uppercase tracking-wide', act.cls)}>Action</p>
+                <ActIcon className={cn('mt-1.5 w-5 h-5', act.cls)} />
+                <p className={cn('mt-1 text-[10px] font-bold', act.cls)}>{act.label}</p>
+              </div>
+            </div>
+
+            {subLine && (
+              <p className="mt-3 text-sm text-slate-600 leading-relaxed">{subLine}</p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">governor</span> on the self-tuning loop — it watches the controller across mornings, not one move at a time.
+          {' '}<span className="font-semibold text-rose-600">Hunting</span> (it keeps reversing) or <span className="font-semibold text-amber-600">pinned</span> (stuck on a rail) reads as unstable even when each move looked fine.
+          {' '}When the tuner won’t settle the governor <span className="font-semibold text-rose-600">self-heals</span> — benching it to baseline — so a runaway loop can’t quietly distort the brief.
+          {' '}Agency-only; a reader never sees their attention being tuned, let alone policed.
         </p>
       </div>
     </section>

@@ -2799,6 +2799,197 @@ function BriefEmphasisControlPanelPreview({ data }) {
   )
 }
 
+// Mirrors the live BriefEmphasisControlHealthPanel: reads GET /api/ai/brief-emphasis-control-health
+// (agency-only). The panel above is the controller (layer 21) re-tuning the brief's breadth from its
+// own grade. A closed loop can still misbehave over TIME — a controller that keeps reversing (HUNTING)
+// or one pinned to a rail for days (SATURATION) is unstable even when each single move looked fine.
+// This is the GOVERNOR: it watches the controller ACROSS mornings and, when it won't settle, self-heals
+// by benching the tuner to baseline (the 'damp' action). The hero is the controller's chosen breadth
+// stepped across the trailing window against its [min, base, max] rails — a hunt zig-zags, a pin rides a
+// rail, convergence flattens. PRIVACY (load-bearing): this verdict speaks pure control vocabulary and
+// rides NO serialized pack — recomputed at read time, narrator '' for the client (proven in 22d). Static
+// 'hunting' render off a fixture whose series swings wider↔leaner, so the governor is self-healing.
+const CONTROL_HEALTH_TONE_PV = {
+  unstable:    { pill: 'border-rose-200 bg-rose-50 text-rose-700',          icon: Activity,      label: 'Hunting',   line: 'stroke-rose-500' },
+  constrained: { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: AlertTriangle, label: 'Pinned',    line: 'stroke-amber-500' },
+  stable:      { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: CheckCircle2,  label: 'Converged', line: 'stroke-emerald-500' },
+  settling:    { pill: 'border-sky-200 bg-sky-50 text-sky-700',             icon: Gauge,         label: 'Settling',  line: 'stroke-sky-500' },
+  idle:        { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Inbox,         label: 'Idle',      line: 'stroke-slate-300' },
+  abstained:   { pill: 'border-slate-200 bg-slate-50 text-slate-400',       icon: Clock,         label: 'Building',  line: 'stroke-slate-300' },
+}
+const CONTROL_HEALTH_ACTION_PV = {
+  damp:          { label: 'Self-healing',  icon: Wrench,        cls: 'text-rose-700',    box: 'border-rose-200 bg-rose-50' },
+  review_bounds: { label: 'Review bounds', icon: AlertTriangle, cls: 'text-amber-700',   box: 'border-amber-200 bg-amber-50' },
+  trust:         { label: 'Trust',         icon: ShieldCheck,   cls: 'text-emerald-700', box: 'border-emerald-200 bg-emerald-50' },
+  hold:          { label: 'Hold',          icon: Minus,         cls: 'text-slate-500',   box: 'border-slate-200 bg-slate-50' },
+  none:          { label: 'Standing by',   icon: Inbox,         cls: 'text-slate-400',   box: 'border-slate-200 bg-slate-50' },
+}
+const CONTROL_MOVE_DOT_PV = { lean_in: 'fill-emerald-500', ease_off: 'fill-amber-500', hold: 'fill-slate-300', none: 'fill-slate-200' }
+const CONTROL_HEALTH_REASON_PV = {
+  control_settling:     'The tuner is mid-search — adjusting, but neither swinging nor stuck. No intervention yet.',
+  controller_quiet:     'The tuner has been hands-off all window — there is nothing to steady.',
+  insufficient_history: 'Not enough mornings yet to judge the tuner’s stability — it builds as the brief ships.',
+}
+
+function ControlHealthTrackPv({ series, bounds, tone }) {
+  const pts = Array.isArray(series) ? series : []
+  const W = 320, H = 76, padX = 8, padTop = 10, padBot = 10
+  const innerW = W - padX * 2, innerH = H - padTop - padBot
+  const loD = Math.min(bounds.min, bounds.base) - 0.5
+  const hiD = Math.max(bounds.max, bounds.base) + 0.5
+  const yFor = (v) => padTop + (1 - (v - loD) / (hiD - loD)) * innerH
+  const xFor = (i) => pts.length <= 1 ? padX + innerW / 2 : padX + (i / (pts.length - 1)) * innerW
+  let d = ''
+  pts.forEach((p, i) => {
+    const x = xFor(i), y = yFor(p.cap)
+    if (i === 0) d += `M ${x.toFixed(1)} ${y.toFixed(1)}`
+    else { const py = yFor(pts[i - 1].cap); d += ` L ${x.toFixed(1)} ${py.toFixed(1)} L ${x.toFixed(1)} ${y.toFixed(1)}` }
+  })
+  const rail = (v, dash) => (
+    <line x1={padX} x2={W - padX} y1={yFor(v)} y2={yFor(v)} className="stroke-slate-200" strokeWidth="1" strokeDasharray={dash || undefined} />
+  )
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Controller breadth across the trailing window against its rails">
+      {bounds.max > bounds.base && rail(bounds.max)}
+      {rail(bounds.base, '3 3')}
+      {bounds.min < bounds.base && rail(bounds.min)}
+      {pts.length > 0 && <path d={d} fill="none" className={tone.line} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
+      {pts.map((p, i) => (
+        <circle key={i} cx={xFor(i)} cy={yFor(p.cap)} r={i === pts.length - 1 ? 4 : 3} className={`${CONTROL_MOVE_DOT_PV[p.move] || CONTROL_MOVE_DOT_PV.none} stroke-white`} strokeWidth="1.5" />
+      ))}
+    </svg>
+  )
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-emphasis-control-health. A HUNTING window: the controller kept
+// reversing itself — widen to 4, back to 3, up to 5, back to 3, up to 4, back to 3 — four flips across
+// six mornings (≥ the oscillation threshold), so the governor calls it 'unstable' and self-heals with
+// 'damp', benching the tuner to baseline for tomorrow. narrative is verbatim
+// narrateEmphasisControlHealth(verdict, { audience: 'agency' }).
+const BRIEF_EMPHASIS_CONTROL_HEALTH = {
+  status: 'unstable',
+  recommended_action: 'damp',
+  as_of: null, window_used: 6,
+  history_len: 6,
+  bounds: { min: 1, base: 3, max: 5 },
+  control: {
+    flips: 4, high_run: 1, low_run: 1, settled_run: 0, engaged: true,
+    moves: { lean_in: 3, ease_off: 3, hold: 0, none: 0 },
+    last_move: 'ease_off', last_cap: 3, last_direction: 'widen',
+    series: [
+      { as_of: '2026-05-29', move: 'lean_in',  cap: 4, dir: 'widen' },
+      { as_of: '2026-05-30', move: 'ease_off', cap: 3, dir: 'widen' },
+      { as_of: '2026-05-31', move: 'lean_in',  cap: 5, dir: 'widen' },
+      { as_of: '2026-06-01', move: 'ease_off', cap: 3, dir: 'widen' },
+      { as_of: '2026-06-02', move: 'lean_in',  cap: 4, dir: 'widen' },
+      { as_of: '2026-06-03', move: 'ease_off', cap: 3, dir: 'widen' },
+    ],
+  },
+  verdict_reason: 'control_hunting',
+  requested: { as_of: null, days: 6 },
+  narrative: "The brief's breadth tuning has been swinging wider then leaner back and forth — it's being steadied back to a single reliable setting.",
+}
+
+function BriefEmphasisControlHealthPanelPreview({ data }) {
+  const vstatus    = data.status || 'abstained'
+  const tone       = CONTROL_HEALTH_TONE_PV[vstatus] || CONTROL_HEALTH_TONE_PV.abstained
+  const StatusIcon = tone.icon
+  const action     = data.recommended_action || 'none'
+  const act        = CONTROL_HEALTH_ACTION_PV[action] || CONTROL_HEALTH_ACTION_PV.none
+  const ActIcon    = act.icon
+  const ctl        = data.control || {}
+  const bounds     = data.bounds || { min: 1, base: 3, max: 5 }
+  const series     = Array.isArray(ctl.series) ? ctl.series : []
+  const windowN    = data.requested?.days || data.window_used || 6
+  const hasChart   = vstatus !== 'abstained' && series.length >= 2
+  const damping    = action === 'damp'
+  const narrative  = (data.narrative || '').trim()
+  const reasonLine = CONTROL_HEALTH_REASON_PV[data.verdict_reason] || ''
+  const subLine    = narrative || reasonLine
+  const pillLabel  = vstatus === 'constrained'
+    ? (data.verdict_reason === 'pinned_low' ? 'Pinned low' : 'Pinned high')
+    : tone.label
+  const flips      = Number.isFinite(Number(ctl.flips)) ? Number(ctl.flips) : 0
+  const settledRun = Number.isFinite(Number(ctl.settled_run)) ? Number(ctl.settled_run) : 0
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Controller stability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">The governor watching the tuner for hunting &amp; saturation · trailing {windowN} mornings</p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`} title={`Controller health: ${vstatus}`}>
+          <StatusIcon className="w-3 h-3" /> {pillLabel}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        {vstatus === 'abstained' ? (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{reasonLine || 'Not enough mornings yet to judge the tuner’s stability — it builds as the brief ships.'}</p>
+          </div>
+        ) : (
+          <>
+            {damping && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5">
+                <Wrench className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-rose-700 leading-relaxed">
+                  Self-healing — the tuner is reversing itself faster than it’s converging, so the governor benched it to baseline for tomorrow’s brief.
+                </p>
+              </div>
+            )}
+
+            {hasChart && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 pt-3 pb-2">
+                <ControlHealthTrackPv series={series} bounds={bounds} tone={tone} />
+                <div className="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> lean-in</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> ease-off</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300" /> hold</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-slate-300" /> baseline</span>
+                </div>
+              </div>
+            )}
+
+            <div className={`grid grid-cols-3 gap-1.5 ${hasChart ? 'mt-3' : ''}`}>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Swings</p>
+                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${vstatus === 'unstable' ? 'text-rose-700' : 'text-slate-900'}`}>{flips}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">reversals</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Settled</p>
+                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${vstatus === 'stable' ? 'text-emerald-700' : 'text-slate-900'}`}>{settledRun}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">in a row</p>
+              </div>
+              <div className={`rounded-xl border-2 px-2 py-2.5 text-center flex flex-col items-center justify-center ${act.box}`}>
+                <p className={`text-[9px] font-bold uppercase tracking-wide ${act.cls}`}>Action</p>
+                <ActIcon className={`mt-1.5 w-5 h-5 ${act.cls}`} />
+                <p className={`mt-1 text-[10px] font-bold ${act.cls}`}>{act.label}</p>
+              </div>
+            </div>
+
+            {subLine && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{subLine}</p>}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">governor</span> on the self-tuning loop — it watches the controller across mornings, not one move at a time.
+          {' '}<span className="font-semibold text-rose-600">Hunting</span> (it keeps reversing) or <span className="font-semibold text-amber-600">pinned</span> (stuck on a rail) reads as unstable even when each move looked fine.
+          {' '}When the tuner won’t settle the governor <span className="font-semibold text-rose-600">self-heals</span> — benching it to baseline — so a runaway loop can’t quietly distort the brief.
+          {' '}Agency-only; a reader never sees their attention being tuned, let alone policed.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3171,6 +3362,14 @@ export default function PulseDiagnosisPreview() {
           <BriefEmphasisControlPanelPreview data={BRIEF_EMPHASIS_CONTROL} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The rung that <span className="font-bold text-slate-600">closes the second-order loop</span>. The two panels above are the loop's <span className="font-bold text-slate-600">act</span> and <span className="font-bold text-slate-600">measure</span> halves — layer 19 flexes tomorrow's brief on every reception grade, layer 20 grades whether the flex paid off — but until this rung nothing fed that grade <span className="font-bold text-slate-600">back</span>: 19 kept flexing with the same fixed step forever, deaf to its own track record. This is the <span className="font-bold text-slate-600">controller</span>: it pairs 19's reception-driven flex with 20's measured step-scale for that same direction and adjusts the flex's <span className="font-bold text-slate-600">magnitude</span> by one gentle step. Here widening measured as paying off (<span className="font-bold text-emerald-600">×1.12</span>), so it <span className="font-bold text-emerald-600">leans in</span> — tomorrow's supporting cast reaches one row further, to five, instead of stopping at four. <span className="font-bold text-emerald-600">reception → flex → efficacy → scaled flex</span>, the loop closed. Safety is <span className="font-bold text-slate-600">asymmetric by design</span>: leaning in is <span className="font-bold text-emerald-600">earned twice</span> — reception must say widen <span className="italic">and</span> past widening must have measured as sustaining — easing off is <span className="font-bold text-amber-600">always free</span>, and the cap never leaves its <span className="tabular-nums">1–5</span> rails, so the headline plus one row always survive. Honest by abstention: no flex to scale, or no measured efficacy, and it passes 19's call through untouched. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Controller stability · the governor, self-healing a runaway tuner</p>
+          <BriefEmphasisControlHealthPanelPreview data={BRIEF_EMPHASIS_CONTROL_HEALTH} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung that <span className="font-bold text-slate-600">polices the loop the panel above closed</span>. The controller re-tunes the brief's breadth from its own grade — a tidy closed loop — but a closed loop can still <span className="font-bold text-slate-600">misbehave over time</span>: any single move can look reasonable while the <span className="font-bold text-slate-600">trajectory</span> is pathological. This is the <span className="font-bold text-slate-600">governor</span>: it stops judging moves one at a time and watches the controller's cap <span className="font-bold text-slate-600">across mornings</span>. Two failure shapes, neither visible from a single step — <span className="font-bold text-rose-600">hunting</span> (the tuner keeps reversing itself, widen-trim-widen-trim, chasing a setting it never holds) and <span className="font-bold text-amber-600">saturation</span> (it jams against a rail for days, out of room to correct). Here the cap zig-zags <span className="tabular-nums">4→3→5→3→4→3</span> — <span className="font-bold text-rose-600">four reversals in six mornings</span>, a textbook hunt — so the governor calls it <span className="font-bold text-rose-600">unstable</span> and <span className="font-bold text-rose-600">self-heals</span>: it benches the tuner to its baseline for tomorrow's brief, trading a thrashing setting for a steady one until the loop earns its autonomy back. The self-tuning re-tuning itself — and now <span className="font-bold text-slate-600">a governor watching that re-tuning</span>, intervening only when it won't settle. Endpoint-only and honest by abstention: too few mornings and it stays quiet; calm and it stands by. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned, let alone policed.
           </p>
         </div>
 
