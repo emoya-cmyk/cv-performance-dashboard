@@ -605,7 +605,16 @@ const CLIENT_BRIEFING = {
   focus: { metric: 'revenue', label: 'Revenue', direction: 'down', delta_pct: -24, lane: 'worth_a_look' },
   also_count: 1,
 }
-function ClientPulseHeadlinePreview({ briefing }) {
+// morning memory (8d) — the same two engine strings ClientView folds beneath the one sentence, both
+// verbatim narrateContinuity / narrateResolved CLIENT-voice output (the UI only places them). The focus
+// metric (revenue) is on its 3rd morning and still bending the wrong way → the streak note grounds the
+// headline as "the same story as yesterday, not a fresh scare". The resolved line names a Calls alert
+// that settled overnight — deliberately OFF today's deck (a cleared alarm stops firing, so it's absent
+// from the live pulse) yet resurfaced here, so a heavy morning still opens with a win. Per-client payload
+// → no peer metric or name can reach this surface.
+const CLIENT_FOCUS_NOTE    = "We've been tracking this for 3 days, and it hasn't turned around yet."
+const CLIENT_RESOLVED_NOTE = 'Good news — your calls alert from yesterday has settled back into your normal range.'
+function ClientPulseHeadlinePreview({ briefing, focusNote, resolvedNote }) {
   const b = briefing
   if (!b || !b.headline_text) return null
   const posture = PULSE_POSTURE_CLIENT[b.posture] || PULSE_POSTURE_CLIENT.steady
@@ -635,6 +644,25 @@ function ClientPulseHeadlinePreview({ briefing }) {
           )}
           {b.also_count > 0 && (
             <span className="text-[10px] font-semibold text-slate-400">· +{b.also_count} more watched</span>
+          )}
+        </div>
+      )}
+      {/* morning memory (8d) — the focus metric's streak in the client's own voice, and any overnight
+          win that's already settled back to normal. The streak grounds the headline ("is this new, or
+          the same story as yesterday?"); the resolved line leads with good news even on a heavy morning. */}
+      {(focusNote || resolvedNote) && (
+        <div className="mt-2 ml-4 space-y-1">
+          {focusNote && (
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400">
+              <Clock className="w-3 h-3 shrink-0" />
+              <span>{focusNote}</span>
+            </div>
+          )}
+          {resolvedNote && (
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600">
+              <CheckCircle2 className="w-3 h-3 shrink-0" />
+              <span>{resolvedNote}</span>
+            </div>
           )}
         </div>
       )}
@@ -774,7 +802,7 @@ export default function PulseDiagnosisPreview() {
               </div>
               {/* the one sentence first (7d) — the synthesised briefing replaces the generic
                   "early read" intro; the per-metric rows below become its supporting detail. */}
-              <ClientPulseHeadlinePreview briefing={CLIENT_BRIEFING} />
+              <ClientPulseHeadlinePreview briefing={CLIENT_BRIEFING} focusNote={CLIENT_FOCUS_NOTE} resolvedNote={CLIENT_RESOLVED_NOTE} />
               <div className="space-y-3">
                 {orderClientPulse(CLIENT).map((s, i) => <PreviewClientPulseRow key={`${s.metric}:${i}`} s={s} />)}
               </div>

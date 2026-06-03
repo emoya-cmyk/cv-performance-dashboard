@@ -935,7 +935,7 @@ const PULSE_POSTURE_CLIENT = {
   watch:  { dot: 'bg-amber-500',   text: 'text-amber-600',   label: 'Worth a glance' },
   steady: { dot: 'bg-emerald-500', text: 'text-emerald-600', label: 'Looking good'  },
 }
-function ClientPulseHeadline({ briefing, adverse }) {
+function ClientPulseHeadline({ briefing, adverse, focusNote, resolvedNote }) {
   const b = briefing
   // No synthesis available → fall back to the original generic count intro, unchanged.
   if (!b || !b.headline_text) {
@@ -977,6 +977,25 @@ function ClientPulseHeadline({ briefing, adverse }) {
           )}
         </div>
       )}
+      {/* morning memory (8d) — the focus metric's streak in the client's own voice, and any overnight
+          win that's already settled back to normal. The streak grounds the headline ("is this new, or
+          the same story as yesterday?"); the resolved line leads with good news even on a heavy morning. */}
+      {(focusNote || resolvedNote) && (
+        <div className="mt-2 ml-4 space-y-1">
+          {focusNote && (
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400">
+              <Clock className="w-3 h-3 shrink-0" />
+              <span>{focusNote}</span>
+            </div>
+          )}
+          {resolvedNote && (
+            <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600">
+              <CheckCircle className="w-3 h-3 shrink-0" />
+              <span>{resolvedNote}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -986,6 +1005,15 @@ function ClientPulse({ pulse }) {
   if (signals.length === 0) return null                 // nothing out of band this week → hide
   const adverse = signals.filter(s => s?.adverse).length
   const ordered = orderClientPulse(signals)             // reliability-weighted triage order (4d)
+  // morning memory (8d) — fold THIS client's continuity into the one-sentence briefing, machinery-free
+  // and in the engine's own client voice. The focus metric's streak note (is_focus is keyed to the
+  // briefing's focus, so it can never disagree with the headline) + any overnight 'resolved' win. Both
+  // strings are narrateContinuity / narrateResolved output verbatim — the UI only places them, never
+  // re-derives phrasing. A per-client payload, so no cross-client name can reach this surface.
+  const cont         = pulse?.continuity || null
+  const focusMetric  = cont?.focus?.metric || null
+  const focusNote    = focusMetric ? (signals.find(s => s?.metric === focusMetric)?.continuity_client_note || '') : ''
+  const resolvedNote = cont?.resolved_client_note || ''
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.08s' }}>
@@ -997,7 +1025,7 @@ function ClientPulse({ pulse }) {
       </div>
       {/* the one sentence first — synthesised briefing (7d) replaces the generic count intro;
           falls back to that exact count line when no briefing rides along. Frames the rows below. */}
-      <ClientPulseHeadline briefing={pulse?.briefing} adverse={adverse} />
+      <ClientPulseHeadline briefing={pulse?.briefing} adverse={adverse} focusNote={focusNote} resolvedNote={resolvedNote} />
 
       <div className="space-y-3">
         {ordered.map(s => <ClientPulseRow key={s.metric} s={s} />)}
