@@ -2520,6 +2520,168 @@ function BriefEngagementPanelPreview({ data }) {
   )
 }
 
+// ── emphasis efficacy — intel-v9 (20c) preview twin ────────────────────────────────────────────
+// Mirrors the live BriefEmphasisEfficacyPanel: reads GET /api/ai/brief-emphasis-efficacy (agency-
+// only). The engagement panel above is the ACT half of the loop — layer 19 flexes tomorrow's
+// supporting-cast cap on every reception grade — but it flexes with FIXED steps and never checks
+// whether the flex worked. This is the rung that grades the loop's OWN moves: it pairs each
+// persisted morning's emphasis decision with the reception that FOLLOWED, scores each direction
+// against the control of mornings the brief held steady (widening should SUSTAIN reception,
+// tightening should RECOVER it), and emits a bounded learned step-scale (0.5×–1.25×) a future
+// controller feeds back to make layer 19 self-improving. Static graded render off a fixture.
+const EMPHASIS_EFFICACY_TONE = {
+  endorsed:     { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: ArrowUpCircle, label: 'Leaning in' },
+  tempered:     { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: RotateCcw,     label: 'Easing off' },
+  steady:       { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Minus,         label: 'Holding calibration' },
+  insufficient: { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Inbox,         label: 'Listening' },
+}
+function stepScaleTone(scale) {
+  const s = Number(scale)
+  if (Number.isFinite(s) && s > 1.0) return { chip: 'bg-emerald-100 text-emerald-700', verb: 'leaning in', Icon: ArrowUpCircle }
+  if (Number.isFinite(s) && s < 1.0) return { chip: 'bg-amber-100 text-amber-700',     verb: 'easing off', Icon: RotateCcw }
+  return { chip: 'bg-slate-100 text-slate-600', verb: 'holding', Icon: Minus }
+}
+const EMPHASIS_DIRECTION_META = {
+  widen:   { icon: Sparkles, label: 'Widening',   verbed: 'sustained' },
+  tighten: { icon: Scissors, label: 'Tightening', verbed: 'recovered' },
+}
+const EFFICACY_MIN_N = 4 // mirrors NOTE_MIN_N — a direction is graded only past this many decided outcomes
+function efficacyDirectionView(d) {
+  const n = d?.n || 0
+  if (!n)                 return { state: 'none',  n: 0, successes: 0 }
+  if (n < EFFICACY_MIN_N) return { state: 'thin',  n, successes: d?.successes || 0 }
+  return {
+    state: 'graded', n,
+    successes: d?.successes || 0,
+    pct:    d?.efficacy != null ? Math.round(d.efficacy * 100) : null,
+    liftPp: d?.lift != null ? Math.round(d.lift * 100) : null,
+  }
+}
+function EmphasisDirectionCardPreview({ dir, score, stepScale, hasControl }) {
+  const meta = EMPHASIS_DIRECTION_META[dir]
+  const Icon = meta.icon
+  const view = efficacyDirectionView(score)
+  const st   = stepScaleTone(stepScale)
+  const StepIcon = st.Icon
+  const scaleLabel = Number.isFinite(Number(stepScale)) ? `×${Number(stepScale).toFixed(2)}` : '×1.00'
+  const liftClass = view.liftPp > 0 ? 'text-emerald-600' : view.liftPp < 0 ? 'text-amber-600' : 'text-slate-400'
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 ${view.state === 'graded' ? 'border-slate-100 bg-slate-50/40' : 'border-slate-100 bg-white'}`}>
+      <div className="flex items-center gap-1.5">
+        <Icon className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+        <span className="text-[11px] font-black text-slate-700">{meta.label}</span>
+        <span className={`ml-auto inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${st.chip}`} title={`Learned step-scale — the loop is ${st.verb}`}>
+          <StepIcon className="w-2.5 h-2.5" /> {scaleLabel}
+        </span>
+      </div>
+      {view.state === 'graded' ? (
+        <>
+          <div className="mt-1.5 flex items-baseline gap-1.5">
+            <span className="text-2xl font-black text-slate-900 leading-none tabular-nums">{view.pct}%</span>
+            <span className="text-[10px] font-bold text-slate-400">{meta.verbed}</span>
+          </div>
+          <p className="mt-0.5 text-[10px] font-semibold text-slate-400 tabular-nums">{view.successes} of {view.n} mornings</p>
+          {hasControl && view.liftPp != null && (
+            <p className="mt-1 text-[10px] font-medium">
+              <span className={`font-black tabular-nums ${liftClass}`}>{view.liftPp > 0 ? '+' : ''}{view.liftPp} pp</span>
+              <span className="text-slate-400"> vs holding steady</span>
+            </p>
+          )}
+        </>
+      ) : view.state === 'thin' ? (
+        <p className="mt-1.5 text-[11px] font-medium text-slate-400">{view.n} decided so far · building</p>
+      ) : (
+        <p className="mt-1.5 text-[11px] font-medium text-slate-400">No {meta.label.toLowerCase()} mornings yet</p>
+      )}
+    </div>
+  )
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-emphasis-efficacy over a 90-day window. The loop has flexed
+// 12 decided mornings: WIDENING is paying off — when the brief carried more, reception held up 65%
+// of the time (6 of 7), +25pp over the 40% the brief earned on the 6 mornings it held steady — so
+// the learned widen step-scale leans in to ×1.12. TIGHTENING is graded but in line with the control
+// (45% over 5, +5pp), so its step stays at the neutral ×1.00. Verdict 'endorsed', reason
+// 'widen_sustaining'. narrative is verbatim narrateEmphasisEfficacy(summary, { audience: 'agency' }).
+const BRIEF_EMPHASIS_EFFICACY = {
+  status: 'graded', n: 12,
+  control_rate: 0.40, control_n: 6, prior: 0.40,
+  directions: {
+    widen:   { n: 7, successes: 6, failures: 1, rate: 6 / 7, efficacy: 0.646, lower: 0.52, lift: 0.246, lower_lift: 0.12, band: 'moderate', credibility: 0.538, median_delta: 0.028 },
+    tighten: { n: 5, successes: 3, failures: 2, rate: 0.6,   efficacy: 0.45,  lower: 0.30, lift: 0.05,  lower_lift: -0.1, band: 'moderate', credibility: 0.455, median_delta: 0.01 },
+  },
+  recommendation: { widen_step_scale: 1.12, tighten_step_scale: 1.0, verdict: 'endorsed', reason: 'widen_sustaining' },
+  requested: { as_of: null, days: 90 },
+  narrative: 'Widening is holding up — reception sustained 65% of the time when the brief carried more (6 of 7), vs 40% when the brief held steady, so the loop is leaning in (step ×1.12).',
+}
+
+function BriefEmphasisEfficacyPanelPreview({ data }) {
+  const graded      = data.status === 'graded'
+  const verdict     = data.recommendation?.verdict || 'insufficient'
+  const tone        = EMPHASIS_EFFICACY_TONE[verdict] || EMPHASIS_EFFICACY_TONE.insufficient
+  const VerdictIcon = tone.icon
+  const narrative   = (data.narrative || '').trim()
+  const days        = data.requested?.days || 90
+  const dirs        = data.directions || {}
+  const rec         = data.recommendation || {}
+  const controlRate = data.control_rate
+  const controlN    = data.control_n || 0
+  const ctrlPct     = controlRate != null ? Math.round(controlRate * 100) : null
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Gauge className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Emphasis efficacy</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">Is the brief's self-tuning paying off · last {days} days</p>
+        </div>
+        {graded && (
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`} title={`Loop verdict: ${verdict}`}>
+            <VerdictIcon className="w-3 h-3" /> {tone.label}
+          </span>
+        )}
+      </div>
+
+      <div className="px-4 py-4">
+        {graded ? (
+          <>
+            {narrative && <p className="text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+            <div className={`grid grid-cols-2 gap-2 ${narrative ? 'mt-3' : ''}`}>
+              <EmphasisDirectionCardPreview dir="widen"   score={dirs.widen}   stepScale={rec.widen_step_scale}   hasControl={controlRate != null} />
+              <EmphasisDirectionCardPreview dir="tighten" score={dirs.tighten} stepScale={rec.tighten_step_scale} hasControl={controlRate != null} />
+            </div>
+            {controlN > 0 && (
+              <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2 flex items-center gap-2">
+                <Scale className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <p className="text-[11px] font-medium text-slate-500 leading-snug">
+                  <span className="font-black text-slate-700 tabular-nums">{ctrlPct}%</span> of the{' '}
+                  <span className="font-black text-slate-700 tabular-nums">{controlN}</span> {controlN === 1 ? 'morning' : 'mornings'} the brief held steady saw reception improve — the control every flex is measured against.
+                </p>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2">
+            <Inbox className="w-4 h-4 shrink-0" />
+            The reception loop hasn't flexed enough to grade yet — this fills in as widen / tighten mornings accrue the reception that follows.
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">self-improving</span> rung — the loop above flexes the brief's breadth on every reception grade; this grades whether the flex paid off and tunes the next one.
+          {' '}<span className="font-semibold text-emerald-600">Widening</span> should sustain reception · <span className="font-semibold text-amber-600">tightening</span> should recover it.
+          {' '}The learned step-scale stays bounded <span className="tabular-nums">0.5×–1.25×</span> — easy to ease off, earned to lean in.
+          {' '}Agency-only; a reader never sees their attention being tuned.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -2876,6 +3038,14 @@ export default function PulseDiagnosisPreview() {
           <BriefEngagementPanelPreview data={BRIEF_ENGAGEMENT} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The one rung that faces <span className="font-bold text-slate-600">outward</span>. Every panel above is the system grading itself — reliability, editorial precision, the self-tuning policy and its governance. This is the only place the <span className="font-bold text-slate-600">human reader</span> grades the system: a 👍 / 👎 on the morning brief, folded agency-side into a reception score, with the clients it is <span className="font-bold text-rose-600">landing flat</span> with surfaced to watch. Graded only past 3+ votes, so a thin record abstains rather than swing on noise. And now the loop <span className="font-bold text-slate-600">closes</span>: that reception score feeds the strip below, flexing how much of the supporting picture tomorrow's brief carries — <span className="font-bold text-emerald-600">a well-received brief earns a little more depth</span>, a flat one leads tighter. The <span className="font-bold text-slate-600">headline never moves</span>, and widening must be <span className="font-bold text-emerald-600">earned by a proven level</span>, never by a hopeful trend. <span className="font-bold text-emerald-600">The aggregate is agency-only</span> — a client only ever sees their own vote, never this surface. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Emphasis efficacy · is the self-tuning paying off</p>
+          <BriefEmphasisEfficacyPanelPreview data={BRIEF_EMPHASIS_EFFICACY} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung that closes the loop on the loop. The panel above flexes tomorrow's brief on every reception grade — but it flexes with <span className="font-bold text-slate-600">fixed steps and never checks whether the flex worked</span>. This is the first rung that <span className="font-bold text-slate-600">grades the self-tuning's own moves</span>: it pairs each morning's emphasis decision with the reception that <span className="font-bold text-slate-600">followed</span> — free, off history already on disk — and scores each direction against the control of mornings the brief held steady. <span className="font-bold text-emerald-600">Widening should sustain</span> reception; <span className="font-bold text-amber-600">tightening should recover</span> it. Here widening is holding up — 65% sustained, <span className="font-bold text-emerald-600">+25pp over the 40% control</span> — so the learned step-scale leans in to ×1.12; tightening is in line with the control, so it holds at ×1.00. The scale stays <span className="font-bold text-slate-600">bounded 0.5×–1.25×</span> — easy to ease off a losing bet, earned to lean into a winning one — the very knob a future controller feeds back to make the panel above self-improving. Honest by abstention: a direction under a handful of decided outcomes shows no rate, and a thin history reads <span className="font-bold text-slate-600">Listening</span>, never a verdict off noise. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned.
           </p>
         </div>
 
