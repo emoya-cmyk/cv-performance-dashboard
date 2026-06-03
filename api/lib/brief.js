@@ -82,6 +82,30 @@ async function upsertBrief({ scopeKey, asOf, audience, clientId, model, pack, te
   )
 }
 
+// Honest, client-safe reinforcement for the morning brief: ONE pre-narrated sentence,
+// shown only when our recent morning leads have actually EARNED their place (editorial
+// impact label 'earned'). Built from the SAME precision grade the agency sees, but the
+// client never receives the grade itself — narrateBriefImpact's 'client' branch returns
+// the trust sentence for 'earned' and '' for every other label, so 'fair'/'overcalled'/
+// un-graded all collapse to '' and nothing is shown. We pass the OVERALL portfolio grade
+// (largest sample → most robust), never a per-client bucket, and only the string crosses
+// into the client-visible pack — never label, hit_rate, by_lane or by_audience.
+//
+// Fail-safe by construction: any error in the grading replay yields '' and the brief
+// still ships. Lazy requires break a module cycle — briefImpactEngine requires ./brief
+// (listRecentBriefs), so brief.js must not require it at load time; by call time both
+// modules are fully resolved and the require cache makes repeat calls free.
+async function clientImpactReinforcement(asOf) {
+  try {
+    const { getBriefImpact }     = require('./briefImpactEngine')
+    const { narrateBriefImpact } = require('./briefImpact')
+    const impact = await getBriefImpact({ asOf })
+    return narrateBriefImpact(impact, { audience: 'client' }) || ''
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Build, narrate, verify and persist a client's morning brief for one day.
  * @param {string} clientId
@@ -93,6 +117,12 @@ async function generateClientBrief(clientId, asOf) {
   const pulse = await getClientPulse(clientId, { asOf: day })
   const pack  = buildClientBriefPack(pulse)
   const { text, model, grounded } = await generateBriefText(pack)
+
+  // Honest reinforcement — only when our morning leads have EARNED it (else ''). Set
+  // AFTER narration (LLM narrator + grounding verifier never see it) and BEFORE persist,
+  // so it rides the same pack the client already reads. Client briefs only — the portfolio
+  // brief is agency-facing and shows the full editorial-precision panel instead.
+  pack.impact_reinforcement = await clientImpactReinforcement(day)
 
   await upsertBrief({
     scopeKey: clientId, asOf: day, audience: 'client', clientId,

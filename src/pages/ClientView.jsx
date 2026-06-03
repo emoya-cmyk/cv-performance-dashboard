@@ -681,6 +681,10 @@ function ClientMorningBrief({ brief }) {
   if (!text) return null
   const day     = fmtBriefDay(brief?.pack?.period?.label || brief?.as_of)
   const posture = PULSE_POSTURE_CLIENT[brief?.pack?.posture] || null
+  // Honest, pre-narrated trust line — present in the pack ONLY when our recent morning
+  // leads have earned it (server folds in narrateBriefImpact's 'client' branch, '' otherwise).
+  // No grade, percentage or machinery ever reaches here — just the one sentence, or nothing.
+  const reinforcement = (brief?.pack?.impact_reinforcement || '').trim()
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.072s' }}>
       <div className="flex items-center justify-between mb-1">
@@ -705,6 +709,12 @@ function ClientMorningBrief({ brief }) {
         </div>
       )}
       <p className="text-sm text-slate-600 leading-relaxed font-medium whitespace-pre-line">{text}</p>
+      {reinforcement && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-px" />
+          <p className="text-[11px] font-semibold text-emerald-800 leading-relaxed">{reinforcement}</p>
+        </div>
+      )}
       <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
         A fresh read each morning — written by your account&rsquo;s AI analyst from your verified
         numbers, days before your Monday recap.

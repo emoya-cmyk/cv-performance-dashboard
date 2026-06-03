@@ -291,3 +291,94 @@ test('generateBriefText rejects an ungrounded agency draft and falls back to the
 
   delete process.env.ANTHROPIC_API_KEY
 })
+
+// ── C. EDITORIAL-PRECISION REINFORCEMENT (12d) — honest, earned-only, server-folded ──
+// The morning brief carries ONE client-safe trust line, and ONLY when our recent morning
+// leads have actually EARNED it. generateClientBrief computes it AFTER narration (the LLM
+// narrator and the grounding verifier never see it) and folds ONLY the pre-narrated string
+// into the persisted pack — never the grade, percentage, lane split, or audience bucket.
+// Every other grade ('fair'/'overcalled'/un-graded) collapses to '' (absent), and the
+// portfolio brief never carries it at all. brief.js lazy-requires briefImpactEngine inside
+// clientImpactReinforcement (to break the brief↔engine module cycle), so mutating the cached
+// module object here drives the grade deterministically with no DB replay.
+const impactEngine = require('../lib/briefImpactEngine')
+const realGetBriefImpact = impactEngine.getBriefImpact
+const stubImpact = (impact) => { impactEngine.getBriefImpact = async () => impact }
+test.after(() => { impactEngine.getBriefImpact = realGetBriefImpact })
+
+// Only the fields narrateBriefImpact actually reads: status === 'graded', hit_rate != null,
+// and the label. The exact summarizeBriefImpact shape; extra fields are irrelevant here.
+const earnedImpact     = { status: 'graded',       label: 'earned',     hit_rate: 0.82, hits: 9, judged: 11 }
+const fairImpact       = { status: 'graded',       label: 'fair',       hit_rate: 0.55, hits: 6, judged: 11 }
+const overcalledImpact = { status: 'graded',       label: 'overcalled', hit_rate: 0.30, hits: 3, judged: 11 }
+const ungradedImpact   = { status: 'insufficient', label: null,         hit_rate: null, hits: 0, judged: 0  }
+
+const EARNED_LINE = 'When we lead your morning brief with something, it has usually held up.'
+
+test('generateClientBrief folds the EARNED trust line into the client pack — and nothing else', async () => {
+  await ready()
+  const c = await freshClient('Earned Reinforcement Roofing Co')
+  stubImpact(earnedImpact)
+
+  const res = await generateClientBrief(c, AS_OF)
+
+  // The exact pre-narrated 'client' sentence rode into the pack, verbatim.
+  assert.equal(res.pack.impact_reinforcement, EARNED_LINE)
+  // NONE of the grading machinery leaked into the client-visible pack.
+  for (const k of ['label', 'hit_rate', 'hits', 'judged', 'by_lane', 'by_audience', 'impact']) {
+    assert.ok(!(k in res.pack), `client pack must not carry editorial-grade field "${k}"`)
+  }
+  // The string is the ONLY artifact that survives — no percentage, no count, no digit.
+  assert.ok(!/\d/.test(res.pack.impact_reinforcement))
+
+  // It persisted — a read-back carries the same line (re-reads cost nothing).
+  const row = await getClientBrief(c, AS_OF)
+  assert.equal(row.pack.impact_reinforcement, EARNED_LINE)
+})
+
+test('generateClientBrief shows NO reinforcement when the record is only fair', async () => {
+  await ready()
+  const c = await freshClient('Fair Reinforcement Roofing Co')
+  stubImpact(fairImpact)
+
+  const res = await generateClientBrief(c, AS_OF)
+  assert.equal(res.pack.impact_reinforcement, '')   // fair → the client sees nothing
+})
+
+test('generateClientBrief shows NO reinforcement when we are overcalling', async () => {
+  await ready()
+  const c = await freshClient('Overcalled Reinforcement Roofing Co')
+  stubImpact(overcalledImpact)
+
+  const res = await generateClientBrief(c, AS_OF)
+  assert.equal(res.pack.impact_reinforcement, '')   // overcalled → never bragged to the client
+})
+
+test('generateClientBrief shows NO reinforcement before there is enough to grade', async () => {
+  await ready()
+  const c = await freshClient('Ungraded Reinforcement Roofing Co')
+  stubImpact(ungradedImpact)
+
+  const res = await generateClientBrief(c, AS_OF)
+  assert.equal(res.pack.impact_reinforcement, '')   // un-graded → silent
+})
+
+test('generateClientBrief is fail-safe — a grading error still ships the brief, reinforcement ""', async () => {
+  await ready()
+  const c = await freshClient('Failsafe Reinforcement Roofing Co')
+  impactEngine.getBriefImpact = async () => { throw new Error('grading replay blew up') }
+
+  const res = await generateClientBrief(c, AS_OF)
+  assert.equal(res.grounded, true)                  // the brief still ships
+  assert.match(res.brief_text, /^Good morning\./)
+  assert.equal(res.pack.impact_reinforcement, '')   // failure degrades to silence, never throws
+})
+
+test('generatePortfolioBrief NEVER carries an impact_reinforcement line', async () => {
+  await ready()
+  stubImpact(earnedImpact)   // even when the grade is glowing
+  await freshClient('Portfolio NoReinforce A')
+
+  const res = await generatePortfolioBrief(AS_OF)
+  assert.ok(!('impact_reinforcement' in res.pack))  // the agency brief shows the full panel instead
+})
