@@ -37,6 +37,11 @@ const policyHealth                                       = require('./briefLeadP
 // lanes at bound, respect the floor, pass healthy lanes through), superseding layer 14's
 // blunt all-or-nothing revert. Pure and dependency-free, so a top-level require is safe.
 const { governLeadPolicy }                               = require('./briefLeadPolicyGovernor')
+// intel-v7 layer 16 — the auditor. Audits the governor's OWN decisions across mornings (does
+// the safe corrective actually stick, or does the learner keep re-oscillating a lane the
+// governor keeps neutralising?) and recommends escalation when it doesn't — the LEARN/ADJUST
+// half that closes the governor's loop. Pure and dependency-free, so a top-level require is safe.
+const leadAudit                                          = require('./briefLeadPolicyAudit')
 
 // The portfolio brief spans every client, so it has no client id to key on; it
 // lives under this single reserved scope. Exported so the route layer and tests
@@ -213,6 +218,41 @@ async function leadPolicyDecisionFor(asOf, span) {
   const governance = governLeadPolicy(policy, health)
   const governed   = governance.governed
   return { policy, governed, governance, history, health, revert }
+}
+
+// intel-v7 layer 16 — the auditor's raw material. Reconstructs what the LAYER-15 governor
+// decided on each of the trailing `span` mornings by replaying it over EXPANDING PREFIXES of
+// ONE policy-history walk: morning i is governed against the stability verdict assessed from
+// the snapshots up to and including i (assessLeadPolicyHealth windows internally, so the most
+// recent mornings — the ones that drive escalation — get a full trailing window). This is O(n)
+// in the expensive dimension (a single policy walk), not O(n²). The OLDEST mornings get thin
+// prefixes, so the governor abstains there and the morning reads as non-correcting —
+// deliberately CONSERVATIVE: the auditor can only UNDER-count corrections, never invent a
+// spurious recurring run that would needlessly escalate to a human. Returns oldest→newest
+// [{as_of, governance}], the morning shape auditLeadPolicyGovernance consumes directly. Default
+// span is the AUDITOR's own window, so a once-daily generation mints exactly that many
+// governance verdicts to audit (the same line-154 philosophy). Pure read, never throws.
+async function leadPolicyGovernanceHistoryFor(asOf, span) {
+  const n       = (span == null || span === '') ? leadAudit.DEFAULT_WINDOW : span
+  const history = await leadPolicyHistoryFor(asOf, n)
+  const out     = []
+  for (let i = 0; i < history.length; i++) {
+    const health     = policyHealth.assessLeadPolicyHealth(history.slice(0, i + 1))
+    const governance = governLeadPolicy(history[i].policy, health)
+    out.push({ as_of: history[i].as_of, governance })
+  }
+  return out
+}
+
+// intel-v7 layer 16 — the auditor's verdict. Audits the governor's own track record across
+// those mornings: classifies each lane's intervention outcome (recurring/resolved/intermittent/
+// one_off), rolls up to churning/effective/quiet/abstained, and recommends ESCALATION when the
+// safe corrective keeps having to fire on the same lane (the learner re-oscillating faster than
+// the governor neutralises). This is the LEARN/ADJUST half that closes the SENSE→ACT→LEARN→ADJUST
+// loop. Agency-only calibration; echoed NOWHERE to the client. Pure read, never throws
+// (auditLeadPolicyGovernance abstains on thin history).
+async function leadPolicyGovernanceAuditFor(asOf, span) {
+  return leadAudit.auditLeadPolicyGovernance(await leadPolicyGovernanceHistoryFor(asOf, span))
 }
 
 /**
@@ -414,6 +454,8 @@ module.exports = {
   leadPolicyHistoryFor,
   leadPolicyHealthFor,
   leadPolicyGovernanceFor,
+  leadPolicyGovernanceHistoryFor,
+  leadPolicyGovernanceAuditFor,
   leadPolicyDecisionFor,
   defaultAsOf,
   PORTFOLIO_KEY,

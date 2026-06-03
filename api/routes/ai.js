@@ -49,6 +49,7 @@ const {
   generateClientBrief, generatePortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
+  leadPolicyGovernanceAuditFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -57,6 +58,7 @@ const { narrateBriefImpact } = require('../lib/briefImpact')
 const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
 const { narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
 const { narrateLeadPolicyGovernance } = require('../lib/briefLeadPolicyGovernor')
+const { narrateLeadPolicyGovernanceAudit } = require('../lib/briefLeadPolicyAudit')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -421,6 +423,39 @@ router.get('/lead-policy-governance', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET lead-policy-governance error', err.message)
     res.status(500).json({ error: 'Failed to load lead policy governance' })
+  }
+})
+
+// ── GET /api/ai/lead-policy-governance-audit ────────────────────────────────────
+// CLOSE THE GOVERNOR'S OWN LOOP. /lead-policy-governance ACTS every morning — it applies the
+// safe corrective autonomously — but it never audits its OWN track record. This does: it replays
+// the governor across the trailing window of mornings and asks, per lane, whether the corrective
+// STUCK (resolved), keeps recurring (the learner re-oscillates faster than the governor can
+// neutralise it → churning), or only ever fired once. When a lane is churning it recommends
+// ESCALATION — pin the lane or take a closer look — because the safe auto-corrective alone is no
+// longer keeping up. This is the LEARN/ADJUST half that closes the SENSE→ACT→LEARN→ADJUST loop.
+// Pure agency calibration, so it shares the 403 gate and agency-voiced narration. ?days=N sizes
+// how many governance mornings to audit; absent → the auditor's own window, so a plain GET mints
+// exactly that many deterministic verdicts to audit.
+router.get('/lead-policy-governance-audit', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  // Same span discipline as the sibling lead-policy reads: pass through only when explicitly
+  // requested, otherwise let leadPolicyGovernanceAuditFor fall to the auditor's own window.
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const audit = await leadPolicyGovernanceAuditFor(asOf, span)
+    res.json({
+      ...audit,
+      requested: { as_of: asOf || null, days: audit.window_used ?? (span ?? null) },
+      narrative: narrateLeadPolicyGovernanceAudit(audit, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET lead-policy-governance-audit error', err.message)
+    res.status(500).json({ error: 'Failed to load lead policy governance audit' })
   }
 })
 

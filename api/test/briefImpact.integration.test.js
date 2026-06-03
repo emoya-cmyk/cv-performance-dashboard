@@ -54,11 +54,15 @@ process.env.SQLITE_PATH = DB_PATH
 const db = require('../db')
 const { getBriefImpact }       = require('../lib/briefImpactEngine')
 const { narrateBriefImpact }   = require('../lib/briefImpact')
-const { PORTFOLIO_KEY, leadPolicyHealthFor } = require('../lib/brief')
+const {
+  PORTFOLIO_KEY, leadPolicyHealthFor,
+  leadPolicyGovernanceHistoryFor, leadPolicyGovernanceAuditFor,
+} = require('../lib/brief')
 const { resolvePortfolioScope } = require('../routes/ai')
 const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
 const policyHealth = require('../lib/briefLeadPolicyHealth')
 const { narrateLeadPolicyHealth, shouldRevertToNeutral } = policyHealth
+const { narrateLeadPolicyGovernanceAudit, shouldEscalateGovernance } = require('../lib/briefLeadPolicyAudit')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -300,4 +304,66 @@ test('GET /api/ai/lead-policy-health — agency-gated, well-formed over the real
   // the agency may hear the verdict; the client voice is silent under EVERY status the monitor emits
   assert.equal(typeof narrateLeadPolicyHealth(v, { audience: 'agency' }), 'string', 'agency narration is a string (possibly empty when settling/idle)')
   assert.equal(narrateLeadPolicyHealth(v, { audience: 'client' }), '', 'loop-stability monitoring is never client-facing')
+})
+
+// ── 5. the auditor read seam (16b): GET /api/ai/lead-policy-governance-audit closes the
+//    governor's OWN loop. It replays the LAYER-15 governor morning-by-morning over the same real
+//    join (leadPolicyGovernanceAuditFor → leadPolicyGovernanceHistoryFor — one policy walk, the
+//    governor judged against an expanding-prefix health read each morning) and then audits the
+//    governor's track record: does the safe corrective keep having to re-fire on a lane (churning
+//    → escalate to a human) or did it stick (quiet)? Agency-gated + client-silent, exactly like
+//    the sibling lead-policy reads. THE DETERMINISTIC SPINE: a MONOTONIC crash never oscillates a
+//    lane (test 4 proved counts.oscillating === 0), so the governor never has to NEUTRALISE one,
+//    so the auditor sees ZERO corrections and can NEVER escalate — the LEARN/ADJUST mirror of
+//    test 4's "never reverts". We assert only what the crash corpus makes deterministic.
+test('GET /api/ai/lead-policy-governance-audit — agency-gated, well-formed over the real join, NEVER escalates on a monotonic crash, and stays client-silent', async () => {
+  // same gate the route applies before it ever reads (identical posture to /lead-policy-governance)
+  assert.deepEqual(resolvePortfolioScope({ user: { role: 'agency' } }), {}, 'agency may read the governance audit')
+  assert.equal(resolvePortfolioScope({ user: { role: 'client', id: CLIENT_ID } }).status, 403, 'a client token is refused the portfolio-wide governance audit')
+
+  // rebuild the exact flat-then-crash corpus, independent of test order
+  await reset()
+  await db.query('INSERT INTO clients (id, name) VALUES ($1,$2)', [CLIENT_ID, CLIENT_NAME])
+  const leads = Array.from({ length: SPAN + 1 }, (_, i) => (i < 64 ? 200 : 5))
+  await seedDaily(CLIENT_ID, 'leads', leads)
+  for (const idx of [73, 75, 77, 79, 81, 83]) {
+    await seedBrief({ scopeKey: CLIENT_ID, asOf: isoAtIdx(idx), audience: 'client', clientId: CLIENT_ID, pack: clientFocus('leads', 'down', 'paid') })
+  }
+
+  // ── the raw material the auditor consumes: the governor replayed morning-by-morning. Each entry
+  //    is the { as_of, governance } shape, every governance verdict is well-formed, and the walk is
+  //    strictly chronological with the newest morning landing on asOf.
+  const history = await leadPolicyGovernanceHistoryFor(ASOF)
+  assert.ok(Array.isArray(history) && history.length >= 1, 'the crash corpus mints at least one governance morning')
+  for (const m of history) {
+    assert.match(m.as_of, /^\d{4}-\d{2}-\d{2}$/, 'each morning carries its calendar day')
+    assert.ok(m.governance && typeof m.governance.status === 'string', 'each morning carries a well-formed governance verdict')
+  }
+  for (let i = 1; i < history.length; i++) assert.ok(history[i - 1].as_of < history[i].as_of, 'history is strictly oldest→newest')
+  assert.equal(history[history.length - 1].as_of, ASOF, 'the newest governance morning is asOf')
+
+  // ── the verdict: the wired one-shot the route calls
+  const audit = await leadPolicyGovernanceAuditFor(ASOF)
+
+  // well-formed audit shape (never an abstain on this corpus — the governance history clears the
+  // auditor's min-history floor), with a recommendation carrying an action + a lanes array
+  assert.equal(typeof audit.status, 'string', 'the audit carries a status string')
+  assert.notEqual(audit.status, 'abstained', 'a full governance history clears the auditor min-history floor')
+  assert.ok(audit.recommendation && Array.isArray(audit.recommendation.lanes), 'a recommendation with a lanes array')
+  assert.ok(audit.recommendation.action === 'escalate' || audit.recommendation.action === 'none', 'recommendation.action is escalate|none')
+  assert.ok(audit.counts && typeof audit.counts === 'object', 'the audit carries counts')
+
+  // THE GOVERNANCE-AUDIT INVARIANT — a monotonic crash never oscillates a lane, so the governor
+  // never has to neutralise one, so the auditor records ZERO corrections and CANNOT escalate. This
+  // is the deterministic spine (the LEARN/ADJUST mirror of test 4's never-reverts).
+  assert.notEqual(audit.status, 'churning', 'a monotonic crash never churns the governor')
+  assert.equal(audit.counts.recurring, 0, 'no lane keeps re-needing the safe corrective')
+  assert.equal(audit.counts.corrected_mornings, 0, 'the governor never had to correct on a monotonic crash')
+  assert.equal(audit.recommendation.action, 'none', 'and so the auditor never recommends escalation')
+  assert.equal(audit.recommendation.lanes.length, 0, 'with no lane to escalate')
+  assert.equal(shouldEscalateGovernance(audit), false, 'the escalation predicate agrees: nothing to escalate')
+
+  // the agency may hear the audit; the client voice is silent under EVERY status the auditor emits
+  assert.equal(typeof narrateLeadPolicyGovernanceAudit(audit, { audience: 'agency' }), 'string', 'agency narration is a string (empty unless churning)')
+  assert.equal(narrateLeadPolicyGovernanceAudit(audit, { audience: 'client' }), '', 'governance auditing is never client-facing')
 })
