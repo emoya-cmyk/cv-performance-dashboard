@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -1113,6 +1113,200 @@ function BriefImpactPanelPreview({ data }) {
   )
 }
 
+// ── 13c learned lead policy (agency · Intelligence) ─────────────────────────────
+// Preview twin of LeadPolicyPanel. Editorial precision (12c) MEASURES whether the call we led
+// with held up; this is the TUNE half — each lane's front-page hit-rate becomes a bounded weight
+// in [0.8, 1.2] the morning brief applies when it ranks candidates for the one lead. promote a
+// lane that keeps earning the front page, ease one that keeps overcalling, with act_now safety-
+// floored (promotable, never demoted). Static graded render with template-string classNames;
+// laneLabel() is reused from the 12c block above. Fictional client names.
+const LEAD_POLICY_TONE = {
+  tuned:     { pill: 'border-teal-200 bg-teal-50 text-teal-700',    dot: 'bg-teal-500',  label: 'Self-tuned' },
+  idle:      { pill: 'border-slate-200 bg-slate-50 text-slate-500', dot: 'bg-slate-300', label: 'Holding neutral' },
+  abstained: { pill: 'border-slate-200 bg-slate-50 text-slate-500', dot: 'bg-slate-300', label: 'Abstaining' },
+}
+const LEAD_DIR_TONE = {
+  promote: { fill: 'bg-emerald-500', text: 'text-emerald-700', label: 'Lead more' },
+  demote:  { fill: 'bg-amber-400',   text: 'text-amber-600',   label: 'Ease off' },
+  neutral: { fill: 'bg-slate-300',   text: 'text-slate-400',   label: 'Even' },
+}
+function leadLaneSub(entry) {
+  const judged = entry && Number.isFinite(entry.judged) ? entry.judged : 0
+  const hr = entry && Number.isFinite(entry.hit_rate) ? entry.hit_rate : null
+  if (judged > 0 && hr != null) return `${Math.round(hr * 100)}% held · ${judged} resolved`
+  if (judged > 0) return `${judged} resolved`
+  return 'building'
+}
+function LeadPolicyLaneRowPreview({ name, entry, bounds }) {
+  const dir = entry?.direction || 'neutral'
+  const tone = LEAD_DIR_TONE[dir] || LEAD_DIR_TONE.neutral
+  const w = Number.isFinite(entry?.weight) ? entry.weight : 1
+  const min = Number.isFinite(bounds?.min) ? bounds.min : 0.8
+  const max = Number.isFinite(bounds?.max) ? bounds.max : 1.2
+  const rightPct = max > 1 ? Math.min(1, Math.max(0, (w - 1) / (max - 1))) * 50 : 0
+  const leftPct = min < 1 ? Math.min(1, Math.max(0, (1 - w) / (1 - min))) * 50 : 0
+  const Icon = dir === 'promote' ? ArrowUpCircle : dir === 'demote' ? TrendingDown : Minus
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600 leading-tight">
+          <span className="truncate">{name}</span>
+          {entry?.safetyFloored && <ShieldCheck className="w-3 h-3 text-indigo-500 shrink-0" />}
+        </div>
+        <p className="text-[10px] font-medium text-slate-400 leading-tight tabular-nums truncate">{leadLaneSub(entry)}</p>
+      </div>
+      <div className="relative flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
+        <div className="absolute inset-y-0 left-1/2 -ml-px w-0.5 bg-slate-300" />
+        {rightPct > 0 && <div className={`absolute inset-y-0 left-1/2 rounded-r-full ${tone.fill}`} style={{ width: `${rightPct}%` }} />}
+        {leftPct > 0 && <div className={`absolute inset-y-0 rounded-l-full ${tone.fill}`} style={{ right: '50%', width: `${leftPct}%` }} />}
+      </div>
+      <span className={`w-12 shrink-0 inline-flex items-center justify-end gap-0.5 text-[11px] font-black tabular-nums ${tone.text}`}>
+        <Icon className="w-3 h-3 shrink-0" />×{w.toFixed(2)}
+      </span>
+    </div>
+  )
+}
+
+// fixture A — the TUNE of the very grade shown in 12c above: act_now earned the front page
+// (3/4) → lifted to ×1.10; worth_a_look kept overcalling (1/4) → eased to ×0.90; tailwind looks
+// fair but only 3 resolved (under the 4-sample bar) so it abstains at neutral; verify has nothing
+// resolved yet. Shaped exactly like GET /api/ai/lead-policy (deriveLeadPolicy + requested + narrative).
+const LEAD_POLICY = {
+  status: 'tuned',
+  neutral_rate: 0.5,
+  min_sample: 4,
+  bounds: { min: 0.8, max: 1.2 },
+  safety_floor_lanes: ['act_now'],
+  lanes: {
+    act_now:      { weight: 1.10, direction: 'promote', adjusted: true,  judged: 4, hit_rate: 0.75, label: 'earned',     reason: 'promoted',            safetyFloored: false },
+    worth_a_look: { weight: 0.90, direction: 'demote',  adjusted: true,  judged: 4, hit_rate: 0.25, label: 'overcalled', reason: 'demoted',             safetyFloored: false },
+    tailwind:     { weight: 1.0,  direction: 'neutral', adjusted: false, judged: 3, hit_rate: 0.667, label: 'fair',      reason: 'insufficient_sample', safetyFloored: false },
+    verify:       { weight: 1.0,  direction: 'neutral', adjusted: false, judged: 0, hit_rate: null,  label: null,        reason: 'insufficient_sample', safetyFloored: false },
+  },
+  promoted: 1, demoted: 1, floored: 0, adjusted_count: 2,
+  requested: { as_of: null, days: 30 },
+  narrative: "From our own front-page track record, we've learned to lead more with act now and ease off worth a look.",
+}
+
+// fixture B — the safety floor FIRING, the rarer but most important case: act_now actually
+// underperformed (1/5) and EARNED a demotion to ×0.88 — but it's a safety lane, so it's pinned
+// back to ×1.00 (shield), promotable but never eased. Meanwhile tailwind maxed out (4/4 → ×1.20)
+// and worth_a_look earned a lift (≈0.88 → ×1.15). Shows the asymmetry no other panel can.
+const LEAD_POLICY_FLOORED = {
+  status: 'tuned',
+  neutral_rate: 0.5,
+  min_sample: 4,
+  bounds: { min: 0.8, max: 1.2 },
+  safety_floor_lanes: ['act_now'],
+  lanes: {
+    tailwind:     { weight: 1.20, direction: 'promote', adjusted: true,  judged: 4, hit_rate: 1.0,   label: 'earned',     reason: 'promoted',      safetyFloored: false },
+    worth_a_look: { weight: 1.15, direction: 'promote', adjusted: true,  judged: 4, hit_rate: 0.875, label: 'earned',     reason: 'promoted',      safetyFloored: false },
+    act_now:      { weight: 1.0,  direction: 'neutral', adjusted: false, judged: 5, hit_rate: 0.2,   label: 'overcalled', reason: 'safety_floored', safetyFloored: true },
+    verify:       { weight: 1.0,  direction: 'neutral', adjusted: false, judged: 4, hit_rate: 0.5,   label: 'fair',       reason: 'neutral',       safetyFloored: false },
+  },
+  promoted: 2, demoted: 0, floored: 1, adjusted_count: 2,
+  requested: { as_of: null, days: 30 },
+  narrative: "From our own front-page track record, we've learned to lead more with tailwind and worth a look.",
+}
+
+function LeadPolicyPanelPreview({ data }) {
+  const st = data?.status || 'abstained'
+  const tuned = st === 'tuned'
+  const tone = LEAD_POLICY_TONE[st] || LEAD_POLICY_TONE.abstained
+  const narrative = (data?.narrative || '').trim()
+  const days = data?.requested?.days || 30
+  const bounds = data?.bounds || { min: 0.8, max: 1.2 }
+  const bandPct = Math.round(((bounds.max ?? 1.2) - 1) * 100)
+  const minSample = data?.min_sample || 4
+  const lanes = Object.entries(data?.lanes || {})
+    .sort((a, b) => {
+      const da = Math.abs((a[1]?.weight ?? 1) - 1), db = Math.abs((b[1]?.weight ?? 1) - 1)
+      if (db !== da) return db - da
+      const fa = a[1]?.safetyFloored ? 1 : 0, fb = b[1]?.safetyFloored ? 1 : 0
+      if (fb !== fa) return fb - fa
+      return (b[1]?.judged || 0) - (a[1]?.judged || 0)
+    })
+    .slice(0, 6)
+  const promoted = data?.promoted || 0, demoted = data?.demoted || 0, floored = data?.floored || 0
+  const adjusted = data?.adjusted_count || 0
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <SlidersHorizontal className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Lead-selection policy</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            How the brief weights each lane for the lead · last {days} days
+          </p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+          <Scale className="w-3 h-3" /> ±{bandPct}% band
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        {tuned ? (
+          <>
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">{adjusted}</span>
+                <span className="text-[11px] font-bold text-slate-400">{adjusted === 1 ? 'lane retuned' : 'lanes retuned'}</span>
+              </div>
+              <p className="text-[11px] font-semibold text-slate-400 pb-0.5">
+                {[
+                  promoted > 0 ? `${promoted} promoted` : null,
+                  demoted > 0 ? `${demoted} eased` : null,
+                  floored > 0 ? `${floored} safety-floored` : null,
+                ].filter(Boolean).join(' · ')}
+                {' '}within a ±{bandPct}% band
+              </p>
+            </div>
+            {narrative && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </>
+        ) : (
+          <div className="flex items-start gap-2 text-sm text-slate-500">
+            <Minus className="w-4 h-4 shrink-0 mt-0.5 text-slate-400" />
+            <p className="leading-relaxed">
+              {st === 'idle'
+                ? `Every lane holds at even weight — nothing has crossed the bar to move off neutral yet. A lane needs ${minSample}+ resolved leads to tune, and the safety lane only ever lifts.`
+                : `Holding the front page byte-for-byte with the live pulse — the editorial-precision record isn't graded yet, so nothing is reprioritised.`}
+            </p>
+          </div>
+        )}
+
+        {lanes.length > 0 && (
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Per-lane weight</p>
+              <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-400" />ease</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />lead more</span>
+              </span>
+            </div>
+            <div className="space-y-2">
+              {lanes.map(([key, entry]) => (
+                <LeadPolicyLaneRowPreview key={key} name={laneLabel(key)} entry={entry} bounds={bounds} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">tune</span> half of editorial precision: each lane's recent hit-rate becomes a bounded weight the brief applies when it picks the one lead — <span className="font-semibold text-emerald-600">lead more</span> with a lane that keeps earning the front page, <span className="font-semibold text-amber-600">ease off</span> one that keeps overcalling. Neutral = <span className="tabular-nums font-semibold text-slate-500">×1.00</span>; the band is ±{bandPct}%, so it reprioritises but never silences. <span className="font-semibold text-indigo-600">act_now is safety-floored</span> — promotable, never eased. Abstains until the record is graded. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -1249,6 +1443,45 @@ export default function PulseDiagnosisPreview() {
             <span className="font-bold text-emerald-600">Act now</span> confirms best, <span className="font-bold text-rose-600">Worth a look</span> overcalls, and a still-abstaining{' '}
             <span className="font-bold text-slate-600">Verify</span> shows a calm &ldquo;—&rdquo; instead of a misleading 0%. A <span className="font-bold text-slate-600">third, disjoint
             vocabulary</span> — earned / fair / overcalled — so it can never blur with narration coverage or grounded trust. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* ── 13c LEAD-SELECTION POLICY — the closing of the loop. Editorial precision (12c) just
+            MEASURED how each lane's front-page calls held up; this is the TUNE half — those hit-rates
+            become bounded per-lane weights the morning brief applies when it picks the one lead.
+            A FOURTH disjoint vocabulary (promote / demote / neutral) so it never blurs with the grade
+            it's built on. Two instances: the common case (the very grade above, tuned) and the rarer
+            safety-floor firing. Pure read, agency-only, abstains until graded. ─────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead policy</p>
+          <LeadPolicyPanelPreview data={LEAD_POLICY} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The grade above doesn&rsquo;t just sit there — it <span className="font-bold text-slate-600">feeds back into selection</span>. This is the same
+            front-page record from <span className="font-bold text-slate-600">editorial precision</span>, turned into the dial that decides what leads tomorrow.
+            <span className="font-bold text-emerald-600"> Act now</span> kept earning the front page (3 of 4 held) so the brief is told to{' '}
+            <span className="font-bold text-emerald-600">lead with it a little more</span> (<span className="tabular-nums font-bold text-emerald-700">×1.10</span>); {' '}
+            <span className="font-bold text-amber-600">Worth a look</span> kept overcalling (1 of 4) so it&rsquo;s <span className="font-bold text-amber-600">eased back</span>{' '}
+            (<span className="tabular-nums font-bold text-amber-600">×0.90</span>). Lanes under the <span className="font-bold text-slate-600">{(LEAD_POLICY.min_sample)}-resolved bar hold
+            at even</span> rather than guess. The band is hard-capped at <span className="tabular-nums font-bold text-slate-600">±20%</span>, so it{' '}
+            <span className="font-bold text-slate-600">reprioritises but never silences</span> a lane — and because it&rsquo;s built straight from measured outcomes,
+            it <span className="font-bold text-slate-600">retunes itself every morning with zero operator input</span>.
+          </p>
+        </div>
+
+        {/* second instance — the safety floor FIRING, the asymmetry that makes this safe to run unattended */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead policy · safety floor firing</p>
+          <LeadPolicyPanelPreview data={LEAD_POLICY_FLOORED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rarer case that proves the loop is <span className="font-bold text-indigo-600">safe to run unattended</span>. Here{' '}
+            <span className="font-bold text-emerald-600">Tailwind</span> went a perfect 4 of 4 and maxed out (<span className="tabular-nums font-bold text-emerald-700">×1.20</span>),{' '}
+            <span className="font-bold text-emerald-600">Worth a look</span> earned a lift (<span className="tabular-nums font-bold text-emerald-700">×1.15</span>) — but{' '}
+            <span className="font-bold text-slate-600">Act now actually missed</span> (1 of 5). A naïve tuner would <span className="font-bold text-rose-600">demote the urgent lane</span>,
+            and a quiet morning would bury a genuine emergency. Because <span className="font-bold text-indigo-600">act_now is safety-floored</span>{' '}
+            (<ShieldCheck className="inline w-3 h-3 text-indigo-500 align-text-bottom" />), its earned demotion is{' '}
+            <span className="font-bold text-indigo-600">pinned back to ×1.00</span> — promotable when it&rsquo;s right, never eased when it&rsquo;s wrong. The one
+            lane where a miss is dangerous is the one the system is forbidden to quiet. <span className="font-bold text-slate-600">A fourth, disjoint vocabulary</span> —
+            promote / ease / even — so it never blurs with the grade it&rsquo;s built on. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 
