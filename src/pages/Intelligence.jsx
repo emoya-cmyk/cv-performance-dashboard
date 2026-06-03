@@ -42,6 +42,7 @@ export default function Intelligence() {
   const [efficacy, setEfficacy] = useState(null)       // { base, plays[], count } — action→recovery efficacy ledger (pooled, anonymous)
   const [pulse, setPulse]     = useState(null)         // { roster[], as_of, window, lookback_days } — intra-week daily-pulse early warning (agency-only)
   const [reallocation, setReallocation] = useState(null) // { roster[], as_of } — channel-reallocation roster (agency-only, prescriptive)
+  const [reallocationEfficacy, setReallocationEfficacy] = useState(null) // { calibration, overall, ranked[], by_strength[], by_pair[], by_client[] } — reallocation feedback loop / calibration (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -55,17 +56,19 @@ export default function Intelligence() {
   const load = useCallback(async () => {
     setStatus('loading'); setError(null)
     try {
-      // Ten independent reads: the per-finding feed, the synthesized triage roster, the
+      // Eleven independent reads: the per-finding feed, the synthesized triage roster, the
       // cross-client peer benchmarks, the "what we fixed" recovery stream, the systemic
       // common-cause scan, the predictive early-warning roster, the goal-pacing roster, the
       // action→recovery efficacy ledger (which of our OWN plays actually fix it), the
       // intra-week daily-pulse roster (who's sliding RIGHT NOW, days before the week closes),
-      // and the channel-reallocation roster (one defensible, reversible budget shift per client).
+      // the channel-reallocation roster (one defensible, reversible budget shift per client),
+      // and the reallocation-efficacy calibration (does the proposer's hypothesis actually pay
+      // off? — the feedback loop that grades past shifts and tunes the next one's confidence).
       // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
-      // of the nine synthesis reads stumbles its panel simply hides and the page degrades to
+      // of the ten synthesis reads stumbles its panel simply hides and the page degrades to
       // exactly what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj, pace, eff, pls, realloc] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(), api.getReallocation(),
+      const [feed, roster, bench, recov, sys, traj, pace, eff, pls, realloc, realloEff] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(), api.getReallocation(), api.getReallocationEfficacy(),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -78,6 +81,7 @@ export default function Intelligence() {
       setEfficacy(eff.status === 'fulfilled' && Array.isArray(eff.value?.plays) ? eff.value : null)
       setPulse(pls.status === 'fulfilled' && Array.isArray(pls.value?.roster) ? pls.value : null)
       setReallocation(realloc.status === 'fulfilled' && Array.isArray(realloc.value?.roster) ? realloc.value : null)
+      setReallocationEfficacy(realloEff.status === 'fulfilled' && realloEff.value?.calibration ? realloEff.value : null)
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -345,6 +349,18 @@ export default function Intelligence() {
           Correlational hypotheses to test and watch, never guarantees. Agency-only (cross-account
           roster + dollar moves); hidden until at least one defensible shift clears the floor. */}
       {reallocation?.roster?.length > 0 && <ReallocationPanel data={reallocation} />}
+
+      {/* reallocation calibration — the FEEDBACK LOOP that closes the prescriptive layer above.
+          Where reallocation PROPOSES a budget shift and prints a confidence, this looks BACK:
+          it reconstructs every past proposal, re-measures what the cost-per-outcome gap actually
+          DID over the weeks that followed, and grades each bet vindicated (the edge held) /
+          refuted (it collapsed). From the pooled record it derives the ONE knob the engine
+          consumes — a confidence CALIBRATION that DAMPENS the next proposal when past bets held
+          up LESS often than their confidence implied, EMBOLDENS it when they beat it, and stays
+          neutral until evidence earns a move. The system grading its own money moves and tuning
+          the next one. Agency-only (an internal media-buying instrument, never a client
+          scoreboard); hidden until at least one past shift is old enough to grade. */}
+      {reallocationEfficacy?.overall?.n > 0 && <ReallocationEfficacyPanel data={reallocationEfficacy} />}
 
       {/* systemic signals — the cross-client common-cause scan: the SAME adverse channel /
           metric / direction independently hitting ≥ minClients clients, collapsed into one
@@ -5596,6 +5612,234 @@ function ReallocationRow({ r }) {
                 <div className={cn('h-full rounded-full', meta.dot)} style={{ width: `${conf}%` }} />
               </div>
               <div className="text-[10px] font-semibold text-slate-400 mt-0.5 tabular-nums">{conf}% confidence</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Reallocation calibration (intel-v10, layer 25) — the reallocation FEEDBACK LOOP ─────────
+   Layer 24 proposes a budget shift and prints a confidence; until now nothing ever checked whether
+   those bets paid off. This is the missing wire. It reconstructs every past proposal from the fact
+   grain, re-measures what the cost-per-outcome gap ACTUALLY did over the weeks that followed, and
+   grades each one vindicated (the edge held) / refuted (it collapsed or reversed). From the pooled
+   record it derives the ONE knob the engine consumes — a confidence CALIBRATION: when past bets held
+   up LESS often than their confidence implied it returns a factor < 1 that DAMPENS the next proposal;
+   when they beat it, a factor > 1 (capped) that EMBOLDENS it; shrunk toward a neutral 1.0 at thin
+   evidence so the loop never lurches. The system grading its own money moves. Indigo throughout (the
+   smart-money hue it shares with the proposer); emerald = a bet that held, rose = one that faded.
+   Agency-only by construction — an internal media-buying instrument, never a client scoreboard. */
+
+// hit-rate band → chip + accent. 'high' = these bets reliably hold (emerald); 'medium' = mixed
+// (indigo); 'low' = they rarely hold up (slate, the row to distrust). Total map → safe default.
+const REALLOC_EFF_BAND_META = {
+  high:   { label: 'Reliable',     chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+  medium: { label: 'Mixed',        chip: 'bg-indigo-50 text-indigo-700 border-indigo-200',    text: 'text-indigo-600',  dot: 'bg-indigo-500' },
+  low:    { label: 'Rarely holds', chip: 'bg-slate-100 text-slate-500 border-slate-200',      text: 'text-slate-500',   dot: 'bg-slate-400' },
+}
+const reallocEffBandMeta = (b) => REALLOC_EFF_BAND_META[b] || REALLOC_EFF_BAND_META.medium
+
+// confidence-band key → human label for the strength rows the calibration learns on.
+const REALLOC_STRENGTH_LABEL = { strong: 'Strong-signal bets', moderate: 'Moderate bets', tentative: 'Tentative bets', unrated: 'Unrated bets' }
+const reallocStrengthLabel = (k) => REALLOC_STRENGTH_LABEL[k] || (typeof k === 'string' && k ? `${k.charAt(0).toUpperCase()}${k.slice(1)} bets` : 'Bets')
+
+// channel id → friendly label, so a 'meta->google_ads' pair key reads 'Facebook/Meta → Google Ads'.
+const REALLOC_CHANNEL_LABEL = { google_ads: 'Google Ads', meta: 'Facebook/Meta', facebook: 'Facebook/Meta', lsa: 'Local Services', gbp: 'Google Business', ga4: 'GA4', tiktok: 'TikTok', bing: 'Microsoft Ads' }
+const reallocChannelLabel = (id) => REALLOC_CHANNEL_LABEL[id] || (typeof id === 'string' && id ? id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : id)
+const reallocPairLabel = (key) => {
+  const parts = String(key || '').split('->')
+  return parts.length === 2 ? `${reallocChannelLabel(parts[0])} → ${reallocChannelLabel(parts[1])}` : String(key || '')
+}
+
+// calibration factor → verdict chip + tone. < 0.98 the engine is DAMPING future confidence (past bets
+// underdelivered — amber caution); > 1.02 EMBOLDENING (they beat their confidence — emerald); else the
+// proposer is well-calibrated and the knob is a no-op (indigo). Mirrors the module's basis thresholds.
+function reallocCalVerdict(factor) {
+  const f = Number(factor)
+  if (!Number.isFinite(f) || (f > 0.98 && f < 1.02)) return { label: 'Well-calibrated', chip: 'bg-indigo-50 text-indigo-700 border-indigo-200', text: 'text-indigo-600', dot: 'bg-indigo-500', verb: 'holding steady' }
+  if (f <= 0.98) return { label: 'Tempering', chip: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-600', dot: 'bg-amber-500', verb: 'damping the next bet' }
+  return { label: 'Emboldening', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', verb: 'leaning into the next bet' }
+}
+// factor → "×0.85" / "×1.10"; null on non-finite.
+const fmtCalFactor = (f) => (Number.isFinite(Number(f)) ? `×${Number(f).toFixed(2)}` : null)
+// fraction → integer percent for a meter width, clamped [0,100]; null passes through.
+const reallocPctWidth = (frac) => (frac == null || !Number.isFinite(Number(frac)) ? null : Math.max(0, Math.min(100, Math.round(Number(frac) * 100))))
+
+function ReallocationEfficacyPanel({ data }) {
+  const cal     = data?.calibration || {}
+  const overall = data?.overall || null
+  if (!overall || !(Number(overall.n) > 0)) return null     // nothing old enough to grade → no panel
+
+  const verdict   = reallocCalVerdict(cal.factor)
+  const factorTxt = fmtCalFactor(cal.factor)
+  const hitPct    = fmtReallocPct(overall.hit_rate)
+  const confPct   = fmtReallocPct(cal.mean_confidence)
+  const floorPct  = fmtReallocPct(overall.lower)
+  const hold      = Number.isFinite(Number(overall.median_hold)) ? Number(overall.median_hold) : null
+  const vind      = Number(overall.vindicated) || 0
+  const refuted   = Number(overall.refuted) || 0
+  const decided   = vind + refuted
+  // two bars make the calibration legible at a glance: what we PROMISED (mean confidence) vs what
+  // REALIZED (shrunk hit-rate). The gap between them is exactly why the factor moves off 1.0.
+  const confW = reallocPctWidth(cal.mean_confidence)
+  const hitW  = reallocPctWidth(overall.hit_rate)
+
+  // strength rows that have earned a note (n ≥ NOTE_MIN_N server-side) lead; ranked is best-first already.
+  const strengthRows = (Array.isArray(data?.ranked) && data.ranked.length ? data.ranked : (Array.isArray(data?.by_strength) ? data.by_strength : []))
+  const pairs   = Array.isArray(data?.by_pair) ? data.by_pair.filter((p) => Number(p?.n) > 0).slice(0, 4) : []
+  const clients = Array.isArray(data?.by_client) ? data.by_client.filter((c) => Number(c?.trials) > 0) : []
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <div className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+          <Gauge className="w-4 h-4 text-indigo-500" />
+        </div>
+        <h2 className="text-sm font-black text-slate-900">Reallocation calibration</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {decided} graded budget bet{decided === 1 ? '' : 's'} · self-tuning the next proposal
+        </span>
+      </div>
+
+      {/* calibration hero — the factor the engine actually multiplies through, with promise-vs-realized bars */}
+      <div className="px-4 py-4 bg-indigo-50/30 border-b border-slate-50">
+        <div className="flex items-start gap-4">
+          <div className="shrink-0">
+            <div className={cn('text-3xl font-black tabular-nums leading-none', verdict.text)}>{factorTxt || '×1.00'}</div>
+            <span className={cn('inline-flex items-center mt-1.5 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', verdict.chip)}>
+              {verdict.label}
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-slate-700 leading-snug">
+              {vind} of {decided} past shift{decided === 1 ? '' : 's'} held up
+              {hitPct ? <> — a <span className="text-indigo-600">{hitPct}</span> hit rate</> : null}
+              {confPct ? <> against <span className="text-slate-500">{confPct}</span> assigned confidence</> : null}.
+            </p>
+            {cal.basis && <p className="mt-1 text-[11px] font-medium text-slate-400 leading-relaxed">The engine is {verdict.verb}: {cal.basis}.</p>}
+
+            {(confW != null || hitW != null) && (
+              <div className="mt-2.5 space-y-1.5 max-w-sm">
+                {confW != null && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 text-[10px] font-semibold text-slate-400 shrink-0">promised</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-slate-300" style={{ width: `${confW}%` }} /></div>
+                    <span className="w-9 text-right text-[10px] font-bold tabular-nums text-slate-500">{confW}%</span>
+                  </div>
+                )}
+                {hitW != null && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 text-[10px] font-semibold text-slate-400 shrink-0">realized</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className={cn('h-full rounded-full', verdict.dot)} style={{ width: `${hitW}%` }} /></div>
+                    <span className={cn('w-9 text-right text-[10px] font-bold tabular-nums', verdict.text)}>{hitW}%</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-2 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+              <span className="inline-flex items-center gap-1"><Check className="w-3 h-3 text-emerald-500" />{vind} held</span>
+              <span className="inline-flex items-center gap-1"><Minus className="w-3 h-3 text-rose-400" />{refuted} faded</span>
+              {floorPct && <span>floor {floorPct}</span>}
+              {hold != null && <span>edge usually held {Math.round(hold * 100)}%</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* by-confidence-band track record — which strengths actually hold, best-first */}
+      {strengthRows.length > 0 && (
+        <div className="divide-y divide-slate-50">
+          {strengthRows.map((r) => <ReallocationEfficacyRow key={r.key} r={r} />)}
+        </div>
+      )}
+
+      {/* per-pair + contributing accounts — the drill-down under the headline */}
+      {(pairs.length > 0 || clients.length > 0) && (
+        <div className="px-4 py-3 border-t border-slate-50 space-y-2.5">
+          {pairs.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">By channel pair</p>
+              <div className="flex flex-wrap gap-1.5">
+                {pairs.map((p) => {
+                  const bm = reallocEffBandMeta(p.band); const pct = fmtReallocPct(p.hit_rate)
+                  return (
+                    <span key={p.key} className={cn('inline-flex items-center gap-1.5 text-[10px] font-semibold rounded-full px-2 py-0.5 border', bm.chip)}>
+                      <span className="font-bold">{reallocPairLabel(p.key)}</span>
+                      {pct && <span className="tabular-nums">{pct}</span>}
+                      <span className="opacity-60 tabular-nums">({Number(p.vindicated) || 0}/{Number(p.n) || 0})</span>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {clients.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">Contributing accounts · {clients.length}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {clients.slice(0, 8).map((c) => (
+                  <span key={c.client_id} className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-full px-2 py-0.5">
+                    <span className="font-bold text-slate-600 truncate max-w-[10rem]">{c.client_name}</span>
+                    <span className="tabular-nums text-slate-400">{Number(c.trials) || 0}</span>
+                  </span>
+                ))}
+                {clients.length > 8 && <span className="text-[10px] font-semibold text-slate-400 self-center">+{clients.length - 8} more</span>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-indigo-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Each past budget shift is re-graded against what the cost-per-outcome gap <span className="font-bold text-indigo-600">actually did</span> over
+          the weeks that followed — <span className="font-bold text-emerald-600">held</span> or <span className="font-bold text-rose-500">faded</span> — and the
+          pooled record tunes the confidence on the <span className="font-bold text-indigo-600">next</span> proposal: damped when bets underdeliver, emboldened
+          when they beat it, neutral until the evidence earns a move. The engine grading its own money moves. Agency-only — an internal media-buying instrument.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* One confidence band's track record: how often a bet PROPOSED at this strength actually held its
+   cost edge over the following weeks. The hit-rate reads in the band color; the note is the grounded
+   sentence the proposer can carry (present only once the band earns ≥ NOTE_MIN_N decided trials). */
+function ReallocationEfficacyRow({ r }) {
+  const bm       = reallocEffBandMeta(r.band)
+  const hitPct   = fmtReallocPct(r.hit_rate)
+  const floorPct = fmtReallocPct(r.lower)
+  const vind     = Number(r.vindicated) || 0
+  const refuted  = Number(r.refuted) || 0
+  const n        = Number(r.n) || (vind + refuted)
+  const hitW     = reallocPctWidth(r.hit_rate)
+
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800">{reallocStrengthLabel(r.key)}</span>
+            <span className={cn('inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border', bm.chip)}>{bm.label}</span>
+            <span className="text-[10px] font-semibold text-slate-400 tabular-nums">{vind}/{n} held{floorPct ? ` · floor ${floorPct}` : ''}</span>
+          </div>
+          {r.note && <p className="mt-1.5 text-[11px] font-medium text-slate-400 leading-relaxed">{r.note}</p>}
+        </div>
+        <div className="shrink-0 text-right w-24">
+          {hitPct != null && (
+            <>
+              <div className={cn('text-lg font-black tabular-nums leading-none', bm.text)}>{hitPct}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">held up</div>
+            </>
+          )}
+          {hitW != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full', bm.dot)} style={{ width: `${hitW}%` }} />
+              </div>
             </div>
           )}
         </div>

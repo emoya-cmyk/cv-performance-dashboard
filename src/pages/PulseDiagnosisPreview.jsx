@@ -3351,6 +3351,232 @@ function ReallocationPanelPreview({ data }) {
   )
 }
 
+/* ── Reallocation calibration twin (layer 25) — the FEEDBACK LOOP closing the prescriptive layer.
+   Mirrors ReallocationEfficacyPanel: a Tempering calibration where the proposer was a touch
+   overconfident (×0.84) — yet STRONG-signal bets genuinely hold (70%) while tentative ones rarely
+   do, exactly the nuance that makes the knob worth turning. Preview conventions: *Pv helpers, inline
+   template-string classNames, <span> icon box, border-brand-100 shell. */
+const REALLOC_EFF_BAND_META_PV = {
+  high:   { label: 'Reliable',     chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+  medium: { label: 'Mixed',        chip: 'bg-indigo-50 text-indigo-700 border-indigo-200',    text: 'text-indigo-600',  dot: 'bg-indigo-500' },
+  low:    { label: 'Rarely holds', chip: 'bg-slate-100 text-slate-500 border-slate-200',      text: 'text-slate-500',   dot: 'bg-slate-400' },
+}
+const reallocEffBandMetaPv = (b) => REALLOC_EFF_BAND_META_PV[b] || REALLOC_EFF_BAND_META_PV.medium
+const REALLOC_STRENGTH_LABEL_PV = { strong: 'Strong-signal bets', moderate: 'Moderate bets', tentative: 'Tentative bets', unrated: 'Unrated bets' }
+const reallocStrengthLabelPv = (k) => REALLOC_STRENGTH_LABEL_PV[k] || (typeof k === 'string' && k ? `${k.charAt(0).toUpperCase()}${k.slice(1)} bets` : 'Bets')
+const REALLOC_CHANNEL_LABEL_PV = { google_ads: 'Google Ads', meta: 'Facebook/Meta', facebook: 'Facebook/Meta', lsa: 'Local Services', gbp: 'Google Business', ga4: 'GA4', tiktok: 'TikTok', bing: 'Microsoft Ads' }
+const reallocChannelLabelPv = (id) => REALLOC_CHANNEL_LABEL_PV[id] || (typeof id === 'string' && id ? id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : id)
+const reallocPairLabelPv = (key) => {
+  const parts = String(key || '').split('->')
+  return parts.length === 2 ? `${reallocChannelLabelPv(parts[0])} → ${reallocChannelLabelPv(parts[1])}` : String(key || '')
+}
+function reallocCalVerdictPv(factor) {
+  const f = Number(factor)
+  if (!Number.isFinite(f) || (f > 0.98 && f < 1.02)) return { label: 'Well-calibrated', chip: 'bg-indigo-50 text-indigo-700 border-indigo-200', text: 'text-indigo-600', dot: 'bg-indigo-500', verb: 'holding steady' }
+  if (f <= 0.98) return { label: 'Tempering', chip: 'bg-amber-50 text-amber-700 border-amber-200', text: 'text-amber-600', dot: 'bg-amber-500', verb: 'damping the next bet' }
+  return { label: 'Emboldening', chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', verb: 'leaning into the next bet' }
+}
+const fmtCalFactorPv = (f) => (Number.isFinite(Number(f)) ? `×${Number(f).toFixed(2)}` : null)
+const reallocPctWidthPv = (frac) => (frac == null || !Number.isFinite(Number(frac)) ? null : Math.max(0, Math.min(100, Math.round(Number(frac) * 100))))
+
+// Fourteen graded bets across four accounts. Overall the proposer ran a touch hot (55% realized vs
+// 71% promised → ×0.84 Tempering), but the breakdown earns its keep: strong-signal bets hold 70%,
+// tentative ones 38%. Notes reproduce reallocationEfficacyNote verbatim (n ≥ 4 earns one).
+const REALLOC_EFFICACY = {
+  as_of: '2026-06-03', scope: 'portfolio', clients: 4, trials: 14, horizon_weeks: 4, boundaries: 6, decision_weeks: 26,
+  calibration: { factor: 0.84, hit_rate: 0.55, mean_confidence: 0.71, n: 14, credibility: 0.7, basis: 'past bets held up less often than their confidence implied — damping' },
+  overall: { key: '__overall__', n: 14, vindicated: 8, refuted: 6, vindication_rate: 0.571, hit_rate: 0.55, lower: 0.34, credibility: 0.7, median_hold: 0.62, mean_confidence: 0.71, band: 'medium' },
+  base: { rate: 0.5, n: 14, prior: 0.5 },
+  ranked: [
+    { key: 'strong', rank: 1, n: 6, vindicated: 5, refuted: 1, vindication_rate: 0.83, hit_rate: 0.70, lower: 0.39, credibility: 0.5, median_hold: 0.8, mean_confidence: 0.80, band: 'high', note: 'Budget-shift tests at this confidence have held up 70% of the time (5 of 6), with most of the cost edge holding.' },
+    { key: 'moderate', rank: 2, n: 5, vindicated: 2, refuted: 3, vindication_rate: 0.40, hit_rate: 0.45, lower: 0.18, credibility: 0.45, median_hold: 0.5, mean_confidence: 0.66, band: 'medium', note: 'Budget-shift tests at this confidence have held up 45% of the time (2 of 5), with most of the cost edge holding.' },
+    { key: 'tentative', rank: 3, n: 3, vindicated: 1, refuted: 2, vindication_rate: 0.33, hit_rate: 0.38, lower: 0.10, credibility: 0.33, median_hold: 0.35, mean_confidence: 0.58, band: 'low', note: null },
+  ],
+  by_strength: [
+    { key: 'strong', n: 6, vindicated: 5, refuted: 1, hit_rate: 0.70, lower: 0.39, median_hold: 0.8, band: 'high', note: 'Budget-shift tests at this confidence have held up 70% of the time (5 of 6), with most of the cost edge holding.' },
+    { key: 'moderate', n: 5, vindicated: 2, refuted: 3, hit_rate: 0.45, lower: 0.18, median_hold: 0.5, band: 'medium', note: 'Budget-shift tests at this confidence have held up 45% of the time (2 of 5), with most of the cost edge holding.' },
+    { key: 'tentative', n: 3, vindicated: 1, refuted: 2, hit_rate: 0.38, lower: 0.10, median_hold: 0.35, band: 'low', note: null },
+  ],
+  by_pair: [
+    { key: 'meta->google_ads', n: 8, vindicated: 6, refuted: 2, hit_rate: 0.66, lower: 0.35, median_hold: 0.7, band: 'high' },
+    { key: 'google_ads->meta', n: 6, vindicated: 2, refuted: 4, hit_rate: 0.38, lower: 0.16, median_hold: 0.4, band: 'low' },
+  ],
+  by_client: [
+    { client_id: 'c-summit', client_name: 'Summit Eyecare', trials: 5 },
+    { client_id: 'c-harbor', client_name: 'Harbor Point Dental', trials: 4 },
+    { client_id: 'c-cedar', client_name: 'Cedar & Oak Interiors', trials: 3 },
+    { client_id: 'c-brightline', client_name: 'Brightline Physio', trials: 2 },
+  ],
+}
+
+function ReallocationEfficacyRowPreview({ r }) {
+  const bm       = reallocEffBandMetaPv(r.band)
+  const hitPct   = fmtReallocPctPv(r.hit_rate)
+  const floorPct = fmtReallocPctPv(r.lower)
+  const vind     = Number(r.vindicated) || 0
+  const refuted  = Number(r.refuted) || 0
+  const n        = Number(r.n) || (vind + refuted)
+  const hitW     = reallocPctWidthPv(r.hit_rate)
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-black text-slate-800">{reallocStrengthLabelPv(r.key)}</span>
+            <span className={`inline-flex items-center text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${bm.chip}`}>{bm.label}</span>
+            <span className="text-[10px] font-semibold text-slate-400 tabular-nums">{vind}/{n} held{floorPct ? ` · floor ${floorPct}` : ''}</span>
+          </div>
+          {r.note && <p className="mt-1.5 text-[11px] font-medium text-slate-400 leading-relaxed">{r.note}</p>}
+        </div>
+        <div className="shrink-0 text-right w-24">
+          {hitPct != null && (
+            <>
+              <div className={`text-lg font-black tabular-nums leading-none ${bm.text}`}>{hitPct}</div>
+              <div className="text-[10px] font-semibold text-slate-400 mt-0.5">held up</div>
+            </>
+          )}
+          {hitW != null && (
+            <div className="mt-2">
+              <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                <div className={`h-full rounded-full ${bm.dot}`} style={{ width: `${hitW}%` }} />
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ReallocationEfficacyPanelPreview({ data }) {
+  const cal     = data?.calibration || {}
+  const overall = data?.overall || null
+  if (!overall || !(Number(overall.n) > 0)) return null
+  const verdict   = reallocCalVerdictPv(cal.factor)
+  const factorTxt = fmtCalFactorPv(cal.factor)
+  const hitPct    = fmtReallocPctPv(overall.hit_rate)
+  const confPct   = fmtReallocPctPv(cal.mean_confidence)
+  const floorPct  = fmtReallocPctPv(overall.lower)
+  const hold      = Number.isFinite(Number(overall.median_hold)) ? Number(overall.median_hold) : null
+  const vind      = Number(overall.vindicated) || 0
+  const refuted   = Number(overall.refuted) || 0
+  const decided   = vind + refuted
+  const confW = reallocPctWidthPv(cal.mean_confidence)
+  const hitW  = reallocPctWidthPv(overall.hit_rate)
+  const strengthRows = (Array.isArray(data?.ranked) && data.ranked.length ? data.ranked : (Array.isArray(data?.by_strength) ? data.by_strength : []))
+  const pairs   = Array.isArray(data?.by_pair) ? data.by_pair.filter((p) => Number(p?.n) > 0).slice(0, 4) : []
+  const clients = Array.isArray(data?.by_client) ? data.by_client.filter((c) => Number(c?.trials) > 0) : []
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+          <Gauge className="w-4 h-4 text-indigo-500" />
+        </span>
+        <h2 className="text-sm font-black text-slate-900">Reallocation calibration</h2>
+        <span className="text-[11px] font-semibold text-slate-400">
+          {decided} graded budget bet{decided === 1 ? '' : 's'} · self-tuning the next proposal
+        </span>
+      </div>
+
+      <div className="px-4 py-4 bg-indigo-50/30 border-b border-slate-50">
+        <div className="flex items-start gap-4">
+          <div className="shrink-0">
+            <div className={`text-3xl font-black tabular-nums leading-none ${verdict.text}`}>{factorTxt || '×1.00'}</div>
+            <span className={`inline-flex items-center mt-1.5 text-[9px] font-black uppercase tracking-wider rounded-full px-1.5 py-0.5 border ${verdict.chip}`}>
+              {verdict.label}
+            </span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-slate-700 leading-snug">
+              {vind} of {decided} past shift{decided === 1 ? '' : 's'} held up
+              {hitPct ? <> — a <span className="text-indigo-600">{hitPct}</span> hit rate</> : null}
+              {confPct ? <> against <span className="text-slate-500">{confPct}</span> assigned confidence</> : null}.
+            </p>
+            {cal.basis && <p className="mt-1 text-[11px] font-medium text-slate-400 leading-relaxed">The engine is {verdict.verb}: {cal.basis}.</p>}
+
+            {(confW != null || hitW != null) && (
+              <div className="mt-2.5 space-y-1.5 max-w-sm">
+                {confW != null && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 text-[10px] font-semibold text-slate-400 shrink-0">promised</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-slate-300" style={{ width: `${confW}%` }} /></div>
+                    <span className="w-9 text-right text-[10px] font-bold tabular-nums text-slate-500">{confW}%</span>
+                  </div>
+                )}
+                {hitW != null && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-16 text-[10px] font-semibold text-slate-400 shrink-0">realized</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full rounded-full ${verdict.dot}`} style={{ width: `${hitW}%` }} /></div>
+                    <span className={`w-9 text-right text-[10px] font-bold tabular-nums ${verdict.text}`}>{hitW}%</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-2 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+              <span className="inline-flex items-center gap-1"><Check className="w-3 h-3 text-emerald-500" />{vind} held</span>
+              <span className="inline-flex items-center gap-1"><Minus className="w-3 h-3 text-rose-400" />{refuted} faded</span>
+              {floorPct && <span>floor {floorPct}</span>}
+              {hold != null && <span>edge usually held {Math.round(hold * 100)}%</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {strengthRows.length > 0 && (
+        <div className="divide-y divide-slate-50">
+          {strengthRows.map((r) => <ReallocationEfficacyRowPreview key={r.key} r={r} />)}
+        </div>
+      )}
+
+      {(pairs.length > 0 || clients.length > 0) && (
+        <div className="px-4 py-3 border-t border-slate-50 space-y-2.5">
+          {pairs.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">By channel pair</p>
+              <div className="flex flex-wrap gap-1.5">
+                {pairs.map((p) => {
+                  const bm = reallocEffBandMetaPv(p.band); const pct = fmtReallocPctPv(p.hit_rate)
+                  return (
+                    <span key={p.key} className={`inline-flex items-center gap-1.5 text-[10px] font-semibold rounded-full px-2 py-0.5 border ${bm.chip}`}>
+                      <span className="font-bold">{reallocPairLabelPv(p.key)}</span>
+                      {pct && <span className="tabular-nums">{pct}</span>}
+                      <span className="opacity-60 tabular-nums">({Number(p.vindicated) || 0}/{Number(p.n) || 0})</span>
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+          {clients.length > 0 && (
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-1.5">Contributing accounts · {clients.length}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {clients.slice(0, 8).map((c) => (
+                  <span key={c.client_id} className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-full px-2 py-0.5">
+                    <span className="font-bold text-slate-600 truncate max-w-[10rem]">{c.client_name}</span>
+                    <span className="tabular-nums text-slate-400">{Number(c.trials) || 0}</span>
+                  </span>
+                ))}
+                {clients.length > 8 && <span className="text-[10px] font-semibold text-slate-400 self-center">+{clients.length - 8} more</span>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="px-4 py-2.5 bg-indigo-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Each past budget shift is re-graded against what the cost-per-outcome gap <span className="font-bold text-indigo-600">actually did</span> over
+          the weeks that followed — <span className="font-bold text-emerald-600">held</span> or <span className="font-bold text-rose-500">faded</span> — and the
+          pooled record tunes the confidence on the <span className="font-bold text-indigo-600">next</span> proposal: damped when bets underdeliver, emboldened
+          when they beat it, neutral until the evidence earns a move. The engine grading its own money moves. Agency-only — an internal media-buying instrument.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3747,6 +3973,14 @@ export default function PulseDiagnosisPreview() {
           <ReallocationPanelPreview data={REALLOC_ROSTER} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             Every rung above grades the <span className="font-bold text-slate-600">narration</span> — what the brief says and how well it says it. This is the first rung that moves <span className="font-bold text-indigo-600">money</span>. It looks across the book for two paid channels chasing the <span className="font-bold text-slate-600">same outcome</span> — leads, booked jobs — and compares them on the only thing that pays out, <span className="font-bold text-slate-600">realized cost per outcome</span>, then reads each channel&rsquo;s <span className="font-bold text-slate-600">returns trend</span> from how that cost moves as spend scales. When one channel&rsquo;s cost is <span className="font-bold text-rose-600">climbing as it grows</span> while another holds a <span className="font-bold text-emerald-600">durably cheaper</span> cost, it proposes <span className="font-bold text-slate-600">one</span> small, reversible <span className="font-bold text-indigo-600">test slice</span> of weekly budget toward the cheaper channel — and names the metric to watch as it takes the spend. Ranked most-defensible first by <span className="font-bold text-slate-600">confidence → gap → dollars saved</span>; a <span className="font-bold text-indigo-600">strong</span> signal is a climbing-cost source, a <span className="font-bold text-indigo-500">tentative</span> one is merely cheaper right now. These are <span className="font-bold text-slate-600">correlational hypotheses to test and watch, never guarantees</span> — the engine abstains rather than guess when no move is defensible. <span className="font-bold text-slate-600">Agency-only by construction</span> — a media-buying call across accounts, so a client never sees the cross-account roster, only their own results.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Reallocation calibration · the loop that grades its own money moves</p>
+          <ReallocationEfficacyPanelPreview data={REALLOC_EFFICACY} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung above <span className="font-bold text-indigo-600">proposes</span> budget moves; this one closes the loop by checking whether they <span className="font-bold text-slate-600">were right</span>. Each past test is re-graded against what the <span className="font-bold text-slate-600">cost-per-outcome gap actually did</span> over the weeks that followed — the bet <span className="font-bold text-emerald-600">held</span> if the cheaper channel stayed cheaper, <span className="font-bold text-rose-500">faded</span> if the edge evaporated — and the pooled record becomes a single <span className="font-bold text-indigo-600">calibration factor</span> the proposer consumes: under <span className="font-bold text-amber-600">×1.00</span> it <span className="font-bold text-amber-600">tempers</span> the next bet&rsquo;s confidence, over it <span className="font-bold text-emerald-600">emboldens</span>, and it sits neutral until the evidence earns a move. Here the proposer ran a touch hot — a <span className="font-bold text-slate-600">55%</span> realized hit rate against <span className="font-bold text-slate-600">71%</span> promised confidence, so the knob settles at <span className="font-bold text-amber-600">×0.84</span> — yet the breakdown earns its keep: <span className="font-bold text-emerald-600">strong-signal</span> bets genuinely held <span className="font-bold text-slate-600">70%</span> of the time while <span className="font-bold text-slate-500">tentative</span> ones rarely did. The engine grading its own money moves and self-tuning the next one — <span className="font-bold text-slate-600">no operator in the loop</span>. <span className="font-bold text-slate-600">Agency-only by construction</span> — an internal media-buying instrument a client never sees.
           </p>
         </div>
 
