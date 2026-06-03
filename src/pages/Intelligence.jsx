@@ -205,6 +205,15 @@ export default function Intelligence() {
           reversible. Sits directly under the monitor whose verdict it acts on. USE_API-gated. */}
       {USE_API && <LeadPolicyGovernancePanel />}
 
+      {/* lead-policy governance AUDIT — "the auditor" (16c). The governor above ACTS every morning;
+          this reads GET /api/ai/lead-policy-governance-audit (agency-only) and grades the GOVERNOR
+          across mornings — does its safe corrective actually STICK? When the learner keeps re-
+          oscillating a lane the governor keeps neutralising, the fix never reaches the root cause, so
+          this escalates that lane to a human instead of letting the loop churn forever. Closes the
+          LEARN/ADJUST half of the loop the governor opened: the controller that watches its own track
+          record. Recommends, never acts. Sits directly under the governor it audits. USE_API-gated. */}
+      {USE_API && <LeadPolicyGovernanceAuditPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -1822,6 +1831,240 @@ function LeadPolicyGovernancePanel() {
       <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
         <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
           <span className="font-semibold text-slate-500">The governor.</span> The monitor above diagnoses the loop; this <span className="font-semibold text-violet-600">acts</span> on the verdict — surgically, per lane, with no human in the path. It <span className="font-semibold text-violet-600">resets</span> only a thrashing lane to neutral and keeps every earned lane live; a lane <span className="font-semibold text-amber-600">pinned to its band</span> or one the <span className="font-semibold text-indigo-600">floor is protecting</span> it logs for a human rather than auto-widening anything. Idempotent, snapshot-backed, reversible. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+// ── lead-policy governance AUDIT (16c) — "the auditor" ───────────────────────
+// A vocabulary DISJOINT from the policy grade, the stability verdict, AND the governance status: the
+// governor (15) grades what the loop DID each morning; this grades the GOVERNOR — across mornings.
+// Audit roll-up status → the header pill, its dot, its headline-icon tint. (briefLeadPolicyAudit.js.)
+const LEAD_AUDIT_TONE = {
+  churning:  { pill: 'border-rose-200 bg-rose-50 text-rose-700',          dot: 'bg-rose-500',    text: 'text-rose-500',    label: 'Churning',   Icon: AlertOctagon },
+  effective: { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Effective',  Icon: ShieldCheck },
+  quiet:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Quiet',      Icon: Minus },
+  abstained: { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining', Icon: Clock },
+}
+
+// per-lane intervention OUTCOME → the badge it wears in the per-lane list + the colour of its run stat.
+// recurring is the ONE that escalates (the safe corrective keeps not sticking — a human is needed);
+// resolved / intermittent / one_off are track-record context, never escalated.
+const LEAD_AUDIT_OUTCOME = {
+  recurring:    { badge: 'border-rose-200 bg-rose-50 text-rose-600',          text: 'text-rose-600',    Icon: AlertOctagon, label: 'Recurring',    escalate: true,  rank: 0 },
+  intermittent: { badge: 'border-amber-200 bg-amber-50 text-amber-600',       text: 'text-amber-600',   Icon: Activity,     label: 'Intermittent', escalate: false, rank: 1 },
+  resolved:     { badge: 'border-emerald-200 bg-emerald-50 text-emerald-600', text: 'text-emerald-600', Icon: CheckCircle2, label: 'Resolved',     escalate: false, rank: 2 },
+  one_off:      { badge: 'border-slate-200 bg-slate-50 text-slate-500',       text: 'text-slate-500',   Icon: Minus,        label: 'One-off',      escalate: false, rank: 3 },
+}
+
+// most-consequential first — a recurring lane outranks intermittent outranks resolved outranks one-off.
+const LEAD_AUDIT_RANK = { recurring: 0, intermittent: 1, resolved: 2, one_off: 3 }
+
+// the per-lane outcome in plain words — what the governor's track record on this lane actually shows.
+function auditOutcomeReason(outcome, info) {
+  const runs = Number.isFinite(info?.current_run) ? info.current_run : 0
+  const corr = Number.isFinite(info?.corrections) ? info.corrections : 0
+  switch (outcome) {
+    case 'recurring':    return `needed the same reset ${runs} morning${runs === 1 ? '' : 's'} running`
+    case 'resolved':     return 'the reset stuck — it stopped needing one'
+    case 'intermittent': return `reset ${corr} time${corr === 1 ? '' : 's'}, on and off — never cleanly settled`
+    case 'one_off':      return 'reset once, no recurrence since'
+    default:             return 'no clear pattern yet'
+  }
+}
+
+function leadAuditHeadline(status, recurringCount) {
+  switch (status) {
+    case 'churning':
+      return recurringCount === 1
+        ? 'A lane keeps needing the same reset — the safe corrective is not sticking, time for a human'
+        : `${recurringCount} lanes keep needing the same reset — the safe corrective is not sticking, time for a human`
+    case 'effective': return "The governor's resets are sticking — corrected lanes settled and stayed settled"
+    case 'quiet':     return 'Nothing to second-guess — the governor has not had to correct anything'
+    default:          return "Not enough governed mornings yet to judge the governor's own track record"
+  }
+}
+
+// One lane row: lane name over its outcome badge · the track-record reason · the run stat. recurring
+// shows the consecutive-morning streak (the escalation driver); the rest show total corrections so a
+// settled lane reads as context, not alarm. Outcome drives the badge tone, the icon, and the stat tint.
+function LeadAuditLaneRow({ lane, info }) {
+  const meta = LEAD_AUDIT_OUTCOME[info?.outcome] || LEAD_AUDIT_OUTCOME.one_off
+  const Icon = meta.Icon
+  const runs = Number.isFinite(info?.current_run) ? info.current_run : 0
+  const corr = Number.isFinite(info?.corrections) ? info.corrections : 0
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={laneLabel(lane)}>{laneLabel(lane)}</div>
+        <span className={cn('mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed', meta.badge)}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0 text-[10px] font-medium text-slate-400 leading-tight">
+        {auditOutcomeReason(info?.outcome, info)}
+      </div>
+      <span className={cn('w-24 shrink-0 text-right text-[11px] font-black tabular-nums', meta.text)}>
+        {meta.escalate
+          ? <>{runs}× running</>
+          : <>{corr}× total</>}
+      </span>
+    </div>
+  )
+}
+
+// The auditor that closes the loop the governor opens — "the auditor" (layer 16). Reads GET
+// /api/ai/lead-policy-governance-audit (agency-only): not what the loop did this morning but how the
+// GOVERNOR itself is doing across mornings. The governor acts and moves on — it never grades its own
+// homework; a lane the learner keeps re-oscillating and the governor keeps neutralising looks handled
+// each single morning while the underlying cause never resolves. This watches the governor's OWN track
+// record, classifies each lane's intervention outcome, and when the safe corrective keeps NOT sticking
+// recommends escalating that lane to a human rather than letting the loop churn forever. The governor
+// keeps holding the line meanwhile; the auditor only recommends, never acts. Never client-facing.
+function LeadPolicyGovernanceAuditPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [audit, setAudit] = useState(null)
+  const [error, setError] = useState('')
+
+  const fetchAudit = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const a = await api.getLeadPolicyGovernanceAudit()
+      setAudit(a); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load governance audit'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchAudit() }, [fetchAudit])
+
+  const st = audit?.status || 'abstained'
+  const tone = LEAD_AUDIT_TONE[st] || LEAD_AUDIT_TONE.abstained
+  const HeadIcon = tone.Icon
+  const rec = audit?.recommendation || { action: 'none', lanes: [] }
+  const escalate = rec.action === 'escalate'
+  const escalateLanes = Array.isArray(rec.lanes) ? rec.lanes : []
+  const escalateLaneText = escalateLanes.map(laneLabel).join(', ')
+  const narrative = (audit?.narrative || '').trim()
+  const windowUsed = audit?.requested?.days || audit?.window_used || 8
+  const counts = audit?.counts || {}
+  const recurringCount = Number.isFinite(counts.recurring) ? counts.recurring : escalateLanes.length
+  const correctedMornings = Number.isFinite(counts.corrected_mornings) ? counts.corrected_mornings : 0
+  const headline = leadAuditHeadline(st, recurringCount || 1)
+  const lanes = audit?.lanes && typeof audit.lanes === 'object' ? audit.lanes : {}
+  // lane-outcome tally, most-consequential first — only the non-zero buckets so a steady governor reads steady.
+  const tally = [
+    counts.recurring > 0 ? `${counts.recurring} recurring` : null,
+    counts.intermittent > 0 ? `${counts.intermittent} intermittent` : null,
+    counts.resolved > 0 ? `${counts.resolved} resolved` : null,
+    counts.one_off > 0 ? `${counts.one_off} one-off` : null,
+  ].filter(Boolean)
+  // lanes ranked by consequence (recurring outranks intermittent outranks resolved outranks one-off).
+  const ordered = Object.entries(lanes)
+    .sort((a, b) => (LEAD_AUDIT_RANK[a[1]?.outcome] ?? 9) - (LEAD_AUDIT_RANK[b[1]?.outcome] ?? 9))
+    .slice(0, 6)
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Governance audit</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Is the governor's fix sticking? · last {windowUsed} mornings
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Audit: ${st}`}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', tone.dot)} /> {tone.label}
+          </span>
+        )}
+        <button
+          onClick={fetchAudit}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Auditing the governor's track record…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load governance audit'}</p>
+            <button onClick={fetchAudit} className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition">
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && (
+          <>
+            <div className="flex items-start gap-2">
+              <HeadIcon className={cn('w-4 h-4 shrink-0 mt-0.5', tone.text)} />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+                {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+              </div>
+            </div>
+
+            {escalate && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-100 bg-rose-50/50 px-2.5 py-2">
+                <ArrowUpCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
+                  <span className="font-semibold text-rose-700">Escalating to a human.</span> The governor keeps applying the one safe corrective to {escalateLanes.length === 1 ? 'this lane' : 'these lanes'} and it keeps coming back. {escalateLaneText && <><span className="font-semibold text-slate-600">{escalateLaneText}</span> — </>}the fix it can make on its own is not enough to reach the root cause. It will keep holding the line every morning; this only flags that a person should look.
+                </p>
+              </div>
+            )}
+
+            {tally.length > 0 && (
+              <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+                {tally.join(' · ')} <span className="text-slate-300">· {correctedMornings} corrected {correctedMornings === 1 ? 'morning' : 'mornings'}</span>
+              </p>
+            )}
+
+            {ordered.length > 0 ? (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">The governor's track record, by lane</p>
+                  <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />recurring</span>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />resolved</span>
+                  </span>
+                </div>
+                <div className="space-y-2.5">
+                  {ordered.map(([lane, info], i) => (
+                    <LeadAuditLaneRow key={`${lane}-${i}`} lane={lane} info={info} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+                <ShieldCheck className="w-4 h-4 shrink-0" />
+                {st === 'abstained'
+                  ? 'No governed history to audit yet — the auditor waits until the governor has a track record.'
+                  : 'No lane has needed correcting — there is nothing for the auditor to second-guess.'}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">The auditor.</span> The governor acts every morning; this checks whether its fix <span className="font-semibold text-emerald-600">stuck</span>. When the same lane keeps needing the same reset morning after morning, the safe corrective is not reaching the root cause — so it <span className="font-semibold text-rose-600">escalates that lane to a human</span> rather than letting the loop churn forever. The governor keeps holding the line meanwhile. Recommends, never acts. Agency-only.
         </p>
       </div>
     </section>

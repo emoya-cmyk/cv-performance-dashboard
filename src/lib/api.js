@@ -266,6 +266,21 @@ export const api = {
   // counts }) plus echoed `requested` + one agency-voiced `narrative` spoken only when a weight was
   // actually reset. `days` sizes the history window the verdict is read over. Never client-facing.
   getLeadPolicyGovernance:  (days)       => get(`/api/ai/lead-policy-governance${days ? `?days=${days}` : ''}`),
+  // THE AUDITOR (intel-v7 16, agency-only, 403 for client tokens). The governor (15) ACTS every
+  // morning — it applies the safe corrective and moves on. But it never grades its own homework:
+  // a lane the learner keeps re-oscillating and the governor keeps neutralising looks "handled"
+  // each single morning while the underlying cause never resolves. This reads GET
+  // /api/ai/lead-policy-governance-audit — the LEARN/ADJUST half that watches the governor's OWN
+  // track record across mornings, classifies each lane's intervention outcome (recurring keeps
+  // needing the same reset / resolved the reset stuck / intermittent on-and-off / one_off corrected
+  // once), and when the safe corrective isn't STICKING recommends escalating that lane to a human
+  // instead of letting the loop churn forever. The governor keeps holding the line meanwhile —
+  // the auditor only recommends, never acts. Returns the auditLeadPolicyGovernance shape ({ status:
+  // 'churning'|'effective'|'quiet'|'abstained', recommendation: { action: 'escalate'|'none', lanes },
+  // counts: { recurring, resolved, intermittent, one_off, corrected_mornings, advisory_mornings,
+  // quiet_mornings }, lanes, window_used, history_len }) plus echoed `requested` + one agency-voiced
+  // `narrative` spoken only when a lane is churning. `days` sizes the audit window. Never client-facing.
+  getLeadPolicyGovernanceAudit: (days)   => get(`/api/ai/lead-policy-governance-audit${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

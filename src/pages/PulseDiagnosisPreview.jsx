@@ -1814,6 +1814,234 @@ function LeadPolicyGovernancePanelPreview({ data }) {
   )
 }
 
+/* ── 16c LEAD-POLICY GOVERNANCE AUDIT — "the auditor". The governor above ACTS on the verdict every
+    morning; this one grades the GOVERNOR — across mornings. It never grades a single morning's work;
+    it watches the governor's OWN track record and asks one question: when the governor keeps applying
+    the same safe reset to a lane, is that fix actually STICKING? A lane the learner keeps re-oscillating
+    and the governor keeps neutralising looks handled each single morning while the root cause never
+    resolves — so when the same reset recurs morning after morning, the auditor ESCALATES that one lane
+    to a human rather than letting the loop churn forever. The governor keeps holding the line meanwhile;
+    the auditor only recommends, never acts. A SEVENTH disjoint vocabulary — churning / effective / quiet
+    / abstained at the roll-up, recurring / intermittent / resolved / one_off per lane — so it never blurs
+    with the six it sits beneath. Preview twin of <LeadPolicyGovernanceAuditPanel/>: reads a `data` prop,
+    never fetches. Four instances: churning (the escalation), effective (resets sticking, an intermittent
+    lane held as context), quiet (nothing to correct), abstained (too little governed history). ──────── */
+const LEAD_AUDIT_TONE = {
+  churning:  { pill: 'border-rose-200 bg-rose-50 text-rose-700',          dot: 'bg-rose-500',    text: 'text-rose-500',    label: 'Churning',   Icon: AlertOctagon },
+  effective: { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Effective',  Icon: ShieldCheck },
+  quiet:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Quiet',      Icon: Minus },
+  abstained: { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining', Icon: Clock },
+}
+// per-lane intervention OUTCOME → its badge + the colour of the run stat. recurring is the ONE that
+// escalates (the safe corrective keeps not sticking); the rest are track-record context, never escalated.
+const LEAD_AUDIT_OUTCOME = {
+  recurring:    { badge: 'border-rose-200 bg-rose-50 text-rose-600',          text: 'text-rose-600',    Icon: AlertOctagon, label: 'Recurring',    escalate: true,  rank: 0 },
+  intermittent: { badge: 'border-amber-200 bg-amber-50 text-amber-600',       text: 'text-amber-600',   Icon: Activity,     label: 'Intermittent', escalate: false, rank: 1 },
+  resolved:     { badge: 'border-emerald-200 bg-emerald-50 text-emerald-600', text: 'text-emerald-600', Icon: CheckCircle2, label: 'Resolved',     escalate: false, rank: 2 },
+  one_off:      { badge: 'border-slate-200 bg-slate-50 text-slate-500',       text: 'text-slate-500',   Icon: Minus,        label: 'One-off',      escalate: false, rank: 3 },
+}
+const LEAD_AUDIT_RANK = { recurring: 0, intermittent: 1, resolved: 2, one_off: 3 }
+function auditOutcomeReason(outcome, info) {
+  const runs = Number.isFinite(info?.current_run) ? info.current_run : 0
+  const corr = Number.isFinite(info?.corrections) ? info.corrections : 0
+  switch (outcome) {
+    case 'recurring':    return `needed the same reset ${runs} morning${runs === 1 ? '' : 's'} running`
+    case 'resolved':     return 'the reset stuck — it stopped needing one'
+    case 'intermittent': return `reset ${corr} time${corr === 1 ? '' : 's'}, on and off — never cleanly settled`
+    case 'one_off':      return 'reset once, no recurrence since'
+    default:             return 'no clear pattern yet'
+  }
+}
+function leadAuditHeadline(status, recurringCount) {
+  switch (status) {
+    case 'churning':
+      return recurringCount === 1
+        ? 'A lane keeps needing the same reset — the safe corrective is not sticking, time for a human'
+        : `${recurringCount} lanes keep needing the same reset — the safe corrective is not sticking, time for a human`
+    case 'effective': return "The governor's resets are sticking — corrected lanes settled and stayed settled"
+    case 'quiet':     return 'Nothing to second-guess — the governor has not had to correct anything'
+    default:          return "Not enough governed mornings yet to judge the governor's own track record"
+  }
+}
+function LeadAuditLaneRowPreview({ lane, info }) {
+  const meta = LEAD_AUDIT_OUTCOME[info?.outcome] || LEAD_AUDIT_OUTCOME.one_off
+  const Icon = meta.Icon
+  const runs = Number.isFinite(info?.current_run) ? info.current_run : 0
+  const corr = Number.isFinite(info?.corrections) ? info.corrections : 0
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={laneLabel(lane)}>{laneLabel(lane)}</div>
+        <span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed ${meta.badge}`}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0 text-[10px] font-medium text-slate-400 leading-tight">
+        {auditOutcomeReason(info?.outcome, info)}
+      </div>
+      <span className={`w-24 shrink-0 text-right text-[11px] font-black tabular-nums ${meta.text}`}>
+        {meta.escalate
+          ? <>{runs}× running</>
+          : <>{corr}× total</>}
+      </span>
+    </div>
+  )
+}
+
+// churning: the headline escalation case — Worth a look keeps needing the same reset three mornings
+// running, so the auditor recommends a human. Verify, by contrast, was reset early and stayed settled.
+const AUDIT_CHURNING = {
+  status: 'churning',
+  recommendation: { action: 'escalate', lanes: ['worth_a_look'] },
+  as_of: '2026-06-03', window_used: 8, history_len: 8,
+  lanes: {
+    worth_a_look: { outcome: 'recurring', series: [1, 1, 0, 1, 1, 1], current_run: 3, max_run: 3, corrections: 5, last_action: 'neutralize' },
+    verify:       { outcome: 'resolved',  series: [1, 1, 0, 0, 0, 0], current_run: 0, max_run: 2, corrections: 2, last_action: 'neutralize' },
+  },
+  counts: { recurring: 1, intermittent: 0, resolved: 1, one_off: 0, corrected_mornings: 5, advisory_mornings: 1, quiet_mornings: 2 },
+  audit_reason: 'recurring_intervention',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: 'Worth a look has needed the same reset three mornings running — the governor keeps snapping it to neutral and the learner keeps re-earning the same thrash. The safe corrective is holding the line but not reaching the root cause, so this escalates that one lane to a human. Verify, for contrast, was reset early in the window and has stayed settled since — that is the fix working as intended.',
+}
+// effective: the governor is mostly working — Verify settled and stayed settled (resolved), Tailwind
+// needed a single reset that never recurred (one_off), and Worth a look is reset on-and-off but is NOT
+// on a runaway streak (intermittent) — so the auditor holds fire: intermittent is context, not alarm.
+const AUDIT_EFFECTIVE = {
+  status: 'effective',
+  recommendation: { action: 'none', lanes: [] },
+  as_of: '2026-06-03', window_used: 8, history_len: 8,
+  lanes: {
+    verify:       { outcome: 'resolved',     series: [1, 1, 0, 0, 0, 0], current_run: 0, max_run: 2, corrections: 2, last_action: 'neutralize' },
+    worth_a_look: { outcome: 'intermittent', series: [1, 0, 1, 0, 1, 0], current_run: 0, max_run: 1, corrections: 3, last_action: 'neutralize' },
+    tailwind:     { outcome: 'one_off',      series: [0, 0, 1, 0, 0, 0], current_run: 0, max_run: 1, corrections: 1, last_action: 'neutralize' },
+  },
+  counts: { recurring: 0, intermittent: 1, resolved: 1, one_off: 1, corrected_mornings: 4, advisory_mornings: 2, quiet_mornings: 2 },
+  audit_reason: 'corrections_settling',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: '',
+}
+// quiet: the governor has had nothing to correct across the window — no resets, nothing to second-guess.
+const AUDIT_QUIET = {
+  status: 'quiet',
+  recommendation: { action: 'none', lanes: [] },
+  as_of: '2026-06-03', window_used: 8, history_len: 8,
+  lanes: {},
+  counts: { recurring: 0, intermittent: 0, resolved: 0, one_off: 0, corrected_mornings: 0, advisory_mornings: 1, quiet_mornings: 7 },
+  audit_reason: 'no_corrections',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: '',
+}
+// abstained: too little governed history to judge the governor's own track record yet.
+const AUDIT_ABSTAINED = {
+  status: 'abstained',
+  recommendation: { action: 'none', lanes: [] },
+  as_of: '2026-06-03', window_used: 8, history_len: 1,
+  lanes: {},
+  counts: { recurring: 0, intermittent: 0, resolved: 0, one_off: 0, corrected_mornings: 0, advisory_mornings: 0, quiet_mornings: 1 },
+  audit_reason: 'insufficient_history',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: '',
+}
+function LeadPolicyGovernanceAuditPanelPreview({ data }) {
+  const st = data?.status || 'abstained'
+  const tone = LEAD_AUDIT_TONE[st] || LEAD_AUDIT_TONE.abstained
+  const HeadIcon = tone.Icon
+  const rec = data?.recommendation || { action: 'none', lanes: [] }
+  const escalate = rec.action === 'escalate'
+  const escalateLanes = Array.isArray(rec.lanes) ? rec.lanes : []
+  const escalateLaneText = escalateLanes.map(laneLabel).join(', ')
+  const narrative = (data?.narrative || '').trim()
+  const windowUsed = data?.requested?.days || data?.window_used || 8
+  const counts = data?.counts || {}
+  const recurringCount = Number.isFinite(counts.recurring) ? counts.recurring : escalateLanes.length
+  const correctedMornings = Number.isFinite(counts.corrected_mornings) ? counts.corrected_mornings : 0
+  const headline = leadAuditHeadline(st, recurringCount || 1)
+  const lanes = data?.lanes && typeof data.lanes === 'object' ? data.lanes : {}
+  const tally = [
+    counts.recurring > 0 ? `${counts.recurring} recurring` : null,
+    counts.intermittent > 0 ? `${counts.intermittent} intermittent` : null,
+    counts.resolved > 0 ? `${counts.resolved} resolved` : null,
+    counts.one_off > 0 ? `${counts.one_off} one-off` : null,
+  ].filter(Boolean)
+  const ordered = Object.entries(lanes)
+    .sort((a, b) => (LEAD_AUDIT_RANK[a[1]?.outcome] ?? 9) - (LEAD_AUDIT_RANK[b[1]?.outcome] ?? 9))
+    .slice(0, 6)
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Governance audit</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Is the governor&rsquo;s fix sticking? · last {windowUsed} mornings
+          </p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        <div className="flex items-start gap-2">
+          <HeadIcon className={`w-4 h-4 shrink-0 mt-0.5 ${tone.text}`} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+            {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </div>
+        </div>
+
+        {escalate && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-100 bg-rose-50/50 px-2.5 py-2">
+            <ArrowUpCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
+              <span className="font-semibold text-rose-700">Escalating to a human.</span> The governor keeps applying the one safe corrective to {escalateLanes.length === 1 ? 'this lane' : 'these lanes'} and it keeps coming back. {escalateLaneText && <><span className="font-semibold text-slate-600">{escalateLaneText}</span> — </>}the fix it can make on its own is not enough to reach the root cause. It will keep holding the line every morning; this only flags that a person should look.
+            </p>
+          </div>
+        )}
+
+        {tally.length > 0 && (
+          <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+            {tally.join(' · ')} <span className="text-slate-300">· {correctedMornings} corrected {correctedMornings === 1 ? 'morning' : 'mornings'}</span>
+          </p>
+        )}
+
+        {ordered.length > 0 ? (
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">The governor&rsquo;s track record, by lane</p>
+              <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-rose-500" />recurring</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />resolved</span>
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              {ordered.map(([lane, info], i) => (
+                <LeadAuditLaneRowPreview key={`${lane}-${i}`} lane={lane} info={info} />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            {st === 'abstained'
+              ? 'No governed history to audit yet — the auditor waits until the governor has a track record.'
+              : 'No lane has needed correcting — there is nothing for the auditor to second-guess.'}
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">The auditor.</span> The governor acts every morning; this checks whether its fix <span className="font-semibold text-emerald-600">stuck</span>. When the same lane keeps needing the same reset morning after morning, the safe corrective is not reaching the root cause — so it <span className="font-semibold text-rose-600">escalates that lane to a human</span> rather than letting the loop churn forever. The governor keeps holding the line meanwhile. Recommends, never acts. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -2081,6 +2309,54 @@ export default function PulseDiagnosisPreview() {
             <span className="font-bold text-emerald-600">does nothing</span> — five lanes left untouched, no cut, no advisory. Like the monitor above it, the governor{' '}
             <span className="font-bold text-slate-600">stays silent when the loop is fine and only acts when it isn&rsquo;t</span>. That restraint is what earns it the right to run with{' '}
             <span className="font-bold text-violet-600">no human in the path</span>: it touches the policy only on proof, and the proof here says leave it alone. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* ── 16c GOVERNANCE AUDIT — "the auditor" (layer 16), agency-only, sits ABOVE the governor it
+            grades. The governor acts every morning; this watches its OWN track record across mornings
+            and asks whether the fix STUCK. Four states: churning (a reset that will not stick → escalate
+            to a human), effective (resets sticking, an intermittent lane held as context), quiet (nothing
+            to correct), abstained (too little governed history to judge). Closes the SENSE→ACT→LEARN→ADJUST
+            loop — the only layer that ever hands a problem back to a person, and only when its own safe
+            corrective demonstrably is not enough. ──────────────────────────────────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance audit · churning — a reset that will not stick, escalated</p>
+          <LeadPolicyGovernanceAuditPanelPreview data={AUDIT_CHURNING} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The auditor&rsquo;s headline case. The governor has reset <span className="font-bold text-rose-600">worth a look</span> the same way three mornings running and the learner keeps re-earning the thrash — so the safe corrective is{' '}
+            <span className="font-bold text-slate-600">holding the line but not curing the cause</span>. Rather than let that loop churn forever, the auditor{' '}
+            <span className="font-bold text-rose-600">escalates that one lane to a human</span> — the only place in the whole stack where the machine says &ldquo;I have done what I safely can; a person should look.&rdquo; Verify, reset early and{' '}
+            <span className="font-bold text-emerald-600">settled since</span>, is the contrast: that is the fix working. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance audit · effective — resets sticking, one lane still on-and-off</p>
+          <LeadPolicyGovernanceAuditPanelPreview data={AUDIT_EFFECTIVE} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The governor <span className="font-bold text-emerald-600">earning its autonomy</span>. Verify was reset and <span className="font-bold text-emerald-600">stayed settled</span>; tailwind needed a single nudge that never came back — the resets{' '}
+            <span className="font-bold text-emerald-600">stuck</span>. Worth a look is reset on-and-off (intermittent) but is <span className="font-bold text-amber-600">not on a runaway streak</span>, so the auditor{' '}
+            <span className="font-bold text-slate-600">holds fire</span>: intermittent is context, not alarm. Only a <span className="font-bold text-rose-600">recurring</span> reset escalates — the discrimination that keeps the auditor from crying wolf. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance audit · quiet — nothing to correct, nothing to audit</p>
+          <LeadPolicyGovernanceAuditPanelPreview data={AUDIT_QUIET} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            A morning with <span className="font-bold text-slate-600">nothing for the auditor to do</span>. The governor never had to reset a single lane, so there is{' '}
+            <span className="font-bold text-slate-600">no track record to second-guess</span> — the panel says so and stays out of the way. Like every layer in this stack, the auditor{' '}
+            <span className="font-bold text-emerald-600">adds noise only when there is signal</span>; an empty audit is the system reporting health, not a gap. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance audit · abstained — too little governed history yet</p>
+          <LeadPolicyGovernanceAuditPanelPreview data={AUDIT_ABSTAINED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The auditor <span className="font-bold text-slate-600">refusing to grade on one data point</span>. With a single governed morning on record it <span className="font-bold text-slate-600">declines to judge</span> the governor&rsquo;s track record at all —{' '}
+            a verdict needs a <span className="font-bold text-slate-600">pattern</span>, and one morning is not one. It waits, the same way the monitor and governor below it wait for enough history before they move.{' '}
+            <span className="font-bold text-emerald-600">Abstention is a feature</span>: the stack would rather say &ldquo;not yet&rdquo; than escalate on noise. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 
