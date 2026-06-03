@@ -50,6 +50,7 @@ const {
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
   leadPolicyGovernanceAuditFor, leadPolicyRemediationFor,
+  briefEmphasisEfficacyFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -65,6 +66,7 @@ const {
 } = require('../lib/briefEngagementEngine')
 const { narrateBriefEngagement } = require('../lib/briefEngagement')
 const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngagementLearning')
+const { narrateEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -95,14 +97,17 @@ function resolveAsOf(raw) {
 }
 
 // History-window length for the narration-health audit. A lenient tuning knob, not a
-// key: absent or unparseable → the 30-day default; otherwise clamped to [1, 365]. This
-// MIRRORS the same clamp inside lib/brief.listRecentBriefs (defence-in-depth — the route
-// validates the request, the lib defends regardless), and we pass the resolved value in
-// so the echoed `requested.days` can never disagree with the window actually read.
-function resolveDays(raw) {
-  if (raw == null || raw === '') return 30
+// key: absent or unparseable → the `fallback` default (30 days unless a caller asks for a
+// wider lens — the emphasis-efficacy read passes 90, since it grades a TRAJECTORY of past
+// decisions, not one morning's snapshot); otherwise clamped to [1, 365]. This MIRRORS the
+// same clamp inside lib/brief.listRecentBriefs (defence-in-depth — the route validates the
+// request, the lib defends regardless), and we pass the resolved value in so the echoed
+// `requested.days` can never disagree with the window actually read. The optional `fallback`
+// is backward-compatible: every existing caller passes one arg and keeps the 30-day default.
+function resolveDays(raw, fallback = 30) {
+  if (raw == null || raw === '') return fallback
   const n = Math.floor(Number(raw))
-  if (!Number.isFinite(n)) return 30
+  if (!Number.isFinite(n)) return fallback
   return Math.max(1, Math.min(365, n))
 }
 
@@ -592,6 +597,41 @@ router.get('/brief-engagement', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-engagement error', err.message)
     res.status(500).json({ error: 'Failed to load brief engagement' })
+  }
+})
+
+// ── GET /api/ai/brief-emphasis-efficacy ───────────────────────────────────────
+// Layer 20 closes the loop layer 19 opened: 19 flexes the supporting-cast cap on every
+// reception grade (widen when well-received, tighten when fading) but never checks whether
+// the flex PAID OFF. This grades the loop's own moves against the history already on disk —
+// each persisted portfolio brief carries the engagement_policy that drove it (brief.js:425),
+// so consecutive mornings pair a decision with its follow-on reception for free. Per direction
+// it asks: did widening SUSTAIN reception, and did tightening RECOVER it — measured against the
+// control of mornings the brief held steady — and emits a bounded, shrunk step-scale a future
+// controller can feed back to make layer 19 self-improving. AGENCY-ONLY by construction: it is
+// pure meta-telemetry over per-client reception no client may see, so it shares the portfolio
+// 403 gate (resolvePortfolioScope) and narrateEmphasisEfficacy returns '' for the client
+// audience unconditionally. ?days=N sizes the window (default 90 — a TRAJECTORY needs more than
+// one morning's snapshot to accrue enough decided outcomes per direction; clamped 1..365);
+// ?as_of anchors its end (default today, UTC). A thin/empty history → status:'insufficient'
+// (a clean 200, neutral step-scales), never an error — only a genuine DB fault is a 500.
+router.get('/brief-emphasis-efficacy', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const days = resolveDays(req.query.days, 90)
+
+  try {
+    const efficacy = await briefEmphasisEfficacyFor(asOf, days)
+    res.json({
+      ...efficacy,
+      requested: { as_of: asOf || null, days },
+      narrative: narrateEmphasisEfficacy(efficacy, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-emphasis-efficacy error', err.message)
+    res.status(500).json({ error: 'Failed to load brief emphasis efficacy' })
   }
 })
 

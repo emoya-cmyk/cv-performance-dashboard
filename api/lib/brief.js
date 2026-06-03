@@ -174,6 +174,60 @@ async function briefEngagementEmphasisFor(asOf) {
   }
 }
 
+// ── intel-v9 layer 20b: pair each engagement decision with its OWN follow-on ──
+// Pure zip — no DB, no clock, never throws. Walks NORMALIZED portfolio brief rows
+// (ascending by as_of, as listRecentBriefs returns them) and keeps only those that
+// actually carried an engagement decision: pack.engagement_policy with a real
+// `direction`. (An 'abstained' grade was never persisted — brief.js:425 — so a
+// present policy means a move was MADE: widen, tighten, or hold neutral.) Consecutive
+// kept rows then pair a decision with its outcome FOR FREE: row[i]'s decision
+// (direction + the helpful_rate that drove it + the base_cap it flexed from) is graded
+// by row[i+1]'s observed reception (its helpful_rate + sample n). No new query, no extra
+// capture — the history is already on disk. The emitted shape is exactly what
+// classifyEmphasisOutcome reads (briefEmphasisEfficacy header lines 52-58).
+function buildEmphasisObservations(rows) {
+  const policied = []
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const pol = r && typeof r.pack === 'object' && r.pack ? r.pack.engagement_policy : null
+    if (pol && typeof pol === 'object' && pol.direction) {
+      policied.push({ as_of: r.as_of, policy: pol })
+    }
+  }
+  const observations = []
+  for (let i = 0; i + 1 < policied.length; i++) {
+    const decision = policied[i].policy
+    const outcome  = policied[i + 1].policy
+    observations.push({
+      as_of:       policied[i].as_of,
+      direction:   decision.direction,
+      rate_before: decision.helpful_rate,
+      base_cap:    decision.base_cap,
+      rate_after:  outcome.helpful_rate,
+      n_after:     outcome.n,
+    })
+  }
+  return observations
+}
+
+// ── intel-v9 layer 20b: measure whether the engagement loop's moves WORKED ────
+// Layer 19 flexes the supporting-cast cap on every reception grade — widen when
+// well-received, tighten when fading — but never checks whether the flex paid off.
+// This reads the persisted portfolio history (PURE: listRecentBriefs never generates)
+// and asks, per direction, did widening SUSTAIN reception and did tightening RECOVER it,
+// against the control of mornings the brief held steady — then emits a bounded step-scale
+// a future controller (layer 21) can feed back to make layer 19 self-improving. The whole
+// chain downstream of the read is pure (buildEmphasisObservations + summarizeEmphasisEfficacy
+// never throw, and an empty history yields a clean status:'insufficient', not an error), so
+// the only throw source is the DB read itself — which the route's try/catch turns into a 500,
+// exactly like its brief-engagement sibling. A longer default window than engagement's own
+// reception snapshot (the route passes 90) lets enough decided outcomes accrue per direction
+// before it grades. Lazy require keeps load-time clean; the require cache makes it free after.
+async function briefEmphasisEfficacyFor(asOf, days) {
+  const { summarizeEmphasisEfficacy } = require('./briefEmphasisEfficacy')
+  const rows = await listRecentBriefs({ asOf, days, audience: 'agency', scopeKey: PORTFOLIO_KEY })
+  return summarizeEmphasisEfficacy(buildEmphasisObservations(rows))
+}
+
 // ── intel-v7 layer 14: watch the watcher ─────────────────────────────────────
 // leadPolicyFor hands back ONE morning's policy; the stability monitor needs the
 // TRAJECTORY. leadPolicyHistoryFor walks the day-anchors of an inclusive window
@@ -527,6 +581,8 @@ module.exports = {
   getOrGenerateClientBrief,
   getOrGeneratePortfolioBrief,
   listRecentBriefs,
+  buildEmphasisObservations,
+  briefEmphasisEfficacyFor,
   leadPolicyHistoryFor,
   leadPolicyHealthFor,
   leadPolicyGovernanceFor,

@@ -59,6 +59,7 @@ const {
   getClientBrief, getPortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   PORTFOLIO_KEY,
+  buildEmphasisObservations, briefEmphasisEfficacyFor,
 } = require('../lib/brief')
 const { generateBriefText } = require('../lib/ai')
 
@@ -1797,4 +1798,142 @@ test('19d — the emphasis guard is load-bearing: a smuggled cap, wrapper, or re
   assert.doesNotThrow(
     () => assertNoEmphasis({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
     'the consumer own-vote must pass clean')
+})
+
+// ------------------------------------------------------------
+// intel-v9 layer 20b wires the efficacy scorer (20a) into the read path. Layer 19
+// FLEXES the supporting-cast cap on every reception grade with fixed steps and never
+// checks whether the flex worked; layer 20 closes that gap by MEASURING it. The
+// engine derives nothing new — it re-reads the engagement_policy already persisted on
+// each portfolio morning (19b) and pairs each decision with its OWN follow-on
+// reception: buildEmphasisObservations zips consecutive policied portfolio rows into
+// { direction, rate_before(=that morning's helpful_rate), base_cap, rate_after(=the
+// NEXT morning's helpful_rate), n_after }, and briefEmphasisEfficacyFor threads the
+// agency/PORTFOLIO_KEY/day-window read (listRecentBriefs) through summarizeEmphasisEfficacy
+// to a bounded step-scale a future layer-21 controller can feed back into layer 19.
+// briefEmphasisEfficacy.test.js (20a) proves the scorer in isolation; these two tests
+// prove the WIRING — the pure zip, and the end-to-end read→pair→score over real
+// persisted rows with a deterministic verdict and the agency-only narrative.
+const { narrateEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
+
+test('20b — buildEmphasisObservations zips consecutive policied rows into decision→follow-on pairs, skipping unpolicied/directionless rows', () => {
+  const rows = [
+    { as_of: '2026-04-01', pack: { engagement_policy: { direction: 'widen',   helpful_rate: 0.80, base_cap: 3, also_cap: 4, n: 10 } } },
+    { as_of: '2026-04-02', pack: { briefing: { also: [] } } },                                       // no engagement_policy → skipped
+    { as_of: '2026-04-03', pack: { engagement_policy: { direction: 'tighten', helpful_rate: 0.50, base_cap: 3, n: 11 } } },
+    { as_of: '2026-04-04', pack: { engagement_policy: { status: 'idle', helpful_rate: 0.60, n: 5 } } }, // policy without a direction → skipped
+    { as_of: '2026-04-05', pack: { engagement_policy: { direction: 'neutral', helpful_rate: 0.62, base_cap: 3, n: 9 } } },
+  ]
+  // policied = [A(widen), C(tighten), E(neutral)] — B and D are filtered BEFORE pairing,
+  // so A pairs with C (not B). Each pair maps the DECISION's own fields (direction,
+  // rate_before, base_cap) against the NEXT morning's reception (rate_after, n_after).
+  assert.deepEqual(buildEmphasisObservations(rows), [
+    { as_of: '2026-04-01', direction: 'widen',   rate_before: 0.80, base_cap: 3, rate_after: 0.50, n_after: 11 },
+    { as_of: '2026-04-03', direction: 'tighten', rate_before: 0.50, base_cap: 3, rate_after: 0.62, n_after: 9 },
+  ])
+
+  // a single policied row has no follow-on → no observation.
+  assert.deepEqual(
+    buildEmphasisObservations([{ as_of: '2026-04-01', pack: { engagement_policy: { direction: 'widen', helpful_rate: 0.7, base_cap: 3, n: 5 } } }]),
+    [])
+  // no policied rows at all (missing wrapper, or wrapper without a direction) → [].
+  assert.deepEqual(
+    buildEmphasisObservations([{ as_of: 'a', pack: {} }, { as_of: 'b', pack: { engagement_policy: { status: 'idle' } } }]),
+    [])
+  // a normalized row whose pack is null — or, defensively, still an unparsed string — carries
+  // no policy (the helper reads an already-parsed object pack, never re-parses).
+  assert.deepEqual(
+    buildEmphasisObservations([{ as_of: 'a', pack: null }, { as_of: 'b', pack: '{"engagement_policy":{"direction":"widen"}}' }]),
+    [])
+  // junk / non-array inputs never throw → [].
+  for (const junk of [null, undefined, 'nope', 42, {}, NaN]) {
+    assert.deepEqual(buildEmphasisObservations(junk), [], `non-array input ${String(junk)} → []`)
+  }
+})
+
+test('20b — briefEmphasisEfficacyFor reads the agency/PORTFOLIO_KEY day-window and scores a real sustained-widen history; client + out-of-window rows are excluded', async () => {
+  await ready()
+
+  // Direct-seed the portfolio engagement_policy history rather than driving
+  // generatePortfolioBrief, so every decision/follow-on field is controlled and the
+  // verdict is deterministic — the DERIVATION rules (deriveBriefEmphasis) are 19a's
+  // contract, not 20b's. Mirror upsertBrief's column shape exactly; pack is stored as a
+  // JSON string (normalizeBriefRow parses it back to an object on read).
+  async function seedPolicy(asOf, policy, opts = {}) {
+    const { scopeKey = PORTFOLIO_KEY, audience = 'agency', clientId = null } = opts
+    await db.query(
+      `INSERT INTO ai_briefs (scope_key, as_of, audience, client_id, model, pack, brief_text, grounded, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8, CURRENT_TIMESTAMP)
+       ON CONFLICT (scope_key, as_of) DO UPDATE SET
+         audience = EXCLUDED.audience, client_id = EXCLUDED.client_id, model = EXCLUDED.model,
+         pack = EXCLUDED.pack, brief_text = EXCLUDED.brief_text, grounded = EXCLUDED.grounded,
+         updated_at = CURRENT_TIMESTAMP`,
+      [scopeKey, asOf, audience, clientId, 'test-model',
+       JSON.stringify(policy ? { engagement_policy: policy } : {}), 'Good morning.', 1]
+    )
+  }
+
+  // Order-independent isolation: clear any PORTFOLIO_KEY rows inside our April seed range.
+  // (Every other test seeds PORTFOLIO_KEY only at 2026-05-18 — AFTER this anchor, and so
+  // outside the window — and our out-of-window probe sits at 2026-01-01, below this floor,
+  // so neither is disturbed.)
+  await db.query(
+    `DELETE FROM ai_briefs WHERE scope_key = $1 AND as_of >= $2 AND as_of <= $3`,
+    [PORTFOLIO_KEY, '2026-04-01', '2026-04-16'])
+
+  const wd = (helpful_rate, n) => ({ status: 'tuned', direction: 'widen',   helpful_rate, base_cap: 3, also_cap: 4, min_cap: 1, max_cap: 4, n })
+  const nu = (helpful_rate, n) => ({ status: 'idle',  direction: 'neutral', helpful_rate, base_cap: 3, also_cap: 3, min_cap: 1, max_cap: 4, n })
+
+  // Five consecutive WIDEN mornings whose reception SUSTAINS (each next rate within the
+  // noise band of the last) → 5 widen observations, all "success". Then four held-NEUTRAL
+  // mornings — the CONTROL arm — whose reception drifts flat (never +0.05) → control never
+  // "improves". The widen→first-neutral transition stays a SUCCESS because that neutral
+  // morning's reception (0.80) is itself within band of the last widen (0.81).
+  await seedPolicy('2026-04-08', wd(0.80, 12))
+  await seedPolicy('2026-04-09', wd(0.81, 12))
+  await seedPolicy('2026-04-10', wd(0.80, 12))
+  await seedPolicy('2026-04-11', wd(0.82, 12))
+  await seedPolicy('2026-04-12', wd(0.81, 12))
+  await seedPolicy('2026-04-13', nu(0.80, 12))
+  await seedPolicy('2026-04-14', nu(0.79, 12))
+  await seedPolicy('2026-04-15', nu(0.80, 12))
+  await seedPolicy('2026-04-16', nu(0.78, 12))
+
+  // Two rows that MUST be excluded by the read's filters:
+  //   • an out-of-window agency PORTFOLIO_KEY row (before the 90-day window ending 2026-04-16,
+  //     which starts 2026-01-17) → if wrongly included it would be the EARLIEST row and inject
+  //     a spurious tighten observation, flipping tighten.n off zero.
+  await seedPolicy('2026-01-01', { status: 'tuned', direction: 'tighten', helpful_rate: 0.30, base_cap: 3, n: 12 })
+  //   • an in-window CLIENT brief carrying a policy under a client scope → the agency scorer
+  //     must never see it (audience AND scope_key both exclude it).
+  const c = await freshClient('Emphasis Efficacy Window Probe Roofing')
+  await seedPolicy('2026-04-12', { status: 'tuned', direction: 'tighten', helpful_rate: 0.20, base_cap: 3, n: 9 },
+    { scopeKey: c, audience: 'client', clientId: c })
+
+  const eff = await briefEmphasisEfficacyFor('2026-04-16', 90)
+
+  // Deterministic scorecard: 5 sustained widen observations, 3 flat neutral controls.
+  assert.equal(eff.status, 'graded')
+  assert.equal(eff.n, 5, 'only the 5 in-window widen observations are scored')
+  assert.equal(eff.directions.widen.n, 5)
+  assert.equal(eff.directions.widen.successes, 5)
+  assert.equal(eff.directions.widen.failures, 0)
+  assert.equal(eff.directions.widen.rate, 1)
+  assert.equal(eff.directions.tighten.n, 0, 'the out-of-window tighten row and the client tighten row are BOTH excluded')
+  assert.equal(eff.control_n, 3, 'three held-neutral mornings form the control arm')
+  assert.equal(eff.control_rate, 0, 'reception never improved after a held-steady morning')
+  assert.equal(eff.prior, 0)
+  assert.equal(eff.recommendation.verdict, 'endorsed')
+  assert.equal(eff.recommendation.reason, 'widen_sustaining')
+  assert.equal(eff.recommendation.widen_step_scale, 1.25, 'a confident sustained widen endorses toward the ceiling')
+  assert.equal(eff.recommendation.tighten_step_scale, 1, 'tighten has no measured outcomes → base step')
+
+  // The agency hears the self-tuning reasoning, grounded in the very counts above…
+  const line = narrateEmphasisEfficacy(eff, { audience: 'agency' })
+  assert.match(line, /^Widening is holding up —/)
+  assert.match(line, /\(5 of 5\)/)
+  assert.match(line, /vs 0% when the brief held steady/)
+  assert.match(line, /step ×1\.25/)
+  // …and the consumer hears NONE of it — the efficacy loop is agency-only telemetry.
+  assert.equal(narrateEmphasisEfficacy(eff, { audience: 'client' }), '')
 })

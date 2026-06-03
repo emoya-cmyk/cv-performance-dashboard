@@ -249,6 +249,19 @@ export const api = {
   // clients_total }) plus echoed `requested` + one agency-voiced `narrative` (empty until graded).
   // `days` sizes the reception window (default 90 — reception moves slowly; clamp 1..365).
   getBriefEngagement:       (days)       => get(`/api/ai/brief-engagement${days ? `?days=${days}` : ''}`),
+  // EMPHASIS EFFICACY (intel-v9 20, agency-only, 403 for client tokens). getBriefEngagement grades
+  // reception and earns tomorrow's supporting-cast cap; THIS grades whether that earning actually
+  // WORKED — did widening SUSTAIN reception and did tightening RECOVER it, measured against the
+  // control of mornings the brief held steady — and emits a bounded, shrunk step-scale a future
+  // controller feeds back to make the cap-tuner self-improving. Pure meta-telemetry over the
+  // persisted brief history (consecutive mornings pair a decision with its follow-on reception for
+  // free); strictly agency-only — this endpoint 403s a client token and narrateEmphasisEfficacy is
+  // '' for the client audience. Returns the summarizeEmphasisEfficacy shape ({ status, control_rate,
+  // control_n, prior, directions:{widen,tighten}, recommendation:{widen_step_scale, tighten_step_scale,
+  // verdict, reason}, n }) plus echoed `requested` + one agency-voiced `narrative` (empty until
+  // graded). `days` sizes the trajectory window (default 90 — efficacy grades a history of decisions,
+  // not one morning's snapshot; clamp 1..365).
+  getBriefEmphasisEfficacy: (days)       => get(`/api/ai/brief-emphasis-efficacy${days ? `?days=${days}` : ''}`),
   // CONSUMER OWN-VOTE (intel-v8 18d, client-scoped — the OUTWARD half of the engagement loop).
   // getBriefEngagement above reads the whole-book aggregate (agency-only, 403 for a client token);
   // THESE two are all a client ever touches — their own 👍/👎 on their own morning brief, one day.
