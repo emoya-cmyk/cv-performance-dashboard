@@ -228,7 +228,13 @@ function summarizePortfolioPulse(roster, opts = {}) {
     headline_text = `${lead} today. First up, ${name}: ${reason}`
   }
 
-  const also = led.slice(1, 4)
+  // intel-v9 layer 19b: the supporting-cast breadth is the one bounded knob the portfolio
+  // engagement grade tunes (briefEngagementLearning.deriveBriefEmphasis → also_cap). Default
+  // 3 reproduces the historical led.slice(1, 4) byte-for-byte; a well-received brief widens
+  // it, a poorly-received or fading one tightens it. The headline (led[0]) is NEVER touched —
+  // only this tail flexes, so the brief can grow richer or leaner but never bury what matters.
+  const cap  = Number.isInteger(opts.alsoCap) && opts.alsoCap >= 1 ? opts.alsoCap : 3
+  const also = led.slice(1, 1 + cap)
   const also_text = also.length
     ? `Next: ${also.map((r) => `${r.client_name || 'a client'} — ${lc(r.label)} (${LANE_TAG[r.lane] || 'review'})`).join(', ')}.`
     : ''

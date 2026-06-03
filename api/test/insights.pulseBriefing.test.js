@@ -142,6 +142,80 @@ test('summarizePortfolioPulse — supporting cast: also = act[1..3], also_text n
   assert.ok(b.also_text.startsWith('Next: '))
 })
 
+test('summarizePortfolioPulse — alsoCap knob flexes the supporting cast; headline + counts never move (layer 19b)', () => {
+  // Six DISTINCT adverse clients → led has a headline (led[0]) plus FIVE tail candidates, so
+  // there is genuine room to widen past the default of 3 (the existing 4-signal test above
+  // caps out at 3 and can't exercise widening). The engagement grade's earned cap
+  // (briefEngagementLearning.deriveBriefEmphasis → also_cap) is the ONLY thing that decides
+  // how many of those five ride along — nothing else in the brief sees it.
+  const roster = [
+    sig({ client_name: 'Acme',   metric: 'leads',   label: 'Leads',   severity: 'critical', reliability: 0.9, reliability_label: 'reliable', accuracy_label: 'proven', delta_pct: -48, z: -3.1 }),
+    sig({ client_name: 'Harbor', metric: 'revenue', label: 'Revenue', severity: 'warning',  delta_pct: -22, z: -1.6 }),
+    sig({ client_name: 'Vista',  metric: 'spend',   label: 'Spend',   severity: 'critical', delta_pct: -40, z: -2.4 }),
+    sig({ client_name: 'Zen',    metric: 'jobs',    label: 'Jobs',    severity: 'warning',  delta_pct: -12, z: -1.1 }),
+    sig({ client_name: 'Nova',   metric: 'calls',   label: 'Calls',   severity: 'warning',  delta_pct: -18, z: -1.4 }),
+    sig({ client_name: 'Orbit',  metric: 'leads',   label: 'Leads',   severity: 'warning',  delta_pct: -15, z: -1.2 }),
+  ]
+  // led with no lead policy is a pure no-op over the ranked adverse feed (proven by the test
+  // above asserting b.also === rankPulseSignals(...).slice(1, 4)), so we can predict the tail.
+  const led = rankPulseSignals(roster, { adverseOnly: true })
+  assert.equal(led.length, 6)
+
+  const base  = summarizePortfolioPulse(roster)                 // no opts → neutral cap 3
+  const widen = summarizePortfolioPulse(roster, { alsoCap: 4 })
+  const wide5 = summarizePortfolioPulse(roster, { alsoCap: 5 })
+  const tight = summarizePortfolioPulse(roster, { alsoCap: 1 })
+
+  // the knob is exactly led.slice(1, 1 + cap): the tail grows/shrinks, the head is fixed.
+  assert.equal(base.also.length, 3)
+  assert.deepEqual(base.also, led.slice(1, 4))
+  assert.equal(widen.also.length, 4)
+  assert.deepEqual(widen.also, led.slice(1, 5))
+  assert.equal(wide5.also.length, 5)
+  assert.equal(tight.also.length, 1)
+  assert.deepEqual(tight.also, led.slice(1, 2))
+
+  // monotone PREFIX: a wider cap only ever APPENDS rows, it never reorders the tail.
+  assert.deepEqual(widen.also.slice(0, 3), base.also)
+  assert.deepEqual(base.also.slice(0, 1), tight.also)
+  assert.deepEqual(wide5.also.slice(0, 4), widen.also)
+
+  // also_text tracks the tail it renders (more rows when wider, one when tight).
+  assert.ok(widen.also_text.length > base.also_text.length)
+  assert.ok(tight.also_text.startsWith('Next: '))
+
+  // the headline (led[0]) and EVERY aggregate are cap-invariant — the knob touches the tail only.
+  for (const b of [widen, wide5, tight]) {
+    assert.deepEqual(b.headline, base.headline)
+    assert.equal(b.headline_text, base.headline_text)
+    assert.deepEqual(b.counts, base.counts)
+    assert.deepEqual(b.confidence, base.confidence)
+    assert.equal(b.posture, base.posture)
+  }
+  assert.equal(base.counts.adverse, 6)
+})
+
+test('summarizePortfolioPulse — a garbled / out-of-range alsoCap falls back to the neutral 3 (never silences)', () => {
+  // The fallback is the load-bearing safety guarantee. deriveBriefEmphasis passes
+  // alsoCap: undefined on its abstained/idle paths, and brief.js passes undefined whenever
+  // emphasis didn't EARN a move — so undefined MUST reproduce today's brief exactly, and a
+  // stray 0 / negative / fractional must NOT collapse the supporting cast to nothing.
+  const roster = [
+    sig({ client_name: 'Acme',   metric: 'leads',   label: 'Leads',   severity: 'critical', delta_pct: -48, z: -3.1 }),
+    sig({ client_name: 'Harbor', metric: 'revenue', label: 'Revenue', severity: 'warning',  delta_pct: -22, z: -1.6 }),
+    sig({ client_name: 'Vista',  metric: 'spend',   label: 'Spend',   severity: 'critical', delta_pct: -40, z: -2.4 }),
+    sig({ client_name: 'Zen',    metric: 'jobs',    label: 'Jobs',    severity: 'warning',  delta_pct: -12, z: -1.1 }),
+    sig({ client_name: 'Nova',   metric: 'calls',   label: 'Calls',   severity: 'warning',  delta_pct: -18, z: -1.4 }),
+  ]
+  const base = summarizePortfolioPulse(roster)
+  assert.equal(base.also.length, 3)
+  for (const bad of [undefined, null, 'x', 0, -2, 2.5, NaN, {}]) {
+    const b = summarizePortfolioPulse(roster, { alsoCap: bad })
+    assert.equal(b.also.length, 3, `alsoCap=${String(bad)} should fall back to 3`)
+    assert.deepEqual(b.also, base.also, `alsoCap=${String(bad)} should match the neutral brief`)
+  }
+})
+
 test('summarizePortfolioPulse — posture watch when adverse but nothing in act_now', () => {
   const roster = [
     // warning + reliable → worth_a_look (not act_now); single client

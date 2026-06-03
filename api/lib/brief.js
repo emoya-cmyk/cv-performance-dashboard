@@ -151,6 +151,29 @@ async function leadPolicyFor(asOf) {
   }
 }
 
+// ── intel-v9 layer 19b: close the engagement loop ────────────────────────────
+// leadPolicyFor tunes WHICH lanes lead; this tunes HOW MANY supporting rows the
+// portfolio brief carries — from the consumer's own reception. It reads the agency
+// engagement aggregate (getPortfolioEngagement — every client's 👍/👎 over a trailing
+// window rolled into one helpful_rate/label/trend) and turns it into a bounded
+// supporting-cast cap (deriveBriefEmphasis): a well_received book EARNS a wider cast,
+// a poorly_received or fading one tightens to the essentials, and the headline is never
+// touched. Non-circular (mirrors pulseTuning): the grade measures yesterday's votes, the
+// cap shapes tomorrow's brief — input never depends on output, so the controller is stable.
+// Fail-safe by construction: any error — or a thin/missing grade — yields null/abstained
+// and the caller falls back to the neutral cap of 3, byte-identical to today. Lazy requires
+// keep load-time clean; the require cache makes the call free after the first.
+async function briefEngagementEmphasisFor(asOf) {
+  try {
+    const { getPortfolioEngagement } = require('./briefEngagementEngine')
+    const { deriveBriefEmphasis }    = require('./briefEngagementLearning')
+    const engagement = await getPortfolioEngagement({ asOf })
+    return deriveBriefEmphasis(engagement)
+  } catch {
+    return null
+  }
+}
+
 // ── intel-v7 layer 14: watch the watcher ─────────────────────────────────────
 // leadPolicyFor hands back ONE morning's policy; the stability monitor needs the
 // TRAJECTORY. leadPolicyHistoryFor walks the day-anchors of an inclusive window
@@ -345,8 +368,18 @@ async function generatePortfolioBrief(asOf) {
   // it corrected and WHY. Apply whenever the governed order still tunes something ('tuned').
   const { policy: rawPolicy, governed: leadPolicy, governance, health } = await leadPolicyDecisionFor(day)
   const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned')
-  const briefing    = (applyPolicy && Array.isArray(pulse.roster))
-    ? summarizePortfolioPulse(pulse.roster, { leadPolicy })
+  // CLOSE THE ENGAGEMENT LOOP (layer 19b): tune the supporting-cast breadth from the
+  // portfolio engagement grade. Fail-safe (null on error / thin grade) and a guaranteed
+  // no-op unless reception EARNED a move (status 'tuned' → also_cap differs from base 3).
+  // Recompute the briefing when EITHER the lead order OR the breadth changed: passing an
+  // idle/abstained leadPolicy is a no-op (applyLeadPolicyToFeed) and an undefined alsoCap
+  // falls back to the neutral cap, so the recompute stays set-identical to pulse.briefing
+  // except for whichever knob actually moved. pulse.roster is a pure sort, so this is the
+  // same set summarizePortfolioPulse already produced — only headline/also can re-aim.
+  const emphasis      = await briefEngagementEmphasisFor(day)
+  const applyEmphasis = !!(emphasis && emphasis.status === 'tuned')
+  const briefing      = ((applyPolicy || applyEmphasis) && Array.isArray(pulse.roster))
+    ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? emphasis.also_cap : undefined })
     : pulse.briefing
   const pack  = buildPortfolioBriefPack({ ...pulse, briefing })
   const { text, model, grounded } = await generateBriefText(pack)
@@ -380,6 +413,16 @@ async function generatePortfolioBrief(asOf) {
   const remediation = leadRemediation.proposeLeadPolicyRemediation(
     await leadPolicyGovernanceAuditFor(day), rawPolicy)
   if (leadRemediation.shouldStageRemediation(remediation)) pack.lead_policy_remediation = remediation
+  // CLOSE THE ENGAGEMENT LOOP (layer 19b): the supporting-cast breadth the portfolio
+  // engagement grade earned this morning — agency-only telemetry (also_cap vs base_cap, the
+  // helpful_rate/label/trend that drove it, direction + reason). A SEPARATE loop from the
+  // lead-policy tower above: that learns from our own editorial precision, this learns from
+  // the consumer's reception. Attached whenever the grade produced a real policy (status
+  // !== 'abstained'), INDEPENDENT of whether the cap moved — an 'idle' grade still tells the
+  // agency "reception steady, holding at 3". Set AFTER narration so the LLM narrator +
+  // grounding verifier never see the machinery; never on the client pack (generateClientBrief
+  // carries none — the client only ever experiences the EFFECT, a tighter or richer brief).
+  if (emphasis && emphasis.status !== 'abstained') pack.engagement_policy = emphasis
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,

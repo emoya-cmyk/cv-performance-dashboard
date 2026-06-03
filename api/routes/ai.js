@@ -64,6 +64,7 @@ const {
   recordBriefFeedback, getClientBriefFeedback, getPortfolioEngagement,
 } = require('../lib/briefEngagementEngine')
 const { narrateBriefEngagement } = require('../lib/briefEngagement')
+const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngagementLearning')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -575,10 +576,18 @@ router.get('/brief-engagement', async (req, res) => {
 
   try {
     const engagement = await getPortfolioEngagement({ asOf, days })
+    // intel-v9 layer 19b: the supporting-cast breadth this same grade EARNS for tomorrow's
+    // portfolio brief — derived in-process (deriveBriefEmphasis is pure, no extra round-trip)
+    // so the agency sees the loop close in one payload: reception in → brief emphasis out.
+    // Agency-only by inheritance — the whole route is resolvePortfolioScope-gated (403 for
+    // client tokens) and narrateBriefEmphasis returns '' for the client audience regardless.
+    const emphasis = deriveBriefEmphasis(engagement)
     res.json({
       ...engagement,
       requested: { as_of: asOf || null, days },
       narrative: narrateBriefEngagement(engagement, { audience: 'agency' }),
+      emphasis,
+      emphasis_narrative: narrateBriefEmphasis(emphasis, { audience: 'agency' }),
     })
   } catch (err) {
     console.error('[ai] GET brief-engagement error', err.message)
