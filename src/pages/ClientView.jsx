@@ -652,6 +652,67 @@ function RecapChip({ icon: Icon, tone, label }) {
   )
 }
 
+// Friendly weekday framing for the brief's as-of date ('2026-06-02' → 'Monday, Jun 2'). Parsed
+// from parts as a LOCAL date so it never slips a day across the UTC-midnight boundary the way
+// new Date('YYYY-MM-DD') would; any unparseable value falls through to the raw string unchanged.
+function fmtBriefDay(raw) {
+  const s = String(raw || '').trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (!m) return s
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+}
+
+// ── Your Morning Brief — the grounded AI read of THIS morning, in the client's own words ──
+// lib/pulseBrief.js writes one short plain-English read of where the week IN PROGRESS stands —
+// grounded so every number in it was checked against the same verified facts the rest of this
+// page is scored from — and it's the very text that will open the client's next morning note.
+// WeeklyRecap above tells the client how LAST week CLOSED; this is today's fresh read, days
+// before the next Monday recap. Client-safe by construction: buildClientBriefPack hands down
+// only this account's OWN period / posture / focus / memory and strips every peer name, severity
+// statistic, and reliability/accuracy/tuning_* key, so nothing backstage can leak through. Like
+// the rest of this surface the operator machinery stays hidden — no "regenerate", no model name,
+// no confidence chip, no verification badge (the grounding still happens; it just isn't chrome
+// the client needs to see). posture renders in the client's voice (Looking good / Worth a glance /
+// Needs a look), never the agency-internal act/watch words. Self-hides when there's no brief yet.
+function ClientMorningBrief({ brief }) {
+  const text = (brief?.brief_text || '').trim()
+  if (!text) return null
+  const day     = fmtBriefDay(brief?.pack?.period?.label || brief?.as_of)
+  const posture = PULSE_POSTURE_CLIENT[brief?.pack?.posture] || null
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.072s' }}>
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your Morning Brief</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      {(posture || day) && (
+        <div className="flex items-center gap-2 mb-3">
+          {posture && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${posture.dot}`} />
+              <span className={`text-[11px] font-bold ${posture.text}`}>{posture.label}</span>
+            </span>
+          )}
+          {day && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
+              <Clock className="w-3 h-3" /> {day}
+            </span>
+          )}
+        </div>
+      )}
+      <p className="text-sm text-slate-600 leading-relaxed font-medium whitespace-pre-line">{text}</p>
+      <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
+        A fresh read each morning — written by your account&rsquo;s AI analyst from your verified
+        numbers, days before your Monday recap.
+      </p>
+    </div>
+  )
+}
+
 // ── How You Compare — the client's own peer standing, fully anonymized ─────────
 // The same cross-client benchmark the agency sees on /intelligence (lib/benchmark.js),
 // reduced to ONLY this client's placement against the anonymous portfolio — never a
@@ -1208,6 +1269,7 @@ export default function ClientView({ store }) {
   const [pacing,       setPacing]      = useState(null)   // { metrics[] } — this client's OWN pace to each monthly goal (own numbers only)
   const [pulse,        setPulse]       = useState(null)   // { signals[], as_of, window, lookback_days } — this client's OWN intra-week daily pulse (own numbers, names no peer)
   const [recap,        setRecap]       = useState(null)   // grounded weekly recap row — the same narration that opens this client's Monday email
+  const [brief,        setBrief]       = useState(null)   // grounded AI MORNING brief — { brief_text, pack:{period,posture,...} } over THIS client's own intra-week pulse
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -1259,6 +1321,13 @@ export default function ClientView({ store }) {
     api.getRecap(clientObj.id)
       .then(r => setRecap(r || null))
       .catch(() => setRecap(null))
+    // Morning brief — the grounded, plain-English read of where THIS week-in-progress stands
+    // (lib/pulseBrief.js over getClientPulse), the same text that opens the client's next morning
+    // note. Like the recap it degrades to a deterministic template with no API key, so it's always
+    // safe to request; any failure simply hides the in-app card.
+    api.getClientBrief(clientObj.id)
+      .then(b => setBrief(b || null))
+      .catch(() => setBrief(null))
   }, [clientObj?.id])
 
   const revenue = stats.total_revenue || 0
@@ -1462,6 +1531,15 @@ export default function ClientView({ store }) {
               or another client). Same activity gate as the health badge; self-hides when
               there's no recap text yet. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <WeeklyRecap recap={recap} />}
+
+          {/* ── Your Morning Brief — the grounded AI read of THIS morning, in plain English ──
+              WeeklyRecap above tells how LAST week CLOSED; this is today's fresh read on the week
+              IN PROGRESS (lib/pulseBrief.js over getClientPulse), the very text that opens the
+              client's next morning note. Own numbers only — the pack carries this account's own
+              period/posture/focus and strips every peer, severity statistic, and machinery key;
+              no regenerate, model name, confidence chip, or badge reaches this surface. Same
+              activity gate as the cards around it; self-hides when there's no brief text yet. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <ClientMorningBrief brief={brief} />}
 
           {/* ── This Week So Far — the intra-week daily pulse, client-framed ──
               The recap above tells how LAST week CLOSED; this is the live read on the week

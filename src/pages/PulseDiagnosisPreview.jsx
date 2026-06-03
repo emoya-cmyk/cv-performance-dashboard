@@ -670,13 +670,89 @@ function ClientPulseHeadlinePreview({ briefing, focusNote, resolvedNote }) {
   )
 }
 
+// ── client "your morning brief" (layer 9 / 9d) — the grounded narration capstone ──
+// Where the layer-7 one-liner above collapses this morning to ONE sentence, layer 9 expands it
+// into the short paragraph that opens the client's morning note: lib/pulseBrief builds a numbers-
+// only evidence pack from THIS client's own pulse (period/posture/focus/memory/resolved — no peer,
+// no severity statistic, no reliability/accuracy/tuning machinery), lib/ai narrates it, and a
+// grounding verifier rejects any draft that cites a number the pack doesn't carry — falling back to
+// a deterministic template (so it works with no API key and never invents a figure). CLIENT_BRIEF
+// below is the prose of the SAME morning the deck above depicts: leads with the overnight calls win,
+// names revenue (−24%, the focus) as the one thing to watch, grounds it with the same 3-day streak,
+// and nods at the 1 other metric riding beneath — every figure tracing to CLIENT_BRIEFING / the
+// memory notes. The card is deliberately bare of operator chrome: no regenerate, model name,
+// confidence chip, or verification badge — posture speaks only in the client's voice.
+const CLIENT_BRIEF = {
+  audience: 'client',
+  as_of: '2026-06-02',
+  grounded: true,
+  brief_text:
+    "Good news first — your calls alert from yesterday has settled back into your normal range. " +
+    "The one thing worth a look this week is revenue: it's running about 24% below your usual pace. " +
+    "We've been tracking this for 3 days now and it hasn't turned around yet, so your team is already " +
+    "on it — and we're keeping a quiet eye on one other metric just beneath it.",
+  pack: {
+    audience: 'client',
+    as_of: '2026-06-02',
+    period: { label: '2026-06-02', week_start: '2026-06-02', week_end: '2026-06-02' },
+    posture: 'watch',
+    status: 'briefing',
+  },
+}
+// Friendly weekday framing for the brief's as-of date ('2026-06-02' → 'Monday, Jun 2'), parsed from
+// parts as a LOCAL date so it never slips a day across the UTC-midnight boundary (mirror of ClientView).
+function fmtBriefDay(raw) {
+  const s = String(raw || '').trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (!m) return s
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  if (Number.isNaN(d.getTime())) return s
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+}
+function ClientMorningBriefPreview({ brief }) {
+  const text = (brief?.brief_text || '').trim()
+  if (!text) return null
+  const day     = fmtBriefDay(brief?.pack?.period?.label || brief?.as_of)
+  const posture = PULSE_POSTURE_CLIENT[brief?.pack?.posture] || null
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="flex items-center justify-between mb-1">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your Morning Brief</p>
+        <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-brand-600 bg-brand-50 rounded-full px-2 py-0.5">
+          <Sparkles className="w-3 h-3" /> AI Analyst
+        </span>
+      </div>
+      {(posture || day) && (
+        <div className="flex items-center gap-2 mb-3">
+          {posture && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${posture.dot}`} />
+              <span className={`text-[11px] font-bold ${posture.text}`}>{posture.label}</span>
+            </span>
+          )}
+          {day && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400">
+              <Clock className="w-3 h-3" /> {day}
+            </span>
+          )}
+        </div>
+      )}
+      <p className="text-sm text-slate-600 leading-relaxed font-medium whitespace-pre-line">{text}</p>
+      <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
+        A fresh read each morning — written by your account&rsquo;s AI analyst from your verified
+        numbers, days before your Monday recap.
+      </p>
+    </div>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) + (3) + (4) + (5) + (6)</p>
-          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record → self-tuning</h1>
+          <p className="text-[10px] font-black uppercase tracking-widest text-brand-600">Design preview · intel-v7 (2) → (9)</p>
+          <h1 className="text-2xl font-black text-slate-900 mt-1">Daily Pulse → diagnosis → reliability → act today → track record → self-tuning → morning brief</h1>
           <p className="text-sm text-slate-500 font-medium mt-1.5 max-w-3xl leading-relaxed">
             The pulse already says <span className="font-bold text-slate-700">what</span> moved this week, and (2) adds the{' '}
             <span className="font-bold text-slate-700">why</span> — decomposing each composite move (revenue ≡ spend × ROAS,
@@ -712,6 +788,28 @@ export default function PulseDiagnosisPreview() {
             then grades its own call <span className="font-bold text-emerald-600">high confidence</span> because 2 of the 4 alerts come from
             sensors that have already <span className="font-bold text-violet-600">proven out</span>. Synthesis on top, never a new sensor; it
             reuses the headline signal&rsquo;s own triage sentence verbatim and only counts what&rsquo;s already on the roster.
+          </p>
+        </div>
+
+        {/* ── YOUR MORNING BRIEF — the client narration capstone (layer 9 / 9d), full width.
+            Where the agency banner above collapses the morning to ONE sentence, the client gets
+            the short PARAGRAPH that expansion opens into — the same grounded read, written in the
+            client's own voice. A deliberately consumer-only surface: this is the entire reason the
+            number machinery exists, said back to the person who pays for the work, with zero of the
+            machinery showing. ─────────────────────────────────────────────────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Client · My Dashboard ▸ Your Morning Brief</p>
+          <div className="max-w-2xl">
+            <ClientMorningBriefPreview brief={CLIENT_BRIEF} />
+          </div>
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed max-w-2xl">
+            The full read the agency one-liner above expands into — the same morning, in the client&rsquo;s words. A numbers-only
+            evidence pack from this client&rsquo;s OWN pulse is narrated by the model, then a grounding check{' '}
+            <span className="font-bold text-slate-600">rejects any draft that cites a figure the pack doesn&rsquo;t carry</span> and falls
+            back to a deterministic template — so it works with no API key and can never invent a number. It leads with the overnight win,
+            names the one thing to watch (<span className="font-bold text-amber-600">revenue, −24%</span>) with the same 3-day continuity, and
+            nods at the one metric beneath it — yet shows <span className="font-bold text-slate-600">no peer, no severity, no z, no model name,
+            no confidence, no badge, and no regenerate</span>. Posture speaks only as &ldquo;Worth a look.&rdquo;
           </p>
         </div>
 
