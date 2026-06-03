@@ -253,6 +253,19 @@ export const api = {
   // verdict_reason }) plus echoed `requested` + one agency-voiced `narrative`. `days` sizes the
   // history window (mornings to assess); absent → the monitor's own default window.
   getLeadPolicyHealth:      (days)       => get(`/api/ai/lead-policy-health${days ? `?days=${days}` : ''}`),
+  // THE GOVERNOR (intel-v7 15, agency-only, 403 for client tokens). lead-policy-health DIAGNOSES
+  // the tuning loop; lead-policy-governance is what the loop DID about it — the self-governing
+  // controller that consumes the stability verdict and autonomously applies the safe per-lane
+  // corrective to the policy (idempotent, reversible via the pre-governance snapshot, verify-after,
+  // bounded blast radius, no human in the path). Neutralises ONLY a thrashing lane and keeps every
+  // honestly-earned lane live, so a learned order can still apply where layer 14's blunt all-or-
+  // nothing revert would have thrown the whole policy out; saturation and floor-masking it logs for
+  // a human rather than auto-widening the band. Returns the governLeadPolicy shape ({ status:
+  // 'corrected'|'advised'|'clean'|'abstained', verdict_status, source_status, governed,
+  // interventions (action neutralize|hold_at_bound|respect_floor, from_weight→to_weight), snapshot,
+  // counts }) plus echoed `requested` + one agency-voiced `narrative` spoken only when a weight was
+  // actually reset. `days` sizes the history window the verdict is read over. Never client-facing.
+  getLeadPolicyGovernance:  (days)       => get(`/api/ai/lead-policy-governance${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),

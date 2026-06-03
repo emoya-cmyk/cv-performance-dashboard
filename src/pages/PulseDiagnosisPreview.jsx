@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -1563,6 +1563,257 @@ function LeadPolicyHealthPanelPreview({ data }) {
   )
 }
 
+/* ── 15c LEAD-POLICY GOVERNANCE — "the governor". The monitor above DIAGNOSES the loop;
+    this one ACTS on the verdict — the surgeon that consumes the stability read and applies the
+    safe per-lane corrective with no human in the path. It resets ONLY a thrashing lane to neutral
+    and keeps every earned lane live (where layer 14's blunt all-or-nothing revert would have lost
+    them); a lane pinned to its band or one the safety floor is masking it LOGS for a human, never
+    auto-widening anything. Snapshot-backed and reversible. A SIXTH disjoint vocabulary —
+    corrected / advised / clean / abstained — so it never blurs with the five it sits beneath.
+    Preview twin of <LeadPolicyGovernancePanel/>: reads a `data` prop, never fetches. ─────────── */
+const LEAD_GOV_TONE = {
+  corrected: { pill: 'border-violet-200 bg-violet-50 text-violet-700',    dot: 'bg-violet-500',  text: 'text-violet-500',  label: 'Corrected',  Icon: Wrench },
+  advised:   { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   text: 'text-amber-500',   label: 'Advisories', Icon: Scale },
+  clean:     { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Steady',     Icon: ShieldCheck },
+  abstained: { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining', Icon: Minus },
+}
+// neutralize is the ONE that changed a weight (the surgeon's cut, applied); hold/floor changed
+// nothing — they're logged for a human, never auto-applied.
+const LEAD_GOV_ACTION = {
+  neutralize:    { badge: 'border-violet-200 bg-violet-50 text-violet-600', text: 'text-violet-600', Icon: Scissors,    label: 'Reset',      changed: true },
+  hold_at_bound: { badge: 'border-amber-200 bg-amber-50 text-amber-600',    text: 'text-amber-600',  Icon: Gauge,       label: 'Held',       changed: false },
+  respect_floor: { badge: 'border-indigo-200 bg-indigo-50 text-indigo-600', text: 'text-indigo-600', Icon: ShieldCheck, label: 'Floor kept', changed: false },
+}
+const LEAD_GOV_RANK = { neutralize: 0, hold_at_bound: 1, respect_floor: 2 }
+function govStateReason(state) {
+  switch (state) {
+    case 'oscillating':    return 'was thrashing morning to morning'
+    case 'saturated_high': return 'pinned at the ceiling of its band'
+    case 'saturated_low':  return 'pinned at the floor of its band'
+    case 'floor_masked':   return 'the safety floor was masking an overcall'
+    default:               return state ? String(state).replace(/_/g, ' ') : 'flagged by the monitor'
+  }
+}
+function leadGovHeadline(status, governedStatus) {
+  switch (status) {
+    case 'corrected':
+      return governedStatus === 'tuned'
+        ? 'Reset the lane that was thrashing — the rest of the learned order stands'
+        : 'Reset the only thrashing lane — the order rides neutral until it settles'
+    case 'advised': return 'Nothing reset — held the pinned lanes and kept the floor for a human to weigh'
+    case 'clean':   return 'Nothing to correct — the tuning loop is steady this morning'
+    default:        return 'No trustworthy verdict to act on — the policy rides exactly as learned'
+  }
+}
+function LeadGovInterventionRowPreview({ intervention }) {
+  const meta = LEAD_GOV_ACTION[intervention?.action] || LEAD_GOV_ACTION.hold_at_bound
+  const Icon = meta.Icon
+  const fw = Number.isFinite(intervention?.from_weight) ? intervention.from_weight : 1
+  const tw = Number.isFinite(intervention?.to_weight) ? intervention.to_weight : fw
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={laneLabel(intervention?.lane)}>{laneLabel(intervention?.lane)}</div>
+        <span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed ${meta.badge}`}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0 text-[10px] font-medium text-slate-400 leading-tight">
+        {govStateReason(intervention?.state)}
+      </div>
+      <span className={`w-24 shrink-0 text-right text-[11px] font-black tabular-nums ${meta.text}`}>
+        {meta.changed
+          ? <>×{fw.toFixed(2)} <span className="text-slate-300">→</span> ×{tw.toFixed(2)}</>
+          : <>held ×{fw.toFixed(2)}</>}
+      </span>
+    </div>
+  )
+}
+
+// corrected-with-survivor: the thrashing lane snaps to neutral, the EARNED lanes ride untouched —
+// governed.status stays 'tuned' because a learned order still applies. This is the case layer 14's
+// blunt revert-everything would have got wrong.
+const GOV_CORRECTED_SURVIVOR = {
+  status: 'corrected',
+  verdict_status: 'unstable',
+  source_status: 'tuned',
+  governed: { status: 'tuned' },
+  interventions: [
+    { lane: 'worth_a_look', action: 'neutralize', state: 'oscillating', from_weight: 1.10, to_weight: 1.00, from_direction: 'promote', to_direction: 'neutral', reason: 'oscillation' },
+  ],
+  snapshot: { lanes: {
+    act_now:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: true },
+    verify:       { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: false },
+    worth_a_look: { weight: 1.10, direction: 'promote', adjusted: true,  safetyFloored: false },
+    monitor:      { weight: 0.95, direction: 'demote',  adjusted: true,  safetyFloored: false },
+    tailwind:     { weight: 1.15, direction: 'promote', adjusted: true,  safetyFloored: false },
+  } },
+  counts: { neutralized: 1, held: 0, floored_respected: 0, passed: 4 },
+  requested: { as_of: '2026-06-03', days: 6 },
+  narrative: 'Reset Worth a look to neutral — it flipped direction four times across the last six mornings, which is noise, not learning. Tailwind keeps its earned ×1.15 and the rest ride as learned; the pre-reset weights are kept for rollback.',
+}
+// corrected-sole-lane: the reset lane was the ONLY one carrying weight, so neutralising it drops the
+// adjusted count to zero — governed.status falls to 'idle' and the brief leads in default order.
+const GOV_CORRECTED_SOLE = {
+  status: 'corrected',
+  verdict_status: 'unstable',
+  source_status: 'tuned',
+  governed: { status: 'idle' },
+  interventions: [
+    { lane: 'verify', action: 'neutralize', state: 'oscillating', from_weight: 0.90, to_weight: 1.00, from_direction: 'demote', to_direction: 'neutral', reason: 'oscillation' },
+  ],
+  snapshot: { lanes: {
+    act_now:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: true },
+    verify:       { weight: 0.90, direction: 'demote',  adjusted: true,  safetyFloored: false },
+    worth_a_look: { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: false },
+    monitor:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: false },
+    tailwind:     { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: false },
+  } },
+  counts: { neutralized: 1, held: 0, floored_respected: 0, passed: 4 },
+  requested: { as_of: '2026-06-03', days: 6 },
+  narrative: 'Reset Verify to neutral — it was the only lane carrying weight and it was thrashing. With nothing else tuned, the brief leads in its default order until the loop re-earns a lift; the pre-reset weight is kept for rollback.',
+}
+// advised: nothing reset — a saturated lane HELD at its bound and a floor-masked lane RESPECTED,
+// both logged for a human, never auto-applied. The narrator stays silent on non-corrected verdicts,
+// so the headline carries the meaning.
+const GOV_ADVISED = {
+  status: 'advised',
+  verdict_status: 'constrained',
+  source_status: 'tuned',
+  governed: { status: 'tuned' },
+  interventions: [
+    { lane: 'tailwind', action: 'hold_at_bound', state: 'saturated_high', from_weight: 1.20, to_weight: 1.20, from_direction: 'promote', to_direction: 'promote', reason: 'saturation' },
+    { lane: 'act_now',  action: 'respect_floor', state: 'floor_masked',   from_weight: 1.00, to_weight: 1.00, from_direction: 'neutral', to_direction: 'neutral', reason: 'floor_mask' },
+  ],
+  snapshot: { lanes: {
+    act_now:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: true },
+    verify:       { weight: 1.05, direction: 'promote', adjusted: true,  safetyFloored: false },
+    worth_a_look: { weight: 1.10, direction: 'promote', adjusted: true,  safetyFloored: false },
+    monitor:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: false },
+    tailwind:     { weight: 1.20, direction: 'promote', adjusted: true,  safetyFloored: false },
+  } },
+  counts: { neutralized: 0, held: 1, floored_respected: 1, passed: 3 },
+  requested: { as_of: '2026-06-03', days: 6 },
+  narrative: '',
+}
+// clean: every lane learning cleanly — nothing touched, the empty-state ShieldCheck path.
+const GOV_CLEAN = {
+  status: 'clean',
+  verdict_status: 'stable',
+  source_status: 'tuned',
+  governed: { status: 'tuned' },
+  interventions: [],
+  snapshot: { lanes: {
+    act_now:      { weight: 1.00, direction: 'neutral', adjusted: false, safetyFloored: true },
+    verify:       { weight: 1.05, direction: 'promote', adjusted: true,  safetyFloored: false },
+    worth_a_look: { weight: 1.10, direction: 'promote', adjusted: true,  safetyFloored: false },
+    monitor:      { weight: 0.95, direction: 'demote',  adjusted: true,  safetyFloored: false },
+    tailwind:     { weight: 1.15, direction: 'promote', adjusted: true,  safetyFloored: false },
+  } },
+  counts: { neutralized: 0, held: 0, floored_respected: 0, passed: 5 },
+  requested: { as_of: '2026-06-03', days: 6 },
+  narrative: '',
+}
+function LeadPolicyGovernancePanelPreview({ data }) {
+  const st = data?.status || 'abstained'
+  const tone = LEAD_GOV_TONE[st] || LEAD_GOV_TONE.abstained
+  const HeadIcon = tone.Icon
+  const governedStatus = data?.governed?.status || 'idle'
+  const narrative = (data?.narrative || '').trim()
+  const headline = leadGovHeadline(st, governedStatus)
+  const windowUsed = data?.requested?.days || 6
+  const counts = data?.counts || {}
+  const interventions = Array.isArray(data?.interventions) ? data.interventions : []
+  const laneTotal = Object.keys(data?.snapshot?.lanes || {}).length
+  const tally = [
+    counts.neutralized > 0 ? `${counts.neutralized} reset to neutral` : null,
+    counts.held > 0 ? `${counts.held} held at bound` : null,
+    counts.floored_respected > 0 ? `${counts.floored_respected} floor-respected` : null,
+    counts.passed > 0 ? `${counts.passed} left untouched` : null,
+  ].filter(Boolean)
+  const ordered = interventions
+    .slice()
+    .sort((a, b) => (LEAD_GOV_RANK[a?.action] ?? 9) - (LEAD_GOV_RANK[b?.action] ?? 9))
+    .slice(0, 6)
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Stethoscope className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Lead-policy governance</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            What the loop did about the verdict · last {windowUsed} mornings
+          </p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        <div className="flex items-start gap-2">
+          <HeadIcon className={`w-4 h-4 shrink-0 mt-0.5 ${tone.text}`} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+            {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </div>
+        </div>
+
+        {st === 'corrected' && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-violet-100 bg-violet-50/50 px-2.5 py-2">
+            <Scissors className="w-3.5 h-3.5 text-violet-500 shrink-0 mt-0.5" />
+            <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
+              {governedStatus === 'tuned'
+                ? <><span className="font-semibold text-violet-700">A learned order still applies.</span> Only the thrashing lane snapped to neutral — the lanes that earned their lift ride untouched, where the blunt all-or-nothing revert would have lost them.</>
+                : <><span className="font-semibold text-violet-700">The order rides neutral for now.</span> The reset lane was the only one carrying weight, so the brief leads in its default order until the loop settles.</>}
+              {' '}The pre-governance weights are kept in the snapshot — every reset is reversible.
+            </p>
+          </div>
+        )}
+
+        {tally.length > 0 && (
+          <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+            {tally.join(' · ')} <span className="text-slate-300">across {laneTotal} {laneTotal === 1 ? 'lane' : 'lanes'}</span>
+          </p>
+        )}
+
+        {ordered.length > 0 ? (
+          <div className="mt-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">What the governor touched</p>
+              <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-violet-500" />reset</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500" />held</span>
+              </span>
+            </div>
+            <div className="space-y-2.5">
+              {ordered.map((iv, i) => (
+                <LeadGovInterventionRowPreview key={`${iv?.lane || 'lane'}-${i}`} intervention={iv} />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            {st === 'abstained'
+              ? 'No verdict to act on yet — the governor stays its hand until the loop can be judged.'
+              : 'Nothing needed correcting — every lane is learning cleanly.'}
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">The governor.</span> The monitor above diagnoses the loop; this <span className="font-semibold text-violet-600">acts</span> on the verdict — surgically, per lane, with no human in the path. It <span className="font-semibold text-violet-600">resets</span> only a thrashing lane to neutral and keeps every earned lane live; a lane <span className="font-semibold text-amber-600">pinned to its band</span> or one the <span className="font-semibold text-indigo-600">floor is protecting</span> it logs for a human rather than auto-widening anything. Idempotent, snapshot-backed, reversible. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -1772,6 +2023,64 @@ export default function PulseDiagnosisPreview() {
             The verdict is <span className="font-bold text-emerald-600">stable</span> and the recommendation is simply <span className="font-bold text-emerald-600">trust the loop</span>: no revert, no advisory, no human.
             That asymmetry is the point — <span className="font-bold text-slate-600">the watcher stays silent when the loop is fine and only speaks when it isn&rsquo;t</span>,
             which is exactly what lets the whole self-tuning stack <span className="font-bold text-indigo-600">run unattended</span>. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* ── 15c LEAD-POLICY GOVERNANCE — "the governor". 14c watches the loop and DIAGNOSES it;
+            this one CLOSES that loop — it consumes the verdict and autonomously applies the safe
+            per-lane corrective with no human in the path. The headline case is the one a blunt
+            revert-everything gets wrong: reset ONLY the thrashing lane and keep every EARNED lane
+            live. Saturation and floor-masking it logs for a human, never auto-widening the band.
+            A SIXTH disjoint vocabulary — corrected / advised / clean / abstained. Four instances:
+            corrected-with-survivor (a learned order survives), corrected-sole-lane (rides neutral),
+            advised (held + floor-kept, nothing reset), and clean (nothing to touch). ──────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy governance · corrected, learned order survives</p>
+          <LeadPolicyGovernancePanelPreview data={GOV_CORRECTED_SURVIVOR} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The verdict said one lane was thrashing, so the governor <span className="font-bold text-violet-600">acted on it</span> — autonomously, no human in the path.{' '}
+            <span className="font-bold text-violet-600">Worth a look</span> flipped direction across the week, so it <span className="font-bold text-violet-600">snaps to neutral</span>{' '}
+            (<Scissors className="inline w-3 h-3 text-violet-500 align-text-bottom" /> ×1.10 → ×1.00). But <span className="font-bold text-emerald-600">Tailwind kept its earned ×1.15</span> —
+            this is the case layer 14&rsquo;s <span className="font-bold text-slate-600">blunt revert-everything would have got wrong</span>, throwing away a genuinely learned lift to quiet one noisy lane.
+            The governor is a <span className="font-bold text-violet-600">surgeon, not a sledgehammer</span>: it cuts the one lane and <span className="font-bold text-slate-600">keeps the rest of the order</span>, so governed status stays{' '}
+            <span className="font-bold text-emerald-600">tuned</span>. Every reset is <span className="font-bold text-slate-600">snapshot-backed and reversible</span>. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* second instance — the reset lane was the ONLY one carrying weight, so the order rides neutral */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy governance · corrected, order rides neutral</p>
+          <LeadPolicyGovernancePanelPreview data={GOV_CORRECTED_SOLE} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The same surgical reset, but here the thrashing <span className="font-bold text-violet-600">Verify</span> lane was the <span className="font-bold text-slate-600">only one carrying weight</span>.
+            Neutralising it drops the tuned count to zero, so governed status honestly falls to <span className="font-bold text-slate-500">idle</span> and the brief simply{' '}
+            <span className="font-bold text-slate-600">leads in its default order</span> until the loop re-earns a lift — no pretending a learned order still applies when it doesn&rsquo;t.
+            The distinction from the case above is the whole point: the governor reports <span className="font-bold text-slate-600">tuned vs. idle truthfully</span>, never inflating its own footprint. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* third instance — nothing reset; a saturated lane HELD and a floor-masked lane RESPECTED, both logged for a human */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy governance · advised, nothing auto-applied</p>
+          <LeadPolicyGovernancePanelPreview data={GOV_ADVISED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The asymmetry that makes this <span className="font-bold text-indigo-600">safe to run unattended</span>: the governor only ever auto-applies <span className="font-bold text-violet-600">one</span> move — resetting a thrashing lane.
+            Everything else it <span className="font-bold text-amber-600">logs and leaves</span>. Here <span className="font-bold text-emerald-600">Tailwind</span> is pinned at the ceiling of its band, so it&rsquo;s{' '}
+            <span className="font-bold text-amber-600">held</span> (<Gauge className="inline w-3 h-3 text-amber-500 align-text-bottom" />) — surfaced for a human, never auto-widened — and <span className="font-bold text-indigo-600">Act now</span>{' '}
+            shows a real overcall the safety floor is masking, so the floor is <span className="font-bold text-indigo-600">kept</span> (<ShieldCheck className="inline w-3 h-3 text-indigo-500 align-text-bottom" />) rather than quietly lifted.
+            <span className="font-bold text-slate-600">Nothing was reset</span>; the verdict is an advisory for a human to weigh. A loud system would widen bounds on its own — this one knows the difference between <span className="italic">act</span> and <span className="italic">flag</span>. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* fourth instance — the calm morning: every lane learning cleanly, nothing to touch */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Lead-policy governance · clean</p>
+          <LeadPolicyGovernancePanelPreview data={GOV_CLEAN} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The governor on a <span className="font-bold text-emerald-600">healthy morning</span>: the loop is steady, every tuned lane is learning cleanly, and so it{' '}
+            <span className="font-bold text-emerald-600">does nothing</span> — five lanes left untouched, no cut, no advisory. Like the monitor above it, the governor{' '}
+            <span className="font-bold text-slate-600">stays silent when the loop is fine and only acts when it isn&rsquo;t</span>. That restraint is what earns it the right to run with{' '}
+            <span className="font-bold text-violet-600">no human in the path</span>: it touches the policy only on proof, and the proof here says leave it alone. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 

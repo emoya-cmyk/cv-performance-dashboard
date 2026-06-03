@@ -3,7 +3,7 @@ import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
-  Gauge, ShieldAlert, AlertOctagon, Wrench, Minus,
+  Gauge, ShieldAlert, AlertOctagon, Wrench, Minus, Scissors, Stethoscope,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -196,6 +196,14 @@ export default function Intelligence() {
           overcall the safety floor is masking. Oscillation self-reverts to neutral; the rest are
           surfaced for a human. Sits directly under the loop it audits. USE_API-gated. */}
       {USE_API && <LeadPolicyHealthPanel />}
+
+      {/* lead-policy GOVERNANCE — "the governor" (15c). The stability panel above DIAGNOSES the
+          tuning loop; this reads GET /api/ai/lead-policy-governance (agency-only) and shows what the
+          loop DID about it — the surgeon that consumed the verdict and reset only the thrashing lane
+          while keeping every earned one live. Closes the operator gate layer 14 left open: no human
+          reads a chip and decides — the safe corrective applies itself, snapshot-backed and
+          reversible. Sits directly under the monitor whose verdict it acts on. USE_API-gated. */}
+      {USE_API && <LeadPolicyGovernancePanel />}
 
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
@@ -1584,6 +1592,236 @@ function LeadPolicyHealthPanel() {
       <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
         <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
           <span className="font-semibold text-slate-500">Watch the watcher.</span> The lead-policy loop tunes itself each morning; this reads its last {windowUsed} weights per lane and flags the failure one snapshot hides — a lane <span className="font-semibold text-rose-600">oscillating</span> on noise, one <span className="font-semibold text-amber-600">pinned to its band</span>, or a real overcall the <span className="font-semibold text-orange-600">safety floor is masking</span>. Oscillation reverts that lane to neutral on its own; the rest are surfaced for a human. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+// ── lead-policy GOVERNANCE (15c) — "the governor" ────────────────────────────
+// A vocabulary DISJOINT from both the policy grade and the stability verdict: the panel above
+// DIAGNOSES the loop; this grades what the loop DID about it. Governance status → the header pill,
+// its dot, its headline-icon tint. (briefLeadPolicyGovernor.js statuses.)
+const LEAD_GOV_TONE = {
+  corrected: { pill: 'border-violet-200 bg-violet-50 text-violet-700',    dot: 'bg-violet-500',  text: 'text-violet-500',  label: 'Corrected',  Icon: Wrench },
+  advised:   { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   text: 'text-amber-500',   label: 'Advisories', Icon: Scale },
+  clean:     { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Steady',     Icon: ShieldCheck },
+  abstained: { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Abstaining', Icon: Minus },
+}
+
+// intervention action → the badge it wears in the per-lane list + the colour of its weight delta.
+// neutralize is the ONE that changed a weight (the surgeon's cut, applied — no human in the path);
+// hold_at_bound and respect_floor changed nothing — they're logged for a human, never auto-applied.
+const LEAD_GOV_ACTION = {
+  neutralize:    { badge: 'border-violet-200 bg-violet-50 text-violet-600', text: 'text-violet-600', Icon: Scissors,    label: 'Reset',      changed: true },
+  hold_at_bound: { badge: 'border-amber-200 bg-amber-50 text-amber-600',    text: 'text-amber-600',  Icon: Gauge,       label: 'Held',       changed: false },
+  respect_floor: { badge: 'border-indigo-200 bg-indigo-50 text-indigo-600', text: 'text-indigo-600', Icon: ShieldCheck, label: 'Floor kept', changed: false },
+}
+
+// most-consequential first — a reset weight outranks an advisory hold outranks a floor-respect.
+const LEAD_GOV_RANK = { neutralize: 0, hold_at_bound: 1, respect_floor: 2 }
+
+// the verdict STATE that triggered each intervention, in plain words — the reason the governor acted.
+function govStateReason(state) {
+  switch (state) {
+    case 'oscillating':    return 'was thrashing morning to morning'
+    case 'saturated_high': return 'pinned at the ceiling of its band'
+    case 'saturated_low':  return 'pinned at the floor of its band'
+    case 'floor_masked':   return 'the safety floor was masking an overcall'
+    default:               return state ? String(state).replace(/_/g, ' ') : 'flagged by the monitor'
+  }
+}
+
+function leadGovHeadline(status, governedStatus) {
+  switch (status) {
+    case 'corrected':
+      return governedStatus === 'tuned'
+        ? 'Reset the lane that was thrashing — the rest of the learned order stands'
+        : 'Reset the only thrashing lane — the order rides neutral until it settles'
+    case 'advised': return 'Nothing reset — held the pinned lanes and kept the floor for a human to weigh'
+    case 'clean':   return 'Nothing to correct — the tuning loop is steady this morning'
+    default:        return 'No trustworthy verdict to act on — the policy rides exactly as learned'
+  }
+}
+
+// One intervention row: lane name over its action badge · the reason the governor acted · the weight
+// transition. neutralize shows the cut (×1.10 → ×1.00); hold/floor show the weight it left untouched.
+// Action drives the badge tone, the icon, and the delta colour — one lane, read across in one line.
+function LeadGovInterventionRow({ intervention }) {
+  const meta = LEAD_GOV_ACTION[intervention?.action] || LEAD_GOV_ACTION.hold_at_bound
+  const Icon = meta.Icon
+  const fw = Number.isFinite(intervention?.from_weight) ? intervention.from_weight : 1
+  const tw = Number.isFinite(intervention?.to_weight) ? intervention.to_weight : fw
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={laneLabel(intervention?.lane)}>{laneLabel(intervention?.lane)}</div>
+        <span className={cn('mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed', meta.badge)}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0 text-[10px] font-medium text-slate-400 leading-tight">
+        {govStateReason(intervention?.state)}
+      </div>
+      <span className={cn('w-24 shrink-0 text-right text-[11px] font-black tabular-nums', meta.text)}>
+        {meta.changed
+          ? <>×{fw.toFixed(2)} <span className="text-slate-300">→</span> ×{tw.toFixed(2)}</>
+          : <>held ×{fw.toFixed(2)}</>}
+      </span>
+    </div>
+  )
+}
+
+// The self-governing controller that closes the loop the stability monitor opens — "the governor"
+// (layer 15). Reads GET /api/ai/lead-policy-governance (agency-only): not a diagnosis but the ACTION
+// taken on it — the surgeon that consumes the stability verdict and autonomously applies the safe
+// per-lane corrective. It neutralises ONLY a thrashing lane and keeps every earned lane live (so a
+// learned order can still apply where layer 14's blunt revert would have lost it); saturation and
+// floor-masking it logs for a human, never auto-widening the band. Every reset is snapshot-backed
+// and reversible. Never client-facing — the whole governance machinery stays behind the agency wall.
+function LeadPolicyGovernancePanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [gov, setGov] = useState(null)
+  const [error, setError] = useState('')
+
+  const fetchGov = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const g = await api.getLeadPolicyGovernance()
+      setGov(g); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load policy governance'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchGov() }, [fetchGov])
+
+  const st = gov?.status || 'abstained'
+  const tone = LEAD_GOV_TONE[st] || LEAD_GOV_TONE.abstained
+  const HeadIcon = tone.Icon
+  const governedStatus = gov?.governed?.status || 'idle'
+  const narrative = (gov?.narrative || '').trim()
+  const headline = leadGovHeadline(st, governedStatus)
+  const windowUsed = gov?.requested?.days || 6
+  const counts = gov?.counts || {}
+  const interventions = Array.isArray(gov?.interventions) ? gov.interventions : []
+  const laneTotal = Object.keys(gov?.snapshot?.lanes || {}).length
+  // action tally, most-consequential first — only the non-zero buckets so a calm loop reads calm.
+  const tally = [
+    counts.neutralized > 0 ? `${counts.neutralized} reset to neutral` : null,
+    counts.held > 0 ? `${counts.held} held at bound` : null,
+    counts.floored_respected > 0 ? `${counts.floored_respected} floor-respected` : null,
+    counts.passed > 0 ? `${counts.passed} left untouched` : null,
+  ].filter(Boolean)
+  // interventions ranked by consequence (a reset outranks a hold outranks a floor-respect).
+  const ordered = interventions
+    .slice()
+    .sort((a, b) => (LEAD_GOV_RANK[a?.action] ?? 9) - (LEAD_GOV_RANK[b?.action] ?? 9))
+    .slice(0, 6)
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Stethoscope className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Lead-policy governance</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            What the loop did about the verdict · last {windowUsed} mornings
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Governance: ${st}`}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', tone.dot)} /> {tone.label}
+          </span>
+        )}
+        <button
+          onClick={fetchGov}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Reading what the governor did…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load policy governance'}</p>
+            <button onClick={fetchGov} className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition">
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && (
+          <>
+            <div className="flex items-start gap-2">
+              <HeadIcon className={cn('w-4 h-4 shrink-0 mt-0.5', tone.text)} />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+                {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+              </div>
+            </div>
+
+            {st === 'corrected' && (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-violet-100 bg-violet-50/50 px-2.5 py-2">
+                <Scissors className="w-3.5 h-3.5 text-violet-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
+                  {governedStatus === 'tuned'
+                    ? <><span className="font-semibold text-violet-700">A learned order still applies.</span> Only the thrashing lane snapped to neutral — the lanes that earned their lift ride untouched, where the blunt all-or-nothing revert would have lost them.</>
+                    : <><span className="font-semibold text-violet-700">The order rides neutral for now.</span> The reset lane was the only one carrying weight, so the brief leads in its default order until the loop settles.</>}
+                  {' '}The pre-governance weights are kept in the snapshot — every reset is reversible.
+                </p>
+              </div>
+            )}
+
+            {tally.length > 0 && (
+              <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+                {tally.join(' · ')} <span className="text-slate-300">across {laneTotal} {laneTotal === 1 ? 'lane' : 'lanes'}</span>
+              </p>
+            )}
+
+            {ordered.length > 0 ? (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">What the governor touched</p>
+                  <span className="inline-flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-slate-300">
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-violet-500" />reset</span>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-500" />held</span>
+                  </span>
+                </div>
+                <div className="space-y-2.5">
+                  {ordered.map((iv, i) => (
+                    <LeadGovInterventionRow key={`${iv?.lane || 'lane'}-${i}`} intervention={iv} />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+                <ShieldCheck className="w-4 h-4 shrink-0" />
+                {st === 'abstained'
+                  ? 'No verdict to act on yet — the governor stays its hand until the loop can be judged.'
+                  : 'Nothing needed correcting — every lane is learning cleanly.'}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">The governor.</span> The monitor above diagnoses the loop; this <span className="font-semibold text-violet-600">acts</span> on the verdict — surgically, per lane, with no human in the path. It <span className="font-semibold text-violet-600">resets</span> only a thrashing lane to neutral and keeps every earned lane live; a lane <span className="font-semibold text-amber-600">pinned to its band</span> or one the <span className="font-semibold text-indigo-600">floor is protecting</span> it logs for a human rather than auto-widening anything. Idempotent, snapshot-backed, reversible. Agency-only.
         </p>
       </div>
     </section>
