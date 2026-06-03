@@ -256,6 +256,14 @@ export default function Intelligence() {
           re-tuning for instability, stepping in when it won't settle." Agency-only, USE_API-gated. */}
       {USE_API && <BriefEmphasisControlHealthPanel />}
 
+      {/* adaptive gain (23c) — the CHRONIC schedule sitting over the governor (22): it reads a
+          HISTORY of the governor's verdicts and, when hunting RECURS across mornings, narrows how
+          far the controller may swing at all — then hands the full range back once the loop proves
+          it has converged. Sits right after the governor it schedules so the page reads "the governor
+          watching the re-tuning for instability" → "and the gain schedule narrowing the controller's
+          authority when that instability keeps recurring." Agency-only, USE_API-gated. */}
+      {USE_API && <BriefEmphasisControlTuningPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -2034,6 +2042,248 @@ function BriefEmphasisControlHealthPanel() {
           {' '}<span className="font-semibold text-rose-600">Hunting</span> (it keeps reversing) or <span className="font-semibold text-amber-600">pinned</span> (stuck on a rail) reads as unstable even when each move looked fine.
           {' '}When the tuner won’t settle the governor <span className="font-semibold text-rose-600">self-heals</span> — benching it to baseline — so a runaway loop can’t quietly distort the brief.
           {' '}Agency-only; a reader never sees their attention being tuned, let alone policed.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* ── adaptive gain — intel-v9 (23c): schedule the CONTROLLER'S authority from the governor's record ─
+   Layer 22 (above) is the ACUTE breaker — it watches the controller one window at a time and benches
+   it to baseline the moment it hunts. THIS is the CHRONIC gain-schedule sitting over that same
+   governor: it reads a HISTORY of 22's verdicts and, when hunting RECURS across mornings, narrows how
+   far the controller is allowed to swing AT ALL (reach < max_reach), then restores the full range
+   once the loop proves it has converged for a run of steady mornings. Reads
+   GET /api/ai/brief-emphasis-control-tuning, agency-only. The hero is the controller's AUTHORITY
+   ENVELOPE — its full structural swing range with the currently-allowed band filled inside: a
+   narrowing reads as the colored band shrinking toward base, a freeze as it collapsing onto base.
+   NON-CIRCULAR (load-bearing): the schedule is computed from the governor's read of the RAW
+   controller, never the narrowed one, so the breaker keeps grading an un-tuned loop; the only trace a
+   narrow leaves on a brief is a smaller breadth cap (a layer-19 projection). Speaks pure gain
+   vocabulary (reach / authority / detune) → rides NO serialized pack, recomputed only here, narrator
+   returns '' for clients (proven in 23d). Precedence: 22-acute-damp ▸ 23-chronic-narrow ▸ raw
+   controller. Sits right after the governor it schedules. Self-fetching, USE_API-gated, agency-only. */
+const CONTROL_TUNING_TONE = {
+  default:  { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: CheckCircle2, label: 'Full range', fill: 'fill-emerald-400', swatch: 'bg-emerald-400' },
+  detuned:  { pill: 'border-rose-200 bg-rose-50 text-rose-700',          icon: Scissors,     label: 'Narrowed',   fill: 'fill-rose-400',    swatch: 'bg-rose-400' },
+  holding:  { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: Gauge,        label: 'Holding',    fill: 'fill-amber-400',   swatch: 'bg-amber-400' },
+  restored: { pill: 'border-sky-200 bg-sky-50 text-sky-700',             icon: RotateCcw,    label: 'Restored',   fill: 'fill-sky-400',     swatch: 'bg-sky-400' },
+}
+
+// recommended_action → the self-heal lane, shown as a tile. reduce_authority (narrow) and
+// restore_authority (hand back) are the two autonomous moves the scheduler makes; hold_authority is
+// the hysteresis wait one notch below full; none is full-authority standing-by.
+const CONTROL_TUNING_ACTION = {
+  reduce_authority:  { label: 'Narrowing',   icon: Scissors,  cls: 'text-rose-700',  box: 'border-rose-200 bg-rose-50' },
+  hold_authority:    { label: 'Holding',     icon: Gauge,     cls: 'text-amber-700', box: 'border-amber-200 bg-amber-50' },
+  restore_authority: { label: 'Restoring',   icon: RotateCcw, cls: 'text-sky-700',   box: 'border-sky-200 bg-sky-50' },
+  none:              { label: 'Standing by', icon: Inbox,     cls: 'text-slate-400', box: 'border-slate-200 bg-slate-50' },
+}
+
+// reason → one plain clause for the calm states (the engaged states speak via the agency narrative /
+// banner). Kept free of machine tokens so it reads as prose on the agency surface.
+const CONTROL_TUNING_REASON = {
+  insufficient_history: 'Not enough governor mornings yet to schedule the controller’s range — it builds as the brief ships.',
+  no_intervention:      'The controller has stayed steady all window — it keeps its full swing range.',
+  awaiting_stability:   'The controller has stopped swinging but hasn’t proven it yet — its range stays trimmed a notch until it does.',
+  hunting_active:       'The controller kept over-correcting, so its swing range has been narrowed to settle it.',
+  stability_proven:     'The controller has proven steady again, so its full swing range was handed back.',
+}
+
+// The controller's AUTHORITY ENVELOPE: its full structural swing range [min..max] as the outer lane,
+// with the currently-allowed (gain-scheduled) band [effective.min..effective.max] filled inside it.
+// The slate showing past each end of the colored band is authority the tuner has surrendered while it
+// proves it can stop hunting; frozen (reach 0) collapses to a marker on base. Pure SVG, no deps —
+// mirrors ControlHealthTrack's footprint so the governor and its schedule read as siblings.
+function AuthorityBandTrack({ effective, bounds, tone }) {
+  const W = 320, H = 56, padX = 18
+  const innerW = W - padX * 2
+  const lo = Math.min(bounds.min, bounds.base, effective.min)
+  const hi = Math.max(bounds.max, bounds.base, effective.max)
+  const span = (hi - lo) || 1
+  const xFor = (v) => padX + ((v - lo) / span) * innerW
+  const laneY = 12, laneH = 16, r = 8
+  const fX1 = xFor(bounds.min), fX2 = xFor(bounds.max)
+  const eX1 = xFor(effective.min), eX2 = xFor(effective.max)
+  const baseX = xFor(bounds.base)
+  const frozen = (effective.max - effective.min) < 0.01
+  const label = (x, t) => (
+    <text x={x} y={laneY + laneH + 14} textAnchor="middle" className="fill-slate-400 text-[9px] font-bold">{t}</text>
+  )
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img"
+         aria-label="Controller authority envelope: full swing range with the currently-allowed band filled inside">
+      <rect x={fX1} y={laneY} width={Math.max(0, fX2 - fX1)} height={laneH} rx={r} className="fill-slate-100" />
+      {frozen
+        ? <circle cx={baseX} cy={laneY + laneH / 2} r={5} className={cn(tone.fill, 'stroke-white')} strokeWidth="1.5" />
+        : <rect x={eX1} y={laneY} width={Math.max(0, eX2 - eX1)} height={laneH} rx={r} className={tone.fill} />}
+      <line x1={baseX} x2={baseX} y1={laneY - 4} y2={laneY + laneH + 4} className="stroke-slate-400" strokeWidth="1.5" strokeDasharray="3 2" />
+      {label(xFor(bounds.min), bounds.min)}
+      {label(baseX, 'base')}
+      {label(xFor(bounds.max), bounds.max)}
+    </svg>
+  )
+}
+
+function BriefEmphasisControlTuningPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [tune, setTune]     = useState(null)
+  const [error, setError]   = useState('')
+
+  const fetchTune = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const t = await api.getBriefEmphasisControlTuning()
+      setTune(t); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load adaptive gain'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchTune() }, [fetchTune])
+
+  const vstatus    = tune?.status || 'default'
+  const tone       = CONTROL_TUNING_TONE[vstatus] || CONTROL_TUNING_TONE.default
+  const StatusIcon = tone.icon
+  const action     = tune?.recommended_action || 'none'
+  const act        = CONTROL_TUNING_ACTION[action] || CONTROL_TUNING_ACTION.none
+  const ActIcon    = act.icon
+  const bounds     = tune?.bounds || { min: 1, base: 3, max: 5 }
+  const effective  = tune?.effective_bounds || bounds
+  const reach      = Number.isFinite(Number(tune?.reach)) ? Number(tune.reach) : 0
+  const maxReach   = Number.isFinite(Number(tune?.max_reach)) ? Number(tune.max_reach) : 0
+  const gov        = tune?.governor || {}
+  const huntCount  = Number.isFinite(Number(gov.hunt_count)) ? Number(gov.hunt_count) : 0
+  const windowN    = tune?.requested?.days || tune?.window_used || 6
+  const narrative  = (tune?.narrative || '').trim()
+  const reasonLine = CONTROL_TUNING_REASON[tune?.reason] || ''
+  const building   = vstatus === 'default' && tune?.reason === 'insufficient_history'
+  const frozen     = reach <= 0
+  const narrowing  = action === 'reduce_authority'
+  const restoring  = action === 'restore_authority'
+  const showBanner = narrowing || restoring
+  const subLine    = showBanner ? '' : (narrative || reasonLine)
+  const hasChart   = !building && maxReach > 0
+  const pillLabel  = vstatus === 'detuned' ? (frozen ? 'Frozen' : 'Narrowed') : tone.label
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <SlidersHorizontal className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Adaptive gain</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Scheduling the controller’s authority from the governor’s record · trailing {windowN} mornings
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Adaptive gain: ${vstatus}`}>
+            <StatusIcon className="w-3 h-3" /> {pillLabel}
+          </span>
+        )}
+        <button
+          onClick={fetchTune}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Reading the governor’s record…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load adaptive gain'}</p>
+            <button
+              onClick={fetchTune}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && building && (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{reasonLine || 'Not enough governor mornings yet to schedule the controller’s range — it builds as the brief ships.'}</p>
+          </div>
+        )}
+
+        {status === 'done' && !building && (
+          <>
+            {narrowing && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5">
+                <Scissors className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-rose-700 leading-relaxed">
+                  {frozen
+                    ? 'Adaptive gain — the controller kept over-correcting morning after morning, so it’s been pinned to its baseline breadth until it stops swinging.'
+                    : 'Adaptive gain — the controller kept over-correcting, so the range it’s allowed to swing was narrowed for tomorrow’s brief.'}
+                </p>
+              </div>
+            )}
+
+            {restoring && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5">
+                <RotateCcw className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-sky-700 leading-relaxed">
+                  The controller has proven steady again for a run of mornings, so its full swing range was handed back.
+                </p>
+              </div>
+            )}
+
+            {hasChart && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 pt-3 pb-2">
+                <AuthorityBandTrack effective={effective} bounds={bounds} tone={tone} />
+                <div className="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+                  <span className="inline-flex items-center gap-1"><span className={cn('w-2 h-2 rounded-full', tone.swatch)} /> allowed swing</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-200" /> full range</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-slate-400" /> base</span>
+                </div>
+              </div>
+            )}
+
+            <div className={cn('grid grid-cols-3 gap-1.5', hasChart && 'mt-3')}>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Reach</p>
+                <p className={cn('mt-1 text-2xl font-black tabular-nums leading-none', vstatus === 'detuned' ? 'text-rose-700' : vstatus === 'restored' ? 'text-sky-700' : 'text-slate-900')}>{reach}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">of {maxReach} rows</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Hunts</p>
+                <p className={cn('mt-1 text-2xl font-black tabular-nums leading-none', huntCount > 0 ? 'text-rose-700' : 'text-slate-900')}>{huntCount}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">of {windowN} mornings</p>
+              </div>
+              <div className={cn('rounded-xl border-2 px-2 py-2.5 text-center flex flex-col items-center justify-center', act.box)}>
+                <p className={cn('text-[9px] font-bold uppercase tracking-wide', act.cls)}>Action</p>
+                <ActIcon className={cn('mt-1.5 w-5 h-5', act.cls)} />
+                <p className={cn('mt-1 text-[10px] font-bold', act.cls)}>{act.label}</p>
+              </div>
+            </div>
+
+            {subLine && (
+              <p className="mt-3 text-sm text-slate-600 leading-relaxed">{subLine}</p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">gain schedule</span> over the governor — it reads the governor’s record across mornings, not one window at a time.
+          {' '}When hunting <span className="font-semibold text-rose-600">recurs</span>, it <span className="font-semibold text-rose-600">narrows</span> how far the controller may swing at all (a smaller breadth cap), and <span className="font-semibold text-sky-600">hands the full range back</span> once the loop proves it has converged.
+          {' '}It schedules off the governor’s read of the <span className="font-semibold text-slate-500">raw</span> controller, so the breaker still grades an un-tuned loop.
+          {' '}Agency-only; a reader never sees their attention being tuned, governed, or gain-scheduled.
         </p>
       </div>
     </section>

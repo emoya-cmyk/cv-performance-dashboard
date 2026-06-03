@@ -291,6 +291,19 @@ export const api = {
   // (empty unless the controller is genuinely unstable, saturating, or proven-stable). `days` sizes
   // the history window (mornings to assess, clamp 2..14); absent → the monitor's own default window.
   getBriefEmphasisControlHealth: (days)  => get(`/api/ai/brief-emphasis-control-health${days ? `?days=${days}` : ''}`),
+  // ADAPTIVE GAIN (intel-v9 23, agency-only — the CHRONIC schedule over the acute governor above).
+  // getBriefEmphasisControlHealth watches the controller one window at a time and benches it the
+  // moment it hunts; THIS reads a HISTORY of those governor verdicts and, when hunting RECURS across
+  // mornings, narrows how far the controller is allowed to swing at all (reach < max_reach), then
+  // restores the full range once the loop proves it has converged. Returns the
+  // tuneEmphasisControlAuthority shape ({ status, recommended_action, reach, max_reach, authority,
+  // effective_bounds, bounds, window_used, history_len, as_of, governor, reason }) plus echoed
+  // `requested` + one agency-voiced `narrative` (empty unless the range was just narrowed or handed
+  // back). Computed from the governor's read of the RAW controller (never the narrowed one), so the
+  // breaker keeps grading an un-tuned loop — the only trace a narrow leaves on a brief is a smaller
+  // breadth cap (a layer-19 projection); this verdict rides NO serialized pack. `days` sizes the
+  // governor history (mornings to schedule over, clamp 2..14); absent → the scheduler's own default.
+  getBriefEmphasisControlTuning: (days)  => get(`/api/ai/brief-emphasis-control-tuning${days ? `?days=${days}` : ''}`),
   // CONSUMER OWN-VOTE (intel-v8 18d, client-scoped — the OUTWARD half of the engagement loop).
   // getBriefEngagement above reads the whole-book aggregate (agency-only, 403 for a client token);
   // THESE two are all a client ever touches — their own 👍/👎 on their own morning brief, one day.

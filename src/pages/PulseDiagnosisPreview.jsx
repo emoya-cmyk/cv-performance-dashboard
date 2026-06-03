@@ -2990,6 +2990,203 @@ function BriefEmphasisControlHealthPanelPreview({ data }) {
   )
 }
 
+// ── adaptive gain (23c) — the CHRONIC gain-schedule sitting OVER the governor (22). The governor is an
+// acute per-window breaker; THIS reads a HISTORY of the governor's verdicts and, when hunting RECURS
+// across mornings, narrows how far the controller may swing AT ALL (a smaller breadth cap), restoring the
+// full range once the loop proves it has converged. Hero = the controller's AUTHORITY ENVELOPE: its full
+// structural swing range [min..max] as the outer slate lane, with the currently-allowed (gain-scheduled)
+// band filled inside — slate past each end is authority surrendered while it proves it can stop hunting;
+// frozen (reach 0) collapses to a marker on base. NON-CIRCULAR (load-bearing): it schedules off the
+// governor's read of the RAW controller, so the breaker still grades an un-tuned loop; the only trace a
+// narrow leaves on a brief is a different cap integer. PRIVACY: pure tuning vocabulary, rides NO
+// serialized pack, narrator '' for the client (proven in 23d). Static 'detuned' render off a fixture
+// whose governor record keeps hunting, so the schedule is actively narrowing.
+const CONTROL_TUNING_TONE_PV = {
+  default:  { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: CheckCircle2, label: 'Full range', fill: 'fill-emerald-400', swatch: 'bg-emerald-400' },
+  detuned:  { pill: 'border-rose-200 bg-rose-50 text-rose-700',          icon: Scissors,     label: 'Narrowed',   fill: 'fill-rose-400',    swatch: 'bg-rose-400' },
+  holding:  { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: Gauge,        label: 'Holding',    fill: 'fill-amber-400',   swatch: 'bg-amber-400' },
+  restored: { pill: 'border-sky-200 bg-sky-50 text-sky-700',             icon: RotateCcw,    label: 'Restored',   fill: 'fill-sky-400',     swatch: 'bg-sky-400' },
+}
+const CONTROL_TUNING_ACTION_PV = {
+  reduce_authority:  { label: 'Narrowing',   icon: Scissors,  cls: 'text-rose-700',  box: 'border-rose-200 bg-rose-50' },
+  hold_authority:    { label: 'Holding',     icon: Gauge,     cls: 'text-amber-700', box: 'border-amber-200 bg-amber-50' },
+  restore_authority: { label: 'Restoring',   icon: RotateCcw, cls: 'text-sky-700',   box: 'border-sky-200 bg-sky-50' },
+  none:              { label: 'Standing by', icon: Inbox,     cls: 'text-slate-400', box: 'border-slate-200 bg-slate-50' },
+}
+const CONTROL_TUNING_REASON_PV = {
+  insufficient_history: 'Not enough governor mornings yet to schedule the controller’s range — it builds as the brief ships.',
+  no_intervention:      'The controller has stayed steady all window — it keeps its full swing range.',
+  awaiting_stability:   'The controller has stopped swinging but hasn’t proven it yet — its range stays trimmed a notch until it does.',
+  hunting_active:       'The controller kept over-correcting, so its swing range has been narrowed to settle it.',
+  stability_proven:     'The controller has proven steady again, so its full swing range was handed back.',
+}
+
+function AuthorityBandTrackPv({ effective, bounds, tone }) {
+  const W = 320, H = 56, padX = 18
+  const innerW = W - padX * 2
+  const lo = Math.min(bounds.min, bounds.base, effective.min)
+  const hi = Math.max(bounds.max, bounds.base, effective.max)
+  const span = (hi - lo) || 1
+  const xFor = (v) => padX + ((v - lo) / span) * innerW
+  const laneY = 12, laneH = 16, r = 8
+  const fX1 = xFor(bounds.min), fX2 = xFor(bounds.max)
+  const eX1 = xFor(effective.min), eX2 = xFor(effective.max)
+  const baseX = xFor(bounds.base)
+  const frozen = (effective.max - effective.min) < 0.01
+  const label = (x, t) => (
+    <text x={x} y={laneY + laneH + 14} textAnchor="middle" className="fill-slate-400 text-[9px] font-bold">{t}</text>
+  )
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img"
+         aria-label="Controller authority envelope: full swing range with the currently-allowed band filled inside">
+      <rect x={fX1} y={laneY} width={Math.max(0, fX2 - fX1)} height={laneH} rx={r} className="fill-slate-100" />
+      {frozen
+        ? <circle cx={baseX} cy={laneY + laneH / 2} r={5} className={`${tone.fill} stroke-white`} strokeWidth="1.5" />
+        : <rect x={eX1} y={laneY} width={Math.max(0, eX2 - eX1)} height={laneH} rx={r} className={tone.fill} />}
+      <line x1={baseX} x2={baseX} y1={laneY - 4} y2={laneY + laneH + 4} className="stroke-slate-400" strokeWidth="1.5" strokeDasharray="3 2" />
+      {label(xFor(bounds.min), bounds.min)}
+      {label(baseX, 'base')}
+      {label(xFor(bounds.max), bounds.max)}
+    </svg>
+  )
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-emphasis-control-tuning. A DETUNED window: the governor's record
+// keeps coming back unstable (three hunting mornings across six, the latest still unstable), so the
+// schedule narrows the controller's reach from 2 rows to 1 — the effective band tightens from [1..5] to
+// [2..4] around base. narrative is verbatim narrateEmphasisControlTuning(verdict, { audience: 'agency' }).
+const BRIEF_EMPHASIS_CONTROL_TUNING = {
+  status: 'detuned',
+  recommended_action: 'reduce_authority',
+  reach: 1, max_reach: 2,
+  authority: 'reduced',
+  effective_bounds: { min: 2, max: 4, base: 3 },
+  bounds: { min: 1, max: 5, base: 3 },
+  window_used: 6, history_len: 6, as_of: '2026-06-03',
+  governor: {
+    last_status: 'unstable', last_reason: 'control_hunting',
+    trailing_unstable: 1, trailing_stable: 0,
+    hunt_count: 3, saw_hunting: true,
+    statuses: ['stable', 'unstable', 'stable', 'unstable', 'settling', 'unstable'],
+  },
+  reason: 'hunting_active',
+  requested: { as_of: null, days: 6 },
+  narrative: "The brief's breadth tuning has been over-correcting, so the range it's allowed to move has been narrowed to settle it down.",
+}
+
+function BriefEmphasisControlTuningPanelPreview({ data }) {
+  const vstatus    = data.status || 'default'
+  const tone       = CONTROL_TUNING_TONE_PV[vstatus] || CONTROL_TUNING_TONE_PV.default
+  const StatusIcon = tone.icon
+  const action     = data.recommended_action || 'none'
+  const act        = CONTROL_TUNING_ACTION_PV[action] || CONTROL_TUNING_ACTION_PV.none
+  const ActIcon    = act.icon
+  const bounds     = data.bounds || { min: 1, base: 3, max: 5 }
+  const effective  = data.effective_bounds || bounds
+  const reach      = Number.isFinite(Number(data.reach)) ? Number(data.reach) : 0
+  const maxReach   = Number.isFinite(Number(data.max_reach)) ? Number(data.max_reach) : 0
+  const gov        = data.governor || {}
+  const huntCount  = Number.isFinite(Number(gov.hunt_count)) ? Number(gov.hunt_count) : 0
+  const windowN    = data.requested?.days || data.window_used || 6
+  const narrative  = (data.narrative || '').trim()
+  const reasonLine = CONTROL_TUNING_REASON_PV[data.reason] || ''
+  const building   = vstatus === 'default' && data.reason === 'insufficient_history'
+  const frozen     = reach <= 0
+  const narrowing  = action === 'reduce_authority'
+  const restoring  = action === 'restore_authority'
+  const showBanner = narrowing || restoring
+  const subLine    = showBanner ? '' : (narrative || reasonLine)
+  const hasChart   = !building && maxReach > 0
+  const pillLabel  = vstatus === 'detuned' ? (frozen ? 'Frozen' : 'Narrowed') : tone.label
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <SlidersHorizontal className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Adaptive gain</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">Scheduling the controller’s authority from the governor’s record · trailing {windowN} mornings</p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`} title={`Adaptive gain: ${vstatus}`}>
+          <StatusIcon className="w-3 h-3" /> {pillLabel}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        {building ? (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{reasonLine || 'Not enough governor mornings yet to schedule the controller’s range — it builds as the brief ships.'}</p>
+          </div>
+        ) : (
+          <>
+            {narrowing && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5">
+                <Scissors className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-rose-700 leading-relaxed">
+                  {frozen
+                    ? 'Adaptive gain — the controller kept over-correcting morning after morning, so it’s been pinned to its baseline breadth until it stops swinging.'
+                    : 'Adaptive gain — the controller kept over-correcting, so the range it’s allowed to swing was narrowed for tomorrow’s brief.'}
+                </p>
+              </div>
+            )}
+
+            {restoring && (
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5">
+                <RotateCcw className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
+                <p className="text-[12px] font-semibold text-sky-700 leading-relaxed">
+                  The controller has proven steady again for a run of mornings, so its full swing range was handed back.
+                </p>
+              </div>
+            )}
+
+            {hasChart && (
+              <div className="rounded-xl border border-slate-100 bg-slate-50/60 px-3 pt-3 pb-2">
+                <AuthorityBandTrackPv effective={effective} bounds={bounds} tone={tone} />
+                <div className="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+                  <span className="inline-flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${tone.swatch}`} /> allowed swing</span>
+                  <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-200" /> full range</span>
+                  <span className="inline-flex items-center gap-1"><span className="inline-block w-3 border-t border-dashed border-slate-400" /> base</span>
+                </div>
+              </div>
+            )}
+
+            <div className={`grid grid-cols-3 gap-1.5 ${hasChart ? 'mt-3' : ''}`}>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Reach</p>
+                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${vstatus === 'detuned' ? 'text-rose-700' : vstatus === 'restored' ? 'text-sky-700' : 'text-slate-900'}`}>{reach}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">of {maxReach} rows</p>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Hunts</p>
+                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${huntCount > 0 ? 'text-rose-700' : 'text-slate-900'}`}>{huntCount}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">of {windowN} mornings</p>
+              </div>
+              <div className={`rounded-xl border-2 px-2 py-2.5 text-center flex flex-col items-center justify-center ${act.box}`}>
+                <p className={`text-[9px] font-bold uppercase tracking-wide ${act.cls}`}>Action</p>
+                <ActIcon className={`mt-1.5 w-5 h-5 ${act.cls}`} />
+                <p className={`mt-1 text-[10px] font-bold ${act.cls}`}>{act.label}</p>
+              </div>
+            </div>
+
+            {subLine && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{subLine}</p>}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The <span className="font-semibold text-slate-500">gain schedule</span> over the governor — it reads the governor’s record across mornings, not one window at a time.
+          {' '}When hunting <span className="font-semibold text-rose-600">recurs</span>, it <span className="font-semibold text-rose-600">narrows</span> how far the controller may swing at all (a smaller breadth cap), and <span className="font-semibold text-sky-600">hands the full range back</span> once the loop proves it has converged.
+          {' '}It schedules off the governor’s read of the <span className="font-semibold text-slate-500">raw</span> controller, so the breaker still grades an un-tuned loop.
+          {' '}Agency-only; a reader never sees their attention being tuned, governed, or gain-scheduled.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3370,6 +3567,14 @@ export default function PulseDiagnosisPreview() {
           <BriefEmphasisControlHealthPanelPreview data={BRIEF_EMPHASIS_CONTROL_HEALTH} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The rung that <span className="font-bold text-slate-600">polices the loop the panel above closed</span>. The controller re-tunes the brief's breadth from its own grade — a tidy closed loop — but a closed loop can still <span className="font-bold text-slate-600">misbehave over time</span>: any single move can look reasonable while the <span className="font-bold text-slate-600">trajectory</span> is pathological. This is the <span className="font-bold text-slate-600">governor</span>: it stops judging moves one at a time and watches the controller's cap <span className="font-bold text-slate-600">across mornings</span>. Two failure shapes, neither visible from a single step — <span className="font-bold text-rose-600">hunting</span> (the tuner keeps reversing itself, widen-trim-widen-trim, chasing a setting it never holds) and <span className="font-bold text-amber-600">saturation</span> (it jams against a rail for days, out of room to correct). Here the cap zig-zags <span className="tabular-nums">4→3→5→3→4→3</span> — <span className="font-bold text-rose-600">four reversals in six mornings</span>, a textbook hunt — so the governor calls it <span className="font-bold text-rose-600">unstable</span> and <span className="font-bold text-rose-600">self-heals</span>: it benches the tuner to its baseline for tomorrow's brief, trading a thrashing setting for a steady one until the loop earns its autonomy back. The self-tuning re-tuning itself — and now <span className="font-bold text-slate-600">a governor watching that re-tuning</span>, intervening only when it won't settle. Endpoint-only and honest by abstention: too few mornings and it stays quiet; calm and it stands by. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned, let alone policed.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Adaptive gain · the gain-schedule narrowing a chronically-hunting controller</p>
+          <BriefEmphasisControlTuningPanelPreview data={BRIEF_EMPHASIS_CONTROL_TUNING} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung that <span className="font-bold text-slate-600">tunes the governor's own grip</span>. The governor above is an <span className="font-bold text-slate-600">acute</span> breaker — it watches one trailing window and, the morning the controller is hunting, benches it to baseline. But a breaker that fires the same morning over and over is itself a signal: the controller isn't just hunting <span className="italic">today</span>, it's hunting <span className="font-bold text-slate-600">chronically</span>. This is the <span className="font-bold text-slate-600">gain schedule</span>: it reads a <span className="font-bold text-slate-600">history</span> of the governor's verdicts and, when hunting <span className="font-bold text-rose-600">recurs</span> across mornings, it narrows how far the controller is allowed to swing <span className="italic">at all</span> — a smaller breadth <span className="font-bold text-slate-600">reach</span> — then <span className="font-bold text-sky-600">hands the full range back</span> the moment the loop strings together a clean run. Here the governor's record keeps coming back unstable — <span className="font-bold text-rose-600">three hunting mornings in six</span>, the latest still unstable — so the schedule trims the controller's reach from <span className="tabular-nums">two rows to one</span>: tomorrow it may move the cap only between <span className="tabular-nums">2 and 4</span>, not the full <span className="tabular-nums">1–5</span>, until it proves it can hold. The self-tuning re-tuned, the re-tuning governed — and now <span className="font-bold text-slate-600">the governor's grip itself scheduled</span> from its track record. <span className="font-bold text-slate-600">Non-circular by design</span>: it schedules off the governor's read of the <span className="font-bold text-slate-600">raw</span> controller, so the breaker keeps grading an un-tuned loop and the narrowing can't hide its own cause; the only mark it leaves on a brief is a quieter cap integer. Endpoint-only and honest by abstention: too few governor mornings and it stays at full range; a calm record and it never trims. <span className="font-bold text-slate-600">Agency-only</span> — a reader never sees their attention being tuned, governed, or gain-scheduled.
           </p>
         </div>
 
