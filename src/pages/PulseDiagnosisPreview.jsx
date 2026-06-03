@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -2042,6 +2042,247 @@ function LeadPolicyGovernanceAuditPanelPreview({ data }) {
   )
 }
 
+/* ── 17c LEAD-POLICY GOVERNANCE REMEDIATION — "the remediator". The auditor above only RECOMMENDS:
+    when its safe reset keeps not sticking it escalates a lane to a human and stops there. THIS rung
+    turns that escalation into a concrete, bounded, reversible STRUCTURAL fix — staged for one agency
+    click. Three remedies, escalating: widen the dead-band (gentlest — stop noise from moving the lane),
+    tighten the weight bounds (deeper — the swing can't carry as far), pin to neutral (last resort —
+    stop tuning the lane at all). It never tunes a lane down past safety: the emergency lane (act_now)
+    is abstained by design, and a lane that has spent every safe structural move is handed to a person
+    rather than forced further. An EIGHTH disjoint vocabulary — remediation_proposed / steady /
+    abstained at the roll-up, widen / tighten / pin per proposal — so it never blurs with the seven it
+    sits beneath. Closes SENSE→ACT→AUDIT→REMEDIATE: the auditor says "this reset isn't curing", the
+    remediator answers "here is the structural change that will — one click, fully reversible". Preview
+    twin of <LeadPolicyGovernanceRemediationPanel/>: reads a `data` prop, never fetches. Three
+    instances: proposed (mixed-rung fixes + lanes set aside by safety / at-ceiling), steady (auditor
+    settling on its own, nothing to restructure), abstained (no audited escalation to act on yet). ── */
+const LEAD_REMEDY_TONE = {
+  remediation_proposed: { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   text: 'text-amber-500',   label: 'Fix staged', Icon: Wrench },
+  steady:               { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-500', label: 'Holding',    Icon: ShieldCheck },
+  abstained:            { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   text: 'text-slate-400',   label: 'Waiting',    Icon: Clock },
+}
+// per-proposal REMEDY → its badge + the escalating rung. widen is the gentlest first move, pin the last
+// resort. The colour gradient (sky → amber → rose) reads as "how hard a structural change this is".
+const LEAD_REMEDY_KIND = {
+  widen_neutral_band: { badge: 'border-sky-200 bg-sky-50 text-sky-700',      text: 'text-sky-600',   Icon: SlidersHorizontal, label: 'Widen dead-band', rung: 1 },
+  tighten_bounds:     { badge: 'border-amber-200 bg-amber-50 text-amber-700', text: 'text-amber-600', Icon: Scissors,          label: 'Tighten bounds',  rung: 2 },
+  pin_neutral:        { badge: 'border-rose-200 bg-rose-50 text-rose-700',    text: 'text-rose-600',  Icon: Crosshair,         label: 'Pin to neutral',  rung: 3 },
+}
+// the two principled refusals — a lane the remediator will NOT restructure. safety_floored is good
+// (the emergency lane, protected by design); at_ceiling is the genuine human hand-off (moves spent).
+const LEAD_REMEDY_ABSTAIN = {
+  safety_floored: { badge: 'border-emerald-200 bg-emerald-50 text-emerald-600', text: 'text-emerald-600', Icon: ShieldCheck,  label: 'Safety floor', reason: 'the emergency lane — never tuned down, by design' },
+  at_ceiling:     { badge: 'border-rose-200 bg-rose-50 text-rose-600',          text: 'text-rose-600',    Icon: AlertOctagon, label: 'At ceiling',   reason: 'every safe structural move is spent — a person decides the next step' },
+}
+const remedyN2 = (x) => (Number.isFinite(Number(x)) ? Number(x).toFixed(2) : '—')
+function remedyDelta(p) {
+  if (!p || typeof p !== 'object') return ''
+  switch (p.remedy) {
+    case 'widen_neutral_band': return `dead-band ${remedyN2(p.from?.neutral_band)} → ${remedyN2(p.to?.neutral_band)}`
+    case 'tighten_bounds':     return `bounds ${remedyN2(p.from?.bounds?.min)}–${remedyN2(p.from?.bounds?.max)} → ${remedyN2(p.to?.bounds?.min)}–${remedyN2(p.to?.bounds?.max)}`
+    case 'pin_neutral':        return 'adaptive → pinned at 1.0'
+    default:                   return ''
+  }
+}
+function leadRemedyHeadline(status, count) {
+  switch (status) {
+    case 'remediation_proposed':
+      return count === 1
+        ? 'A structural fix is staged — one click, fully reversible'
+        : `${count} structural fixes are staged — one click each, fully reversible`
+    case 'steady': return "Nothing to remediate — the governor's resets are holding on their own"
+    default:       return 'Not enough audited history yet to stage a structural fix'
+  }
+}
+function RemediationProposalCardPreview({ proposal }) {
+  const meta = LEAD_REMEDY_KIND[proposal?.remedy] || LEAD_REMEDY_KIND.widen_neutral_band
+  const Icon = meta.Icon
+  const severity = Number.isFinite(proposal?.severity) ? proposal.severity : 1
+  const delta = remedyDelta(proposal)
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/40 px-3 py-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${meta.badge}`}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+        <span className="text-[11px] font-bold text-slate-700 truncate" title={laneLabel(proposal?.lane)}>{laneLabel(proposal?.lane)}</span>
+        <span className={`ml-auto text-[11px] font-black tabular-nums ${meta.text}`}>{severity}× running</span>
+      </div>
+      {delta && (
+        <div className="mt-1.5">
+          <code className="inline-block rounded bg-white border border-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 tabular-nums">{delta}</code>
+        </div>
+      )}
+      {proposal?.rationale && (
+        <p className="mt-1.5 text-[11px] font-medium text-slate-400 leading-relaxed">{proposal.rationale}</p>
+      )}
+      <div className="mt-2 flex items-center gap-2 flex-wrap">
+        <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 border border-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-600">
+          <Wrench className="w-2.5 h-2.5" /> One click to apply
+        </span>
+        {proposal?.reversible && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-600">
+            <RotateCcw className="w-2.5 h-2.5" /> Reversible
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+function RemediationAbstainRowPreview({ lane, reason }) {
+  const meta = LEAD_REMEDY_ABSTAIN[reason] || LEAD_REMEDY_ABSTAIN.at_ceiling
+  const Icon = meta.Icon
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="w-24 shrink-0 min-w-0">
+        <div className="text-[11px] font-semibold text-slate-600 leading-tight truncate" title={laneLabel(lane)}>{laneLabel(lane)}</div>
+        <span className={`mt-0.5 inline-flex items-center gap-1 rounded-full border px-1.5 text-[9px] font-bold uppercase tracking-wide leading-relaxed ${meta.badge}`}>
+          <Icon className="w-2.5 h-2.5" /> {meta.label}
+        </span>
+      </div>
+      <div className="flex-1 min-w-0 text-[10px] font-medium text-slate-400 leading-tight">{meta.reason}</div>
+    </div>
+  )
+}
+
+// proposed: the headline case. The auditor escalated worth_a_look (churning); the remediator answers
+// with three escalating, reversible structural fixes (widen → tighten → pin), and sets two lanes
+// aside untouched — act_now by safety (the emergency lane) and monitor at its structural ceiling.
+const REMEDY_PROPOSED = {
+  status: 'remediation_proposed',
+  proposals: [
+    { lane: 'worth_a_look', remedy: 'widen_neutral_band', severity: 3, from: { neutral_band: 0 }, to: { neutral_band: 0.1 }, reversible: true, rationale: 're-reset for 3 mornings running — widen its dead-band so day-to-day noise stops moving it' },
+    { lane: 'verify',       remedy: 'tighten_bounds',     severity: 2, from: { bounds: { min: 0.8, max: 1.2 } }, to: { bounds: { min: 0.9, max: 1.1 } }, reversible: true, rationale: 'dead-band not enough after 2 mornings — tighten its weight bounds toward neutral' },
+    { lane: 'tailwind',     remedy: 'pin_neutral',        severity: 1, from: { pinned: false }, to: { pinned: true }, reversible: true, rationale: 'tightened bounds still churning after 1 morning — pin the lane to neutral and stop tuning it' },
+  ],
+  abstained_lanes: [
+    { lane: 'act_now', reason: 'safety_floored' },
+    { lane: 'monitor', reason: 'at_ceiling' },
+  ],
+  lanes_considered: ['worth_a_look', 'verify', 'tailwind', 'act_now', 'monitor'],
+  as_of: '2026-06-03',
+  remediation_reason: 'audit_escalation',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: 'Our lead-selection auto-tuner keeps fighting worth a look (plus 2 other lanes flagged) — recommend we widen its dead-band so day-to-day noise stops moving it; staged for one click and fully reversible.',
+}
+// steady: the auditor is not escalating anything — its safe resets are sticking on their own — so
+// there is no structural change to stage. The remediator stays out of the way.
+const REMEDY_STEADY = {
+  status: 'steady',
+  proposals: [],
+  abstained_lanes: [],
+  lanes_considered: [],
+  as_of: '2026-06-03',
+  remediation_reason: 'audit_not_escalating',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: '',
+}
+// abstained: the auditor itself has too little governed history to judge, so it hands nothing down —
+// and the remediator refuses to invent a structural change without an audited escalation behind it.
+const REMEDY_ABSTAINED = {
+  status: 'abstained',
+  proposals: [],
+  abstained_lanes: [],
+  lanes_considered: [],
+  as_of: '2026-06-03',
+  remediation_reason: 'audit_unusable',
+  requested: { as_of: '2026-06-03', days: 8 },
+  narrative: '',
+}
+function LeadPolicyGovernanceRemediationPanelPreview({ data }) {
+  const st = data?.status || 'abstained'
+  const tone = LEAD_REMEDY_TONE[st] || LEAD_REMEDY_TONE.abstained
+  const HeadIcon = tone.Icon
+  const proposals = Array.isArray(data?.proposals) ? data.proposals : []
+  const abstained = Array.isArray(data?.abstained_lanes) ? data.abstained_lanes : []
+  const narrative = (data?.narrative || '').trim()
+  const windowUsed = data?.requested?.days || 8
+  const headline = leadRemedyHeadline(st, proposals.length || 1)
+  const kinds = {
+    widen: proposals.filter((p) => p?.remedy === 'widen_neutral_band').length,
+    tighten: proposals.filter((p) => p?.remedy === 'tighten_bounds').length,
+    pin: proposals.filter((p) => p?.remedy === 'pin_neutral').length,
+  }
+  const tally = [
+    kinds.widen > 0 ? `${kinds.widen} widen` : null,
+    kinds.tighten > 0 ? `${kinds.tighten} tighten` : null,
+    kinds.pin > 0 ? `${kinds.pin} pin` : null,
+  ].filter(Boolean)
+  const ordered = [...proposals]
+    .sort((a, b) => (Number(b?.severity) || 0) - (Number(a?.severity) || 0))
+    .slice(0, 6)
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Wrench className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Governance remediation</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            The structural fix behind the auditor&rsquo;s escalation · last {windowUsed} mornings
+          </p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        <div className="flex items-start gap-2">
+          <HeadIcon className={`w-4 h-4 shrink-0 mt-0.5 ${tone.text}`} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800 leading-snug">{headline}</p>
+            {narrative && <p className="mt-1 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+          </div>
+        </div>
+
+        {tally.length > 0 && (
+          <p className="mt-3 text-[11px] font-semibold text-slate-400 leading-relaxed">
+            {tally.join(' · ')}
+            {abstained.length > 0 && <span className="text-slate-300"> · {abstained.length} set aside</span>}
+          </p>
+        )}
+
+        {ordered.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Staged structural fixes, most-pressing first</p>
+            <div className="space-y-2">
+              {ordered.map((p, i) => (
+                <RemediationProposalCardPreview key={`${p?.lane}-${i}`} proposal={p} />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2 mt-1">
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            {st === 'abstained'
+              ? 'No audited escalation to act on yet — the remediator waits until the auditor hands it a recurring lane.'
+              : 'Nothing to restructure — the auditor is settling its lanes without a structural change.'}
+          </div>
+        )}
+
+        {abstained.length > 0 && (
+          <div className="mt-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Set aside, not remediated</p>
+            <div className="space-y-2.5">
+              {abstained.slice(0, 6).map((a, i) => (
+                <RemediationAbstainRowPreview key={`${a?.lane}-${i}`} lane={a?.lane} reason={a?.reason} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          <span className="font-semibold text-slate-500">The remediator.</span> The auditor escalates a lane it cannot cure with a safe reset; this turns that escalation into a concrete <span className="font-semibold text-slate-600">structural change</span> — widen the dead-band, tighten the bounds, or pin the lane to neutral — <span className="font-semibold text-emerald-600">staged for one click and fully reversible</span>. It never tunes the emergency lane down, and a lane that has spent every safe move is <span className="font-semibold text-rose-600">handed to a person</span> rather than forced further. Proposes, never auto-applies. Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -2357,6 +2598,39 @@ export default function PulseDiagnosisPreview() {
             The auditor <span className="font-bold text-slate-600">refusing to grade on one data point</span>. With a single governed morning on record it <span className="font-bold text-slate-600">declines to judge</span> the governor&rsquo;s track record at all —{' '}
             a verdict needs a <span className="font-bold text-slate-600">pattern</span>, and one morning is not one. It waits, the same way the monitor and governor below it wait for enough history before they move.{' '}
             <span className="font-bold text-emerald-600">Abstention is a feature</span>: the stack would rather say &ldquo;not yet&rdquo; than escalate on noise. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        {/* ── 17c GOVERNANCE REMEDIATION — "the remediator" (layer 17), agency-only, sits ABOVE the
+            auditor it answers. The auditor only escalates — says "this safe reset is not curing" and
+            stops; this rung turns that escalation into a concrete, bounded, reversible STRUCTURAL fix
+            staged for one agency click. Three escalating remedies (widen the dead-band → tighten the
+            bounds → pin to neutral), and two principled refusals (the emergency lane is never tuned
+            down; a lane that has spent every safe move goes to a person). Closes the whole loop
+            SENSE→ACT→AUDIT→REMEDIATE — the machine's own structural self-repair, with a human holding
+            the apply switch. Three states: proposed (the fix), steady (nothing to restructure),
+            abstained (no audited escalation behind it yet). ──────────────────────────────────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance remediation · fixes staged — the auditor&rsquo;s escalation, made actionable</p>
+          <LeadPolicyGovernanceRemediationPanelPreview data={REMEDY_PROPOSED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The remediator&rsquo;s headline case. The auditor flagged <span className="font-bold text-rose-600">worth a look</span> as churning; this answers with concrete, reversible structural change instead of one more reset that will not stick — and it escalates the move to fit the history: a <span className="font-bold text-sky-600">gentle widen</span> first, a <span className="font-bold text-amber-600">deeper tighten</span> where the dead-band was not enough, a <span className="font-bold text-rose-600">last-resort pin</span> where the softer moves are already spent — each one click, each undoable. <span className="font-bold text-emerald-600">act_now</span> is set aside untouched (the emergency lane is <span className="font-bold text-slate-600">never tuned down, by design</span>) and <span className="font-bold text-rose-600">monitor</span> has spent every safe structural move, so it goes to a person rather than being forced further. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance remediation · steady — the auditor settling on its own, nothing to restructure</p>
+          <LeadPolicyGovernanceRemediationPanelPreview data={REMEDY_STEADY} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The remediator <span className="font-bold text-emerald-600">staying out of the way</span>. The auditor is not escalating anything — its safe resets are sticking on their own — so there is <span className="font-bold text-slate-600">no structural change to stage</span>. Like every rung in this stack, the remediator <span className="font-bold text-emerald-600">acts only on a standing escalation</span>; a quiet auditor means a quiet remediator, and the structural toolkit waits, untouched, until it is genuinely needed. <span className="font-bold text-slate-600">Agency-only</span>.
+          </p>
+        </div>
+
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Governance remediation · abstained — no audited escalation to act on yet</p>
+          <LeadPolicyGovernanceRemediationPanelPreview data={REMEDY_ABSTAINED} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The remediator <span className="font-bold text-slate-600">declining to restructure on thin evidence</span>. The auditor itself has too little governed history to judge, so it hands nothing down — and the remediator <span className="font-bold text-slate-600">refuses to invent a structural change</span> without an audited escalation behind it. It waits, the same way every layer beneath it waits for a pattern before it moves. <span className="font-bold text-emerald-600">Abstention is a feature</span>: no escalation, no surgery. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 
