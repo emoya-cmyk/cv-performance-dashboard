@@ -166,6 +166,13 @@ export default function Intelligence() {
           agency read here), and degrades to a calm template when no AI key is configured. */}
       {USE_API && <MorningBriefPanel />}
 
+      {/* narration reliability — the morning brief grading its OWN history: how often the
+          analyst actually wrote in its own words vs fell back to the safe template (GET
+          /api/ai/brief-health, agency-only). Kept orthogonal to the grounded-trust chip —
+          "is it still writing?" ≠ "are the numbers still verified?". USE_API-gated like the
+          brief above; sits right under it because it's that capstone's self-audit. */}
+      {USE_API && <BriefHealthPanel />}
+
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
           findings are one motion apart. Hidden until the synthesis read returns rows. */}
@@ -537,6 +544,207 @@ function MorningBriefPanel() {
         <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
           Written by the analyst from the same verified daily pulse the rest of this page is scored from.
           {brief?.model ? ` Model ${brief.model}.` : ''}
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* ── narration reliability — intel-v7 (10c): the AI grading its OWN brief history ───
+   MorningBriefPanel above SPEAKS; this is the panel that says how often it has actually
+   been able to. It reads GET /api/ai/brief-health (agency-only — the prose, the model ids,
+   and the fallback streak are internal calibration a client must never see) over a PURE
+   history audit: listRecentBriefs never regenerates, so reading this can neither mint an
+   LLM call nor perturb the history it grades. It reports the ONE honest narration signal —
+   coverage, how often the analyst wrote the brief in its own words vs degraded to the safe
+   template — and keeps it rigidly ORTHOGONAL to the grounded-trust chip beside it: "is the
+   AI still writing?" is a different question from "are the numbers still verified?", and the
+   template fallback is grounded-BY-CONSTRUCTION, so the two are never conflated. Quiet
+   mornings (a calm book with nothing worth narrating) are template-by-DESIGN and never count
+   as misses. Self-fetching, agency-only, USE_API-gated like every other read on this page. */
+const BRIEF_HEALTH_TONE = {
+  rich:            { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', bar: 'bg-emerald-500', label: 'Writing freely' },
+  mixed:           { pill: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-500',     bar: 'bg-sky-500',     label: 'Mostly its words' },
+  'template-only': { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   bar: 'bg-amber-400',   label: 'On the template' },
+  quiet:           { pill: 'border-slate-200 bg-slate-50 text-slate-600',       dot: 'bg-slate-400',   bar: 'bg-slate-300',   label: 'Quiet stretch' },
+  'no-data':       { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   bar: 'bg-slate-200',   label: 'No briefs yet' },
+}
+
+// One audience bucket → a compact coverage view for the by-surface split. A null pct means
+// nothing in the window was worth narrating — a quiet surface is template-by-design, never a
+// miss — so it renders as a calm "Quiet", distinct from a real 0% (everything fell back).
+function briefCoverageView(b) {
+  if (!b || !b.total) return { state: 'none',  pct: null, narrated: 0, narratable: 0 }
+  if (!b.narratable)  return { state: 'quiet', pct: null, narrated: 0, narratable: 0 }
+  return { state: 'graded', pct: b.coverage != null ? Math.round(b.coverage * 100) : 0, narrated: b.narrated || 0, narratable: b.narratable }
+}
+
+function BriefHealthStat({ label, view }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 truncate">{label}</p>
+      {view.state === 'none' ? (
+        <p className="text-sm font-black text-slate-300 leading-tight">—</p>
+      ) : view.state === 'quiet' ? (
+        <p className="text-sm font-bold text-slate-400 leading-tight">Quiet</p>
+      ) : (
+        <p className="text-sm font-black text-slate-800 leading-tight tabular-nums">
+          {view.pct}%
+          <span className="ml-1 text-[11px] font-semibold text-slate-400">{view.narrated}/{view.narratable}</span>
+        </p>
+      )}
+    </div>
+  )
+}
+
+function BriefHealthPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [health, setHealth] = useState(null)
+  const [error, setError]   = useState('')
+
+  const fetchHealth = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const h = await api.getBriefHealth()
+      setHealth(h); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load narration health'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchHealth() }, [fetchHealth])
+
+  const o           = health?.overall || null
+  const tone        = BRIEF_HEALTH_TONE[o?.health] || BRIEF_HEALTH_TONE['no-data']
+  const mode        = !o || o.total === 0 || o.health === 'no-data' ? 'no-data'
+                    : o.health === 'quiet' ? 'quiet' : 'graded'
+  const coveragePct = o && o.coverage != null ? Math.round(o.coverage * 100) : 0
+  const groundedPct = health?.grounded_rate != null ? Math.round(health.grounded_rate * 100) : null
+  const streak      = o?.streak_fellback || 0
+  const narrative   = (health?.narrative || '').trim()
+  const days        = health?.requested?.days || 30
+  const win         = health?.window || null
+  const models      = o && mode === 'graded'
+    ? Object.entries(o.models || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`).join(' · ')
+    : ''
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Narration reliability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            How often the analyst writes the brief itself · last {days} days
+          </p>
+        </div>
+        {status === 'done' && o && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Narration health: ${o.health}`}>
+            <span className={cn('w-1.5 h-1.5 rounded-full', tone.dot)} /> {tone.label}
+          </span>
+        )}
+        {status === 'done' && groundedPct != null && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700"
+            title="Orthogonal to narration: every brief — even one on the safe template — stays grounded to verified numbers. The trust invariant, not the writing rate."
+          >
+            <ShieldCheck className="w-3 h-3" /> {groundedPct}% grounded
+          </span>
+        )}
+        <button
+          onClick={fetchHealth}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Grading the brief history…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load narration health'}</p>
+            <button
+              onClick={fetchHealth}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && mode === 'no-data' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-2">
+            <Inbox className="w-4 h-4 shrink-0" /> No morning briefs in the last {days} days yet — this fills in as the daily brief runs.
+          </div>
+        )}
+
+        {status === 'done' && mode !== 'no-data' && (
+          <>
+            <div className="flex items-end gap-3 flex-wrap">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">
+                  {mode === 'quiet' ? '—' : `${coveragePct}%`}
+                </span>
+                <span className="text-[11px] font-bold text-slate-400">
+                  {mode === 'quiet' ? 'nothing to narrate' : 'narrated'}
+                </span>
+              </div>
+              {mode === 'graded' && (
+                <p className="text-[11px] font-semibold text-slate-400 pb-0.5">
+                  {o.narrated} of {o.narratable} {o.narratable === 1 ? 'brief' : 'briefs'} worth narrating, in its own words
+                </p>
+              )}
+            </div>
+
+            {mode === 'graded' && (
+              <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                <div className={cn('h-full rounded-full transition-all', tone.bar)} style={{ width: `${coveragePct}%` }} />
+              </div>
+            )}
+
+            {narrative && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+
+            {mode === 'quiet' && !narrative && (
+              <p className="mt-2 text-sm text-slate-400">Nothing needed narrating in this window — a calm book uses the safe template by design.</p>
+            )}
+
+            <div className="mt-3 flex items-center gap-4 rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2">
+              <BriefHealthStat label="Client briefs"   view={briefCoverageView(health?.by_audience?.client)} />
+              <span className="w-px self-stretch bg-slate-200" />
+              <BriefHealthStat label="Portfolio brief" view={briefCoverageView(health?.by_audience?.agency)} />
+            </div>
+
+            {models && (
+              <p className="mt-2 text-[10px] font-medium text-slate-400 truncate" title="Which model wrote the narratable briefs (template = deterministic fallback)">
+                Writers: {models}
+              </p>
+            )}
+
+            {streak >= 2 && (
+              <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600">
+                <AlertTriangle className="w-3 h-3 shrink-0" /> The last {streak} briefs fell back to the template — the narration model may be unreachable.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Two separate questions, never conflated: <span className="font-semibold text-slate-500">coverage</span> is how often the analyst wrote in its own words (vs the safe template);
+          {' '}<span className="font-semibold text-emerald-600">grounded</span> is whether every number stayed verified — which holds even when it falls back. Quiet mornings count against neither.
+          {win && win.from ? ` Graded over ${o.total} ${o.total === 1 ? 'brief' : 'briefs'}, ${win.from} – ${win.to}.` : ''} Agency-only.
         </p>
       </div>
     </section>

@@ -746,6 +746,119 @@ function ClientMorningBriefPreview({ brief }) {
   )
 }
 
+// ── narration reliability (10c) — copied from Intelligence.jsx BriefHealthPanel (cn → template
+// strings so the preview matches). The morning brief grading its OWN history: coverage (how often the
+// analyst wrote in its own words vs the safe template) shown rigidly ORTHOGONAL to the grounded-trust
+// chip. Agency-only — the model ids and fallback streak are internal calibration a client never sees.
+const BRIEF_HEALTH_TONE = {
+  rich:            { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', bar: 'bg-emerald-500', label: 'Writing freely' },
+  mixed:           { pill: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-500',     bar: 'bg-sky-500',     label: 'Mostly its words' },
+  'template-only': { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   bar: 'bg-amber-400',   label: 'On the template' },
+  quiet:           { pill: 'border-slate-200 bg-slate-50 text-slate-600',       dot: 'bg-slate-400',   bar: 'bg-slate-300',   label: 'Quiet stretch' },
+  'no-data':       { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   bar: 'bg-slate-200',   label: 'No briefs yet' },
+}
+function briefCoverageView(b) {
+  if (!b || !b.total) return { state: 'none',  pct: null, narrated: 0, narratable: 0 }
+  if (!b.narratable)  return { state: 'quiet', pct: null, narrated: 0, narratable: 0 }
+  return { state: 'graded', pct: b.coverage != null ? Math.round(b.coverage * 100) : 0, narrated: b.narrated || 0, narratable: b.narratable }
+}
+function BriefHealthStatPreview({ label, view }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 truncate">{label}</p>
+      {view.state === 'none'
+        ? <p className="text-sm font-black text-slate-300 leading-tight">—</p>
+        : view.state === 'quiet'
+        ? <p className="text-sm font-bold text-slate-400 leading-tight">Quiet</p>
+        : <p className="text-sm font-black text-slate-800 leading-tight tabular-nums">{view.pct}%<span className="ml-1 text-[11px] font-semibold text-slate-400">{view.narrated}/{view.narratable}</span></p>}
+    </div>
+  )
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-health over a 7-day history: 9 of 12 briefs were worth
+// narrating, the model wrote 7 of those (mixed — just under the 0.8 "rich" bar) and fell back twice,
+// the two most recent so the streak heads-up fires; every row still grounded. Client briefs sit at the
+// rich line (4/5); the portfolio brief is mixed (3/4). narrative is verbatim narrateBriefHealth(overall).
+const BRIEF_HEALTH = {
+  total: 12,
+  window: { from: '2026-05-27', to: '2026-06-02', days: 7 },
+  grounded_rate: 1,
+  all_grounded: true,
+  overall: {
+    total: 12, narratable: 9, quiet: 3, narrated: 7, fellback: 2,
+    coverage: 0.7778, models: { 'claude-opus-4-7': 7, template: 2 },
+    latest: { as_of: '2026-06-02', state: 'fellback' }, streak_fellback: 2, health: 'mixed',
+  },
+  by_audience: {
+    client: { total: 7, narratable: 5, quiet: 2, narrated: 4, fellback: 1, coverage: 0.8,  models: { 'claude-opus-4-7': 4, template: 1 }, latest: { as_of: '2026-06-02', state: 'narrated' }, streak_fellback: 0, health: 'rich' },
+    agency: { total: 5, narratable: 4, quiet: 1, narrated: 3, fellback: 1, coverage: 0.75, models: { 'claude-opus-4-7': 3, template: 1 }, latest: { as_of: '2026-06-02', state: 'fellback' }, streak_fellback: 1, health: 'mixed' },
+  },
+  requested: { as_of: null, days: 30 },
+  narrative:
+    'The AI wrote 7 of 9 morning briefs in its own words; the rest used the safe template — all grounded to your verified numbers. ' +
+    'Heads up — the last 2 fell back to the template.',
+}
+
+function BriefHealthPanelPreview({ data }) {
+  const o = data.overall
+  const tone = BRIEF_HEALTH_TONE[o.health] || BRIEF_HEALTH_TONE['no-data']
+  const coveragePct = o.coverage != null ? Math.round(o.coverage * 100) : 0
+  const groundedPct = data.grounded_rate != null ? Math.round(data.grounded_rate * 100) : null
+  const models = Object.entries(o.models || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ×${n}`).join(' · ')
+  return (
+    <div className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Narration reliability</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">How often the analyst writes the brief itself · last {data.requested.days} days</p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+        {groundedPct != null && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+            <ShieldCheck className="w-3 h-3" /> {groundedPct}% grounded
+          </span>
+        )}
+      </div>
+      <div className="px-4 py-4">
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">{coveragePct}%</span>
+            <span className="text-[11px] font-bold text-slate-400">narrated</span>
+          </div>
+          <p className="text-[11px] font-semibold text-slate-400 pb-0.5">{o.narrated} of {o.narratable} briefs worth narrating, in its own words</p>
+        </div>
+        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+          <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${coveragePct}%` }} />
+        </div>
+        <p className="mt-3 text-sm text-slate-600 leading-relaxed">{data.narrative}</p>
+        <div className="mt-3 flex items-center gap-4 rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2">
+          <BriefHealthStatPreview label="Client briefs"   view={briefCoverageView(data.by_audience.client)} />
+          <span className="w-px self-stretch bg-slate-200" />
+          <BriefHealthStatPreview label="Portfolio brief" view={briefCoverageView(data.by_audience.agency)} />
+        </div>
+        {models && <p className="mt-2 text-[10px] font-medium text-slate-400 truncate">Writers: {models}</p>}
+        {o.streak_fellback >= 2 && (
+          <p className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-600">
+            <AlertTriangle className="w-3 h-3 shrink-0" /> The last {o.streak_fellback} briefs fell back to the template — the narration model may be unreachable.
+          </p>
+        )}
+      </div>
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          Two separate questions, never conflated: <span className="font-semibold text-slate-500">coverage</span> is how often the analyst wrote in its own words (vs the safe template);
+          {' '}<span className="font-semibold text-emerald-600">grounded</span> is whether every number stayed verified — which holds even when it falls back. Quiet mornings count against neither.
+          {` Graded over ${o.total} briefs, ${data.window.from} – ${data.window.to}.`} Agency-only.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -810,6 +923,26 @@ export default function PulseDiagnosisPreview() {
             names the one thing to watch (<span className="font-bold text-amber-600">revenue, −24%</span>) with the same 3-day continuity, and
             nods at the one metric beneath it — yet shows <span className="font-bold text-slate-600">no peer, no severity, no z, no model name,
             no confidence, no badge, and no regenerate</span>. Posture speaks only as &ldquo;Worth a look.&rdquo;
+          </p>
+        </div>
+
+        {/* ── NARRATION RELIABILITY — the agency self-audit of the morning brief (layer 10c),
+            full width. The brief grading its OWN history: how often the analyst actually wrote in
+            its own words vs fell back to the safe template — kept rigidly orthogonal to the
+            grounded-trust chip. Pure read (listRecentBriefs never regenerates), agency-only: model
+            ids and the fallback streak are internal calibration the client never sees. ─────────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Narration reliability</p>
+          <BriefHealthPanelPreview data={BRIEF_HEALTH} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The capstone&rsquo;s self-grade: every other layer in this chain grades itself, so the most visible one does too. It reads the stored
+            brief HISTORY and reports the one honest narration signal — <span className="font-bold text-sky-600">coverage</span>, how often the model
+            wrote the brief in its own words (here <span className="font-bold text-sky-600">78%</span>, just under the &ldquo;writing freely&rdquo; bar) vs
+            degraded to the deterministic template — while keeping it rigidly separate from{' '}
+            <span className="font-bold text-emerald-600">grounded</span>: the template fallback is grounded-by-construction, so &ldquo;is the AI still
+            writing?&rdquo; can never be confused with &ldquo;are the numbers still verified?&rdquo; A two-in-a-row fallback trips an early-warning, and quiet
+            mornings (nothing worth narrating) never count as misses. <span className="font-bold text-slate-600">Agency-only</span> — model names and
+            fallback streaks stay out of the client&rsquo;s morning brief entirely.
           </p>
         </div>
 
