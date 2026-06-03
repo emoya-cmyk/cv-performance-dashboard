@@ -2390,3 +2390,289 @@ test('21d — the control guard is load-bearing: a smuggled move, reason, scale,
   assert.ok(!FORBIDDEN_CONTROL_TOKENS.test('hold none steady tempered holding leaning easing'),
     'the control sweep is disjoint from the generic English the brief actually uses')
 })
+
+// ============================================================
+// 22d — EMPHASIS-CONTROL-HEALTH CONFINEMENT: the GOVERNOR that watches layer 21's
+// controller for instability across TIME is the fifth and outermost turn of the outward
+// loop — and, like the controller it polices, it rides NO client byte and NO pack.
+// ------------------------------------------------------------
+// intel-v9 layer 22 closes the supervisory loop the four turns below it opened: 18 grades
+// the brief → 19 flexes tomorrow's supporting-cast cap → 20 measures whether the flex paid
+// off → 21 re-scales 19's step MAGNITUDE on that measure → 22 watches 21's stream of moves
+// and, when the controller HUNTS (swings lean_in↔ease_off, flips ≥ the threshold) or PINS at
+// a genuine rail, hands back a single self-healing verdict. assessEmphasisControlHealth(
+// history) is the most supervisory instrument the stack produces: it carries the stability
+// counters (high_run / low_run / settled_run / flips), the engaged flag, the move histogram,
+// the per-morning series, the load-bearing recommended_action ('damp' benches a thrashing
+// tuner back to layer 19's un-modulated cap), and the machine verdict_reason (control_hunting
+// / pinned_high / pinned_low / controller_quiet / control_converged / control_settling /
+// insufficient_history). The consumer must receive NONE of it.
+//
+// Layer 22's confinement matches 21's, STRICTER than 19's: where 19's engagement_policy DOES
+// ride the PORTFOLIO pack (agency telemetry, gated off the client pack), the governor verdict
+// rides NO pack at all — it exists only as the return of assessEmphasisControlHealth / the
+// agency-gated /brief-emphasis-control-health route, computed at read time over the persisted
+// policy + efficacy history. So the agency surface that must trip the client guard is the
+// GOVERNOR VERDICT ITSELF, not a pack field — and we additionally prove neither the client NOR
+// the portfolio pack ever carries the control-health vocabulary, EVEN WHEN the governor has
+// fired 'damp' and 22b has benched the tuner: the only trace a self-heal leaves on any pack is
+// a different cap integer in the layer-19 projection, never the word 'damp' or 'hunting'.
+// narrateEmphasisControlHealth is '' for the client UNCONDITIONALLY (the precedent of
+// 18d/19d/20d/21d). 22a proves the governor in isolation, 22b/22c the read-path + UI wiring;
+// here, the EGRESS SPLIT — the fifth and outermost guard, stacked on 21→20→19→18.
+const { assessEmphasisControlHealth, narrateEmphasisControlHealth, shouldDampControl } = require('../lib/briefEmphasisControlHealth')
+
+// A genuine HUNTING history, built from REAL layer-21 verdicts (mirroring 21d's use of real
+// applyEmphasisControl artifacts, not hand-stubbed rows): a vindicated widen leaned in, then
+// an over-served widen eased off, repeated — four alternating directional moves → 3 flips ≥
+// DEFAULT_OSCILLATION_FLIPS(2) → the load-bearing unstable/damp/control_hunting verdict, the
+// SAME one the /brief-emphasis-control-health route serves and 22b acts on.
+const HUNTING_HISTORY = [
+  applyEmphasisControl(EMPH_WIDEN, EFF_GRADED),      // lean_in  (cap → 5)
+  applyEmphasisControl(EMPH_WIDEN, eff20(0.5, 1.0)), // ease_off (cap → 3)
+  applyEmphasisControl(EMPH_WIDEN, EFF_GRADED),      // lean_in  (cap → 5)
+  applyEmphasisControl(EMPH_WIDEN, eff20(0.5, 1.0)), // ease_off (cap → 3)
+]
+const CTRL_HEALTH_HUNTING = assessEmphasisControlHealth(HUNTING_HISTORY)
+
+// The governor verdict ALWAYS carries the three stability counters inside `control`
+// (high_run / low_run / settled_run — emitted unconditionally for EVERY verdict, hunting or
+// converged or idle), so guarding those three is a COMPLETE structural guard: no verdict can
+// ride along without tripping. Plus the two conceptual wrapper names, in case the route ever
+// nested the verdict under one. Deliberately NOT `recommended_action` (shared with — and
+// client-SAFE on — adviceAnswer's grounded per-finding action) NOR `verdict_reason` /
+// `window_used` (shared with the layer-14 lead-policy monitor; never ride the client pack, and
+// their distinctive VALUES are caught by the token sweep below). NOT the cap quartet nor
+// `flips`/`engaged`/`bounds` — generic or layer-19-owned, already covered by the delegated
+// sweeps. NOT bare `hold`/`none`/`trust`/`idle`/`stable`/`settling`/`steady`/`direction` —
+// the governor's own status English, which is also plain client prose (mirrors 21d sparing
+// bare `hold`, 20d sparing bare `steady`).
+const FORBIDDEN_CONTROLHEALTH_KEYS = [
+  'control_health', 'emphasis_control_health',
+  'high_run', 'low_run', 'settled_run',
+]
+// Distinctive control-health tokens only — the counter keys as strings, the two wrapper
+// names, the six machine verdict_reason VALUES, the advisory `review_bounds` action (layer 22
+// says `review_bounds`; the sibling layer-14 lead-policy monitor says `widen_bounds`, so this
+// stays 22-distinctive), the load-bearing self-heal action `damp`, and the bare governor noun
+// `hunting`. Every one is a compound machine identifier or a word the brief's generated English
+// never uses; NONE is a bare status word (`stable`/`settling`/`idle`/`steady` are disjoint —
+// `control_settling`/`control_converged`/`settled_run` only match their compounds, and
+// `steady_reception` in 19d is likewise a compound, so bare `steady` stays legal). DELIBERATELY
+// NOT `saturat*`: the governor never EMITS that word (its saturated state surfaces as the
+// `pinned_high`/`pinned_low` reasons + `constrained` status; "saturate" lives only in the
+// module's comments and input opts) — and forbidding it would false-positive on the sibling
+// layer-14 monitor's legitimate `counts.saturated` histogram, which DOES ride the agency pack.
+const FORBIDDEN_CONTROLHEALTH_TOKENS =
+  /control_health|emphasis_control_health|control_hunting|controller_quiet|control_converged|control_settling|pinned_high|pinned_low|review_bounds|high_run|low_run|settled_run|damp|hunting/
+
+// PORTFOLIO/AGENCY-PACK SCOPE (narrower). The two sets above are for the CLIENT egress, where
+// NONE of this machinery may appear, so even the bare run counters are a valid leak signal. The
+// agency/portfolio pack is different: the sibling layer-14 monitor (briefLeadPolicyHealth)
+// legitimately rides it and emits per-lane `high_run`/`low_run` (and `mask_runs`) run-length
+// counters — confirmed by grep at briefLeadPolicyHealth.js:256. So those two bare counter names
+// are SHARED structural vocabulary, NOT a layer-22 fingerprint (exactly like `saturat`, which
+// collides with layer-14's `counts.saturated`). The portfolio guard therefore drops `high_run`/
+// `low_run` and asserts only the layer-22-DISTINCTIVE identifiers: the two wrapper keys, the six
+// compound machine verdict_reason values, the `review_bounds`/`damp` actions, the `settled_run`
+// counter (layer-14 has none), and bare `hunting`. Nothing is lost — a genuine control-health
+// leak is a whole verdict object, never two stray integers, so it necessarily carries these
+// compounds. (The `settled_run` KEY stays distinctive: grep confirms no sibling emits it.)
+const FORBIDDEN_CONTROLHEALTH_KEYS_PORTFOLIO = [
+  'control_health', 'emphasis_control_health', 'settled_run',
+]
+const FORBIDDEN_CONTROLHEALTH_TOKENS_PORTFOLIO =
+  /control_health|emphasis_control_health|control_hunting|controller_quiet|control_converged|control_settling|pinned_high|pinned_low|review_bounds|settled_run|damp|hunting/
+
+function assertNoControlHealth(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_CONTROLHEALTH_KEYS.includes(k),
+          `${where}: client egress must not carry control-health field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(
+    !FORBIDDEN_CONTROLHEALTH_TOKENS.test(JSON.stringify(pack)),
+    `${where}: emphasis-control-health vocabulary leaked into the serialized client egress`
+  )
+  // Belt-and-suspenders: a clean control-health egress must also clear the 21d control sweep
+  // (which delegates to 20d → 19d → 18d) — all FIVE turns of the outward loop stack here.
+  assertNoControl(pack, where)
+}
+
+test('22d — narrateEmphasisControlHealth is silent for the CLIENT unconditionally; the agency hears the governor across its states, identifier-free', () => {
+  // Sanity: the real upstream history produced a dense HUNTING verdict — the load-bearing
+  // self-heal the /brief-emphasis-control-health route serves, so the agency narration below
+  // is non-vacuous.
+  assert.deepEqual(
+    { s: CTRL_HEALTH_HUNTING.status, a: CTRL_HEALTH_HUNTING.recommended_action, r: CTRL_HEALTH_HUNTING.verdict_reason, f: CTRL_HEALTH_HUNTING.control.flips >= 2, damp: shouldDampControl(CTRL_HEALTH_HUNTING) },
+    { s: 'unstable', a: 'damp', r: 'control_hunting', f: true, damp: true },
+    'four alternating controller moves read as hunting → unstable/damp, the governor benching the tuner')
+
+  // THE INVARIANT: the consumer never hears the governor — for ANY shape (hunting, pinned,
+  // converged, settling, idle, abstained, or malformed), narration is '' UNCONDITIONALLY.
+  for (const [name, v] of [
+    ['unstable', CTRL_HEALTH_HUNTING],
+    ['constrained-high', { status: 'constrained', verdict_reason: 'pinned_high', control: { high_run: 3 } }],
+    ['constrained-low', { status: 'constrained', verdict_reason: 'pinned_low', control: { low_run: 3 } }],
+    ['stable', { status: 'stable', verdict_reason: 'control_converged', control: { settled_run: 4 } }],
+    ['settling', { status: 'settling', verdict_reason: 'control_settling', control: {} }],
+    ['idle', { status: 'idle', verdict_reason: 'controller_quiet', control: {} }],
+    ['abstained', { status: 'abstained', verdict_reason: 'insufficient_history', control: {} }],
+    ['null', null], ['malformed', { control: {} }], ['junk', 'nope'],
+  ]) {
+    assert.equal(narrateEmphasisControlHealth(v, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  // The agency DOES hear the governor — across the three states worth a word (hunting,
+  // pinned, converged) — proving the client silence is a deliberate split, not a dead feature…
+  const agencyHunt = narrateEmphasisControlHealth(CTRL_HEALTH_HUNTING, { audience: 'agency' })
+  assert.ok(agencyHunt.length > 0, 'the agency hears the governor on a hunting verdict')
+  assert.match(agencyHunt, /swinging|steadied/, 'the hunting verdict reads as plain English')
+  const agencyHigh = narrateEmphasisControlHealth({ status: 'constrained', verdict_reason: 'pinned_high', control: { high_run: 3 } }, { audience: 'agency' })
+  assert.match(agencyHigh, /widest for 3 mornings/, 'a pinned-high verdict reads as plain English')
+  const agencyLow = narrateEmphasisControlHealth({ status: 'constrained', verdict_reason: 'pinned_low', control: { low_run: 2 } }, { audience: 'agency' })
+  assert.match(agencyLow, /leanest for 2 mornings/, 'a pinned-low verdict reads as plain English')
+  const agencyStable = narrateEmphasisControlHealth({ status: 'stable', control: {} }, { audience: 'agency' })
+  assert.match(agencyStable, /settled into a steady setting/, 'a converged verdict reads as plain English')
+  // …but stays mute on the three honest-silence states (nothing earned saying yet).
+  for (const silent of ['settling', 'idle', 'abstained']) {
+    assert.equal(narrateEmphasisControlHealth({ status: silent, control: {} }, { audience: 'agency' }), '',
+      `the agency is silent on the ${silent} state`)
+  }
+
+  // Even the candid agency sentences carry no machine identifier — they could not seed a leak
+  // even if mis-routed (they say "swinging wider then leaner", "sat at its widest", "settled
+  // into a steady setting", never "control_hunting"/"damp"/"high_run") — and clear the 21d +
+  // 20d + 19d + 18d sweeps too. All FIVE turns proven mute on the agency prose.
+  for (const s of [agencyHunt, agencyHigh, agencyLow, agencyStable]) {
+    assert.ok(!FORBIDDEN_CONTROLHEALTH_TOKENS.test(s), 'agency governor sentence carries no control-health identifier')
+    assert.ok(!FORBIDDEN_CONTROL_TOKENS.test(s), 'agency governor sentence carries no control identifier')
+    assert.ok(!FORBIDDEN_EFFICACY_TOKENS.test(s), 'agency governor sentence carries no efficacy identifier')
+    assert.ok(!FORBIDDEN_EMPHASIS_TOKENS.test(s), 'agency governor sentence carries no emphasis identifier')
+    assert.ok(!FORBIDDEN_ENGAGEMENT_TOKENS.test(s), 'agency governor sentence carries no aggregate identifier')
+  }
+})
+
+test('22d — the control-health verdict trips the client guard, yet neither the client nor the portfolio pack carries its vocabulary: the fifth, endpoint-only split', async () => {
+  await ready()
+
+  // THE AGENCY SURFACE: the verdict the route returns is dense with high_run/low_run/
+  // settled_run + the damp action + the control_hunting reason → the client guard MUST trip on
+  // it, confirming the cleanliness below is a real split, not a vacuous pass.
+  assert.throws(
+    () => assertNoControlHealth(CTRL_HEALTH_HUNTING, 'governor-verdict-probe'),
+    /control-health field|control-health vocabulary/,
+    'the governor verdict is dense with machinery — the client guard MUST trip on it')
+
+  // THE CLIENT SURFACE: the consumer pack carries none of the control-health machinery — and,
+  // by the stacked delegation inside assertNoControlHealth, none of the 21d control / 20d
+  // efficacy / 19d emphasis / 18d aggregate vocabulary either (all FIVE outward-loop turns
+  // enforced at once).
+  const c = await freshClient('Emphasis Control Health Confinement Roofing Co')
+  const cli = await generateClientBrief(c, AS_OF)
+  assert.equal(cli.grounded, true)
+  assert.match(cli.brief_text, /^Good morning\./)
+  assertNoControlHealth(cli.pack, 'generateClientBrief')
+  // the persisted read-back — the row the client actually fetches — is just as clean.
+  const cliRow = await getClientBrief(c, AS_OF)
+  assertNoControlHealth(cliRow.pack, 'getClientBrief read-back')
+
+  // LIKE 21d/20d: the governor rides NO pack — not even the agency/portfolio pack (it is
+  // computed only at read time by assessEmphasisControlHealth / the route). The portfolio pack
+  // may legitimately carry the 19d engagement_policy PROJECTION, so the full belt-and-
+  // suspenders assertNoControlHealth would rightly trip on THAT (the delegated 19d sweep), not
+  // on control-health; we assert the narrower, layer-22-specific truth: the CONTROL-HEALTH
+  // vocabulary never rides it.
+  const port = await generatePortfolioBrief(AS_OF)
+  // NARROW, portfolio-scoped fingerprint (see FORBIDDEN_CONTROLHEALTH_*_PORTFOLIO): the sibling
+  // layer-14 lead-policy monitor legitimately emits per-lane `high_run`/`low_run` run-length
+  // counters onto this agency pack, so those two bare counters are SHARED structural vocabulary,
+  // not a layer-22 leak. We assert only the layer-22-DISTINCTIVE identifiers here.
+  assert.ok(
+    !FORBIDDEN_CONTROLHEALTH_TOKENS_PORTFOLIO.test(JSON.stringify(port.pack)),
+    'the control-health vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_CONTROLHEALTH_KEYS_PORTFOLIO.includes(k), `the portfolio pack must not carry the control-health field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+
+  // THE LAYER-22 WRINKLE: 22b lets shouldDampControl BENCH a hunting controller and point the
+  // persisted engagement_policy projection at the DAMPED (un-modulated layer-19) cap. Prove
+  // the self-heal leaves NO linguistic trace — even when damping happens, the projection the
+  // portfolio pack carries speaks only the 19 cap vocabulary; the sole mark of a benched tuner
+  // is a different cap integer, never the word 'damp', 'hunting', or a stability counter.
+  if (port.pack && port.pack.engagement_policy) {
+    const ep = port.pack.engagement_policy
+    assert.ok(!FORBIDDEN_CONTROLHEALTH_TOKENS.test(JSON.stringify(ep)),
+      'the engagement_policy projection must carry no control-health vocabulary, damped or not')
+    for (const k of FORBIDDEN_CONTROLHEALTH_KEYS) {
+      assert.ok(!(k in ep), `the engagement_policy projection must not carry the control-health field "${k}"`)
+    }
+  }
+})
+
+test('22d — the control-health guard is load-bearing: a smuggled counter, reason, or self-heal trips it; legit client fields never do', () => {
+  // each distinctive stability counter is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoControlHealth({ ctl: { high_run: 3 } }, 'high-run-probe'),
+    /control-health field/, 'a lone high_run must be rejected by name')
+  assert.throws(() => assertNoControlHealth({ ctl: { low_run: 3 } }, 'low-run-probe'),
+    /control-health field/, 'a lone low_run must be rejected by name')
+  assert.throws(() => assertNoControlHealth({ ctl: { settled_run: 4 } }, 'settled-run-probe'),
+    /control-health field/, 'a lone settled_run must be rejected by name')
+  assert.throws(() => assertNoControlHealth({ box: { control_health: {} } }, 'control-health-probe'),
+    /control-health field/, 'a lone control_health wrapper must be rejected by name')
+  // the self-heal action + the machine verdict_reason values, smuggled as plain strings, are
+  // caught by the token sweep.
+  assert.throws(() => assertNoControlHealth({ note: 'the governor called damp this morning' }, 'damp-token-probe'),
+    /control-health vocabulary/, "the self-heal action ('damp') leaked as a string must be rejected")
+  assert.throws(() => assertNoControlHealth({ note: 'reason: control_hunting' }, 'hunting-token-probe'),
+    /control-health vocabulary/, "'control_hunting' leaked as a string must be rejected")
+  assert.throws(() => assertNoControlHealth({ note: 'state: pinned_high' }, 'pinned-token-probe'),
+    /control-health vocabulary/, "'pinned_high' leaked as a string must be rejected")
+  assert.throws(() => assertNoControlHealth({ note: 'controller_quiet all week' }, 'quiet-token-probe'),
+    /control-health vocabulary/, "'controller_quiet' leaked as a string must be rejected")
+  // the whole governor verdict trips (counters + reason + damp all present).
+  assert.throws(() => assertNoControlHealth(CTRL_HEALTH_HUNTING, 'full-verdict-probe'),
+    /control-health field|control-health vocabulary/, 'the full governor verdict must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the client focus (Section D): direction + delta_pct + a 'steady' trend + a lane. None of
+  //   these is a control-health token (we forbid neither bare `direction` nor `steady`).
+  assert.doesNotThrow(
+    () => assertNoControlHealth({ focus: { direction: 'down', delta_pct: -40, label: 'Leads', lane: 'act_now', metric: 'leads', trend: 'steady' } }, 'client-focus-probe'),
+    'the client focus is legit and must pass clean')
+  //   bare governor-state English the brief's plain prose shares with the verdict's status —
+  //   'hold'/'none'/'idle'/'stable'/'settling'/'steady'/'trust' — NONE forbidden (we forbid
+  //   only the compound machine identifiers high_run/control_hunting/pinned_*/damp/etc.), so a
+  //   real client sentence using them must pass through all five stacked sweeps.
+  assert.doesNotThrow(
+    () => assertNoControlHealth({ note: 'Leads hold steady; the picture is stable, settling into a trusted, idle calm — none slipped.' }, 'status-prose-probe'),
+    "bare governor-state words in client prose are disjoint from the control-health tokens and must pass")
+  //   the supporting-cast array the (possibly damped) cap ultimately shapes — the EFFECT the
+  //   client sees, never the governor that policed the knob that sized it.
+  assert.doesNotThrow(
+    () => assertNoControlHealth({ briefing: { also: [{ metric: 'leads', label: 'Leads' }, { metric: 'revenue', label: 'Revenue' }] } }, 'supporting-cast-probe'),
+    'the supporting-cast array must pass — it is the EFFECT of the cap, not the governor')
+  //   the consumer's own engagement vote — the only engagement byte they ever send.
+  assert.doesNotThrow(
+    () => assertNoControlHealth({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+
+  // FINAL disjointness ledger: the distinctive control-health tokens never appear in the
+  // generic English the brief actually uses — so stacking 22→21→20→19→18 can never
+  // false-positive a legit client egress on a governor identifier (mirrors 21d's closing ledger).
+  assert.ok(!FORBIDDEN_CONTROLHEALTH_TOKENS.test('hold none trust idle stable settling settled steady direction widen leaner mornings running'),
+    'the control-health sweep is disjoint from the generic English the brief actually uses')
+})
