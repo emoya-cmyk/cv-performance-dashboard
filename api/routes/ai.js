@@ -12,6 +12,17 @@
 //        Force a fresh recap and overwrite the stored row — the "Regenerate"
 //        button. Always re-narrates + re-verifies.
 //
+//   GET  /api/ai/brief/:clientId[?as_of=YYYY-MM-DD]
+//   POST /api/ai/brief/:clientId[?as_of=YYYY-MM-DD]
+//        The daily analog of the recap: a client's grounded "morning brief" over
+//        one day's pulse. GET is generated-on-miss (once per client-day); POST
+//        force-regenerates. See lib/brief.js + lib/pulseBrief.js.
+//
+//   GET  /api/ai/brief[?as_of=YYYY-MM-DD]
+//   POST /api/ai/brief[?as_of=YYYY-MM-DD]
+//        The agency portfolio morning brief (the whole book's pulse). AGENCY-ONLY
+//        — the prose names other clients — so a client-scoped token is refused.
+//
 //   POST /api/ai/ask   { question }
 //        Natural-language portfolio queries. The question is parsed into a typed,
 //        whitelisted query-spec, compiled to parameterised SQL (never text→SQL),
@@ -27,6 +38,10 @@ const express = require('express')
 const { query } = require('../db')
 const { weekStartOf } = require('../lib/rollup')
 const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
+const {
+  generateClientBrief, generatePortfolioBrief,
+  getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
+} = require('../lib/brief')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -41,6 +56,29 @@ function resolveWeek(raw) {
     return { error: 'week must be an ISO date (YYYY-MM-DD)' }
   }
   return { week: weekStartOf(String(raw)) }  // snap to the Monday of that week
+}
+
+// A brief is keyed on a single calendar DAY (the pulse's as_of), not a week — so
+// unlike resolveWeek there is NO Monday snap. Returns:
+//   { asOf: 'YYYY-MM-DD' }  when a valid date was given,
+//   { asOf: undefined }     when absent (brief layer defaults to today, UTC),
+//   { error: '…' }          when present but malformed.
+function resolveAsOf(raw) {
+  if (raw == null || raw === '') return { asOf: undefined }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(raw))) {
+    return { error: 'as_of must be an ISO date (YYYY-MM-DD)' }
+  }
+  return { asOf: String(raw) }
+}
+
+// The portfolio brief is narrated prose that NAMES other clients (headline +
+// "also" lines), so — unlike the openly-readable raw GET /pulse roster — only an
+// explicit agency token may ever read it; any client-scoped token is refused.
+// Mirrors the allow-list posture of resolveAskScope (agency role is the gate).
+function resolvePortfolioScope(req) {
+  const user = req.user || {}
+  if (user.role === 'agency') return {}
+  return { error: 'not authorized for the portfolio brief', status: 403 }
 }
 
 // Recaps FK-reference clients(id); generating one for an unknown client would
@@ -112,6 +150,85 @@ router.post('/recap/:clientId', async (req, res) => {
   } catch (err) {
     console.error('[ai] POST recap error', err.message)
     res.status(500).json({ error: 'Failed to generate recap' })
+  }
+})
+
+// ── GET /api/ai/brief/:clientId ───────────────────────────────────────────────
+// A client's grounded morning brief for one day, generated-on-miss
+// (getOrGenerateClientBrief → the LLM is called at most once per client-day).
+// Idempotent and cheap on repeat hits. ?as_of=YYYY-MM-DD selects the day; absent
+// → today (UTC). This is what the in-app client brief card hits.
+router.get('/brief/:clientId', async (req, res) => {
+  const { clientId } = req.params
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    if (!(await clientExists(clientId))) {
+      return res.status(404).json({ error: 'client not found' })
+    }
+    const brief = await getOrGenerateClientBrief(clientId, asOf)
+    res.json(brief)
+  } catch (err) {
+    console.error('[ai] GET brief error', err.message)
+    res.status(500).json({ error: 'Failed to load brief' })
+  }
+})
+
+// ── POST /api/ai/brief/:clientId ──────────────────────────────────────────────
+// Force a fresh client brief and overwrite the stored row — the "Regenerate"
+// button. Always re-narrates + re-verifies. Accepts ?as_of=… or { as_of } in body.
+router.post('/brief/:clientId', async (req, res) => {
+  const { clientId } = req.params
+  const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    if (!(await clientExists(clientId))) {
+      return res.status(404).json({ error: 'client not found' })
+    }
+    const brief = await generateClientBrief(clientId, asOf)
+    res.json(brief)
+  } catch (err) {
+    console.error('[ai] POST brief error', err.message)
+    res.status(500).json({ error: 'Failed to generate brief' })
+  }
+})
+
+// ── GET /api/ai/brief ─────────────────────────────────────────────────────────
+// The agency portfolio morning brief, generated-on-miss. AGENCY-ONLY: the prose
+// names other clients, so a client-scoped token is refused (resolvePortfolioScope).
+// ?as_of=YYYY-MM-DD selects the day; absent → today (UTC).
+router.get('/brief', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    const brief = await getOrGeneratePortfolioBrief(asOf)
+    res.json(brief)
+  } catch (err) {
+    console.error('[ai] GET portfolio brief error', err.message)
+    res.status(500).json({ error: 'Failed to load brief' })
+  }
+})
+
+// ── POST /api/ai/brief ────────────────────────────────────────────────────────
+// Force-regenerate the agency portfolio brief and overwrite the stored row.
+// AGENCY-ONLY. Accepts ?as_of=… or { as_of } in the body.
+router.post('/brief', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
+  if (error) return res.status(400).json({ error })
+
+  try {
+    const brief = await generatePortfolioBrief(asOf)
+    res.json(brief)
+  } catch (err) {
+    console.error('[ai] POST portfolio brief error', err.message)
+    res.status(500).json({ error: 'Failed to generate brief' })
   }
 })
 
