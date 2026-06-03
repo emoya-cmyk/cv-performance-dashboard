@@ -50,7 +50,7 @@ const {
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
   listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
   leadPolicyGovernanceAuditFor, leadPolicyRemediationFor,
-  briefEmphasisEfficacyFor, emphasisControlHealthFor,
+  briefEmphasisEfficacyFor, emphasisControlHealthFor, emphasisControlTuningFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -69,6 +69,7 @@ const { deriveBriefEmphasis, narrateBriefEmphasis } = require('../lib/briefEngag
 const { narrateEmphasisEfficacy } = require('../lib/briefEmphasisEfficacy')
 const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEmphasisControl')
 const { narrateEmphasisControlHealth } = require('../lib/briefEmphasisControlHealth')
+const { narrateEmphasisControlTuning } = require('../lib/briefEmphasisControlTuning')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -712,6 +713,37 @@ router.get('/brief-emphasis-control-health', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET brief-emphasis-control-health error', err.message)
     res.status(500).json({ error: 'Failed to load brief emphasis control health' })
+  }
+})
+
+// ── GET /api/ai/brief-emphasis-control-tuning ──────────────────────────────────
+// Layer 23 — the CHRONIC gain-schedule sitting one level outside the layer-22 governor. Where
+// /brief-emphasis-control-health reports the controller's ACUTE per-morning stability, this reports
+// whether the controller's STEERING AUTHORITY has been narrowed because the governor has been tripping
+// REPEATEDLY across mornings — and whether a proven run of calm mornings has earned the full range back.
+// Pure agency machinery (reach/effective_bounds/reduce_authority|restore_authority): it rides no
+// serialized pack, so it is surfaced LIVE here and nowhere a client can reach it. Same portfolio 403 gate
+// (resolvePortfolioScope), and narrateEmphasisControlTuning returns '' for the client audience
+// unconditionally. ?days=N sizes the window of governor verdicts to schedule over (default 6, clamped
+// 2..14); ?as_of anchors its end (default today, UTC). Too few graded mornings → an honest abstained
+// verdict, a clean 200; only a genuine DB fault is a 500.
+router.get('/brief-emphasis-control-tuning', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const tune = await emphasisControlTuningFor(asOf, span)
+    res.json({
+      ...tune,
+      requested: { as_of: asOf || null, days: tune.window_used },
+      narrative: narrateEmphasisControlTuning(tune, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET brief-emphasis-control-tuning error', err.message)
+    res.status(500).json({ error: 'Failed to load brief emphasis control tuning' })
   }
 })
 

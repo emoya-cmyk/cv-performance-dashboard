@@ -272,6 +272,16 @@ async function briefEmphasisControlFor(asOf, days = EMPHASIS_EFFICACY_WINDOW) {
 // engagement tower. Pure, dependency-free top-level require (mirrors policyHealth).
 const controlHealth = require('./briefEmphasisControlHealth')
 
+// intel-v9 layer 23: SCHEDULE THE CONTROLLER'S GAIN. Layer 22 is the ACUTE per-window breaker — it
+// benches a controller that is hunting THIS morning. Layer 23 is the CHRONIC gain-schedule over a
+// HISTORY of layer-22 verdicts: when the governor has been tripping REPEATEDLY across mornings (the
+// controller keeps earning the breaker), it NARROWS the controller's structural authority — the
+// breadth range it is allowed to reach — so it can no longer swing far enough to keep tripping, and
+// RESTORES the full range only after a proven run of converged mornings. Reduce-fast / restore-slow
+// hysteresis, bounded + monotonic, a provable no-op until the governor earns distrust. The chronic
+// outer sibling of layer 22 on the engagement tower. Pure, dependency-free top-level require.
+const controlTuning = require('./briefEmphasisControlTuning')
+
 // briefEmphasisControlFor hands back ONE morning's controlled decision; the stability monitor
 // needs the TRAJECTORY. emphasisControlHistoryFor walks the day-anchors of an inclusive window
 // ending at `asOf`, OLDEST->NEWEST, replaying the controller that WOULD have been live each
@@ -311,6 +321,51 @@ async function emphasisControlHealthFor(asOf, span) {
   return controlHealth.assessEmphasisControlHealth(await emphasisControlHistoryFor(asOf, span))
 }
 
+// emphasisControlHealthFor hands back ONE morning's governor verdict; the gain-scheduler needs the
+// TRAJECTORY of those verdicts. emphasisControlHealthHistoryFor walks the day-anchors of an inclusive
+// window ending at `asOf`, OLDEST->NEWEST, replaying the governor that WOULD have been live each
+// morning (each anchor re-assesses layer 22 over ITS OWN trailing controller window, so this
+// reconstructs the real arc of stability verdicts, not N copies of today). Each kept element is the
+// governor verdict spread under an { as_of, ... } wrapper — exactly the { as_of, ...verdict } shape
+// tuneEmphasisControlAuthority's normVerdict consumes (it reads status/verdict_reason/bounds/as_of).
+// An abstained morning (thin loop history) contributes nothing, so it reads as a gap, never a throw.
+// span is clamped to [DEFAULT_MIN_HISTORY, TUNING_HISTORY_SPAN_MAX]: two is the fewest the scheduler
+// will judge, fourteen caps the per-morning replay cost; the default is the scheduler's own window so
+// a once-daily generation mints exactly that many governor verdicts to schedule against.
+//
+// COST: each anchor's governor verdict is itself a layer-22 assessment over a 6-morning controller
+// window, so this is an O(span × controlWindow) replay (a once-daily batch + an on-demand agency read;
+// the /brief-emphasis-control-health sibling already pays the inner cost). Kept DRY against the
+// canonical emphasisControlHealthFor rather than memoized — recognizability over a micro-optimization
+// on a once-daily path; a future profiler can add a per-day controller cache here without touching
+// shared code.
+const TUNING_HISTORY_SPAN_MAX = 14
+function clampTuningSpan(span) {
+  if (span == null || span === '') return controlTuning.DEFAULT_WINDOW
+  const n = Math.floor(Number(span))
+  if (!Number.isFinite(n)) return controlTuning.DEFAULT_WINDOW
+  return Math.max(controlTuning.DEFAULT_MIN_HISTORY, Math.min(TUNING_HISTORY_SPAN_MAX, n))
+}
+
+async function emphasisControlHealthHistoryFor(asOf, span) {
+  const to  = asOf || defaultAsOf()
+  const n   = clampTuningSpan(span)
+  const out = []
+  for (let i = n - 1; i >= 0; i--) {
+    const day    = isoDayMinus(to, i)
+    const health = await emphasisControlHealthFor(day)
+    if (health && health.status !== 'abstained') out.push({ as_of: day, ...health })
+  }
+  return out
+}
+
+// The gain-scheduler's verdict over that window of governor verdicts — pure read, never throws
+// (tuneEmphasisControlAuthority abstains on thin history). Used by the morning generator's
+// authority-narrowing gate AND the agency read endpoint; echoed nowhere to the client.
+async function emphasisControlTuningFor(asOf, span) {
+  return controlTuning.tuneEmphasisControlAuthority(await emphasisControlHealthHistoryFor(asOf, span))
+}
+
 // Layer 22 self-heal projection. When the controller is benched for HUNTING, recover layer 19's
 // UN-modulated decision from the controller superset (no extra read): the pre-control cap
 // (emphasis_also_cap — layer 19's clamped flex before 21 touched it) becomes the shipped cap,
@@ -335,6 +390,41 @@ function dampEmphasis(c) {
     control_move:   'none',
     control_reason: 'damped_unstable',
     step_scale:     null,
+  }
+}
+
+// Layer 23 self-heal projection — the CHRONIC sibling of dampEmphasis. Where dampEmphasis fully
+// benches an ACUTELY hunting controller (reverting to layer 19's un-modulated cap), this CLAMPS the
+// controller's shipped breadth into the NARROWED authority band the gain-scheduler has earned over a
+// run of governor verdicts. `rails` is controlAuthorityRails(tune): { min, max, base, ... } when
+// authority is reduced/frozen, or null when it is full — and null is the provable no-op (identity
+// pass-through), so a controller the scheduler has not distrusted ships byte-identically to 22b. When
+// the clamp actually bites (the controller reached past its narrowed arm), also_cap is pulled to the
+// band edge and delta/direction/status are re-derived from it against base_cap — a frozen band
+// (min === max === base) collapses any reach to the neutral base, reading 'idle' exactly like a full
+// damp. Pure and total: every numeric field has a Number-coerced fallback, a within-band cap is
+// returned untouched, and a missing/garbage rail returns the input unchanged. Never throws. Like
+// dampEmphasis, its control_reason rides no persisted projection (engagement_policy reads only the
+// layer-19 cap fields + emphasis_reason), so the narrow leaves only a clamped cap, never machinery.
+function narrowEmphasisAuthority(c, rails) {
+  if (!rails || typeof rails !== 'object') return c
+  const lo  = Number(rails.min)
+  const hi  = Number(rails.max)
+  const raw = Number(c.also_cap)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(raw)) return c
+  const capped = Math.max(lo, Math.min(hi, raw))
+  if (capped === raw) return c // already inside the narrowed band → identity no-op
+  const base     = Number(c.base_cap)
+  const safeBase = Number.isFinite(base) ? base : capped
+  const delta    = capped - safeBase
+  const dir      = delta > 0 ? 'widen' : delta < 0 ? 'tighten' : 'neutral'
+  return {
+    ...c,
+    status:         delta === 0 ? 'idle' : 'tuned',
+    also_cap:       capped,
+    delta,
+    direction:      dir,
+    control_reason: 'authority_narrowed',
   }
 }
 
@@ -560,8 +650,24 @@ async function generatePortfolioBrief(asOf) {
   // verdict (stable/settling/constrained/idle/abstained) leaves `controlled` untouched — the engine
   // behaves byte-identically to 21b until a hunt is actually proven over the window.
   const controlHealthVerdict = await emphasisControlHealthFor(day)
-  const effective     = (controlHealth.shouldDampControl(controlHealthVerdict) && controlled)
-    ? dampEmphasis(controlled) : controlled
+  // SCHEDULE THE CONTROLLER'S GAIN (layer 23). Independently of the acute damp, assess the CHRONIC
+  // pattern of the governor's OWN verdicts over the trailing window. If the governor has been tripping
+  // repeatedly (the controller keeps earning the breaker morning after morning), narrow the
+  // controller's structural authority so its shipped breadth is CLAMPED into the reduced band — it can
+  // no longer swing far enough to keep tripping. The acute damp SUPERSEDES the chronic narrow: a
+  // controller benched for hunting THIS morning ships layer 19's cap regardless; only when it is NOT
+  // acutely benched does the narrowed band bite. Built from the SAME governor verdicts about the RAW
+  // controller (emphasisControlHealthFor → briefEmphasisControlFor, never `effective`), so layer 23
+  // reads the controller's true behaviour, never its own intervention — no meta-loop. Fail-safe: any
+  // non-narrowing verdict (default/restored, or a full-authority rail) leaves `controlled` untouched,
+  // so the engine behaves byte-identically to 22b until chronic hunting is actually proven.
+  const controlTuningVerdict = await emphasisControlTuningFor(day)
+  const effective =
+      (controlHealth.shouldDampControl(controlHealthVerdict) && controlled)
+        ? dampEmphasis(controlled)
+    : (controlTuning.shouldReduceControlAuthority(controlTuningVerdict) && controlled)
+        ? narrowEmphasisAuthority(controlled, controlTuning.controlAuthorityRails(controlTuningVerdict))
+    : controlled
   const applyEmphasis = !!(effective && effective.status === 'tuned')
   const briefing      = ((applyPolicy || applyEmphasis) && Array.isArray(pulse.roster))
     ? summarizePortfolioPulse(pulse.roster, { leadPolicy, alsoCap: applyEmphasis ? effective.also_cap : undefined })
@@ -654,6 +760,16 @@ async function generatePortfolioBrief(asOf) {
   // /brief-emphasis-control-health (emphasisControlHealthFor recomputes it fresh per request) — it
   // is surfaced, never persisted. The only trace it leaves on the brief is its EFFECT: the damped
   // `effective` breadth projected into engagement_policy above, which is pure layer-19 cap vocabulary.
+  // SCHEDULE THE CONTROLLER'S GAIN (layer 23): the gain-scheduler's verdict over the trailing window of
+  // governor verdicts drives the authority-narrowing above (shouldReduceControlAuthority → effective),
+  // but — exactly like the layer-21 controller and the layer-22 governor it sits above — the verdict
+  // RIDES NO PACK, not even the agency/portfolio pack. Its shape is dense with gain-schedule vocabulary
+  // (reach/max_reach/authority, effective_bounds, the reduce_authority/restore_authority
+  // recommended_action, reason 'hunting_active'/'stability_proven'): precisely the machinery the 21d
+  // endpoint-only split keeps OUT of the serialized pack, so the LLM narrator + grounding verifier never
+  // see it and no client egress can carry it. The agency reads it LIVE from /brief-emphasis-control-tuning
+  // (emphasisControlTuningFor recomputes it fresh per request) — surfaced, never persisted. Its only
+  // trace on the brief is its EFFECT: the narrowed `effective` breadth in engagement_policy above.
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,
@@ -762,6 +878,8 @@ module.exports = {
   briefEmphasisEfficacyFor,
   emphasisControlHistoryFor,
   emphasisControlHealthFor,
+  emphasisControlHealthHistoryFor,
+  emphasisControlTuningFor,
   leadPolicyHistoryFor,
   leadPolicyHealthFor,
   leadPolicyGovernanceFor,
