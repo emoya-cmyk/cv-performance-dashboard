@@ -221,8 +221,17 @@ const { classifyPacing, rankPacing } = require('./pacing')
 // supplies the per-channel WEEKLY spend+outcome windows it reasons over (built from fact_metric, the
 // portable atomic grain — never the Postgres-only weekly_reports wide columns). See lib/channelEfficiency.js.
 const {
-  analyzeReallocation, narrateReallocation, reallocationRails, CHANNEL_LABEL: REALLOC_CHANNEL_LABEL,
+  analyzeReallocation, narrateReallocation, reallocationRails, assessChannelEfficiency,
+  CHANNEL_LABEL: REALLOC_CHANNEL_LABEL,
 } = require('./channelEfficiency')
+// intel-v10 Layer 25 (reallocationEfficacy): the FEEDBACK LOOP that closes Layer 24. A reallocate
+// proposal is a hypothesis ("meta costs $60/lead, google_ads $30 — shift a test slice"); this layer
+// re-derives each PAST proposal from the window it would have seen, re-measures the SAME from/to
+// cost-per-outcome over the disjoint weeks that followed, and grades whether the edge HELD. Pooled
+// across the book it emits a single confidence CALIBRATION the engine can multiply through. PURE
+// (trials in -> graded table + calibration out; never throws). AGENCY-ONLY — a budget-shift track
+// record is an internal media-buying instrument, never a client scoreboard line (Layer 25d proves it).
+const { reallocationEfficacyTable, reallocationEfficacyNote } = require('./reallocationEfficacy')
 
 // Action→recovery efficacy (PURE): the recommendation layer (recommendedAction) proposes a
 // PLAY for every adverse finding; the recovery classifier (lib/outcomes) later proves whether
@@ -2374,6 +2383,11 @@ const REALLOC_OUTCOME_GROUPS = (() => {
   }
   return order.map(outcome => [outcome, byOutcome.get(outcome)])
 })()
+// intel-v10 Layer 25 (reallocationEfficacy) backtest geometry. Episode span = (W + B·H) weeks:
+const REALLOC_EFFICACY_HORIZON_WEEKS        = 4                      // realized weeks graded per decision
+const REALLOC_EFFICACY_BOUNDARIES           = 6                      // past week-boundaries reconstructed & graded
+const REALLOC_EFFICACY_DECISION_WEEKS       = REALLOC_LOOKBACK_WEEKS // decision window == the live Layer-24 lookback (26)
+const REALLOC_EFFICACY_REALIZED_MIN_WINDOWS = 2                      // realized cpo is a blended ratio, not a trend slope
 
 // Fold a flat list of summed (channel, date, metric_key, total) fact rows for ONE client into the
 // per-channel WEEKLY window shape channelEfficiency reasons over: [{ channel, points: [{spend, outcomes}] }],
@@ -2571,6 +2585,170 @@ async function getPortfolioReallocation({ asOf, weeks = REALLOC_LOOKBACK_WEEKS }
     ((Number(b.saved_per_outcome) || 0) - (Number(a.saved_per_outcome) || 0)))
 
   return { as_of: day, roster }
+}
+
+// ----------------------------------------------------------------------------
+// intel-v10 Layer 25 wiring (reallocationEfficacy) — the agency-only FEEDBACK LOOP.
+//
+// Layer 24 (analyzeChannelReallocation) PROPOSES a budget shift from the latest 26-week window but never
+// persists the decision (computed-on-read). To grade those proposals we RECONSTRUCT them: walk back B
+// boundaries and at each one re-derive the proposal from exactly the window it WOULD have seen, then
+// re-measure the SAME from/to channels' cost-per-outcome over the H disjoint weeks that followed.
+// Episode k (0 = most recent gradeable), anchored at `day`:
+//   decisionEnd_k   = day − (k+1)·H·7d            realizedEnd_k = day − k·H·7d  (= decisionEnd_k + H·7d)
+//   decisionStart_k = decisionEnd_k − W·7d
+// decision window [decisionStart, decisionEnd] INCLUSIVE (mirrors the production BETWEEN); realized window
+// (decisionEnd, realizedEnd] strictly forward & disjoint. Full span = (W + B·H) weeks, pulled in ONE scoped
+// read then re-sliced in memory by lexical ISO-date compare (ISO lexical == chronological). Realized cpo is
+// re-measured with the SAME estimator that produced the decision (assessChannelEfficiency) at a relaxed
+// minWindows — the realized side consumes ONLY the blended ΣSpend/ΣOutcomes ratio (cpo), not the trend slope,
+// so fewer windows are sound; thin/garbage realized weeks → non-finite cpo → trial 'unmeasurable' (quiet skip)
+// and the pooled calibration drifts toward a neutral 1.0 rather than inventing a verdict.
+const reallocIso    = (ms)  => new Date(ms).toISOString().slice(0, 10)
+const reallocDayMs  = (day) => Date.parse(day + 'T00:00:00Z')
+const reallocPosInt = (v, dflt) => { const n = Math.trunc(Number(v)); return Number.isFinite(n) && n > 0 ? n : dflt }
+
+// Pull the summed (client, channel, date, metric) reallocation facts for ONE client (scoped) or the whole
+// book (bulk) over [start, end]. New code, deliberately NOT folded into loadChannelEfficiencySeries: backtest
+// faithfulness rides the shared PURE core (bucketReallocSeries + analyzeChannelReallocation), never SQL reuse,
+// so the proven production reader keeps zero blast radius. Param numbering mirrors getPortfolioReallocation:
+// scoped $1=client,$2=start,$3=end,$4..=channel keys,$(4+nCh)..=metric keys ; bulk drops $1 and shifts down.
+async function loadReallocationFactRows({ clientId = null, start, end }) {
+  const scoped = clientId != null
+  const nCh    = REALLOC_CHANNEL_KEYS.length
+  const base   = scoped ? 4 : 3
+  const chPh   = REALLOC_CHANNEL_KEYS.map((_, i) => `$${i + base}`).join(', ')
+  const mkPh   = REALLOC_METRIC_KEYS.map((_, i) => `$${i + base + nCh}`).join(', ')
+  const where  = scoped ? 'f.client_id = $1 AND f.date BETWEEN $2 AND $3' : 'f.date BETWEEN $1 AND $2'
+  const params = scoped
+    ? [clientId, start, end, ...REALLOC_CHANNEL_KEYS, ...REALLOC_METRIC_KEYS]
+    : [start, end, ...REALLOC_CHANNEL_KEYS, ...REALLOC_METRIC_KEYS]
+  const { rows } = await query(
+    `SELECT f.client_id AS client_id, c.key AS channel, f.date AS date, f.metric_key AS metric_key, SUM(f.metric_value) AS total
+       FROM fact_metric f JOIN dim_channel c ON c.id = f.channel_id
+      WHERE ${where} AND c.key IN (${chPh}) AND f.metric_key IN (${mkPh})
+      GROUP BY f.client_id, c.key, f.date, f.metric_key
+      ORDER BY f.date`, params)
+  return rows || []
+}
+
+// PURE backtest core: flat fact rows (ONE client) + an as-of day → array of graded-shape trials for
+// reallocationEfficacyTable. Never throws; degenerate input → []. Each trial carries the reconstructed
+// decision (from/to/cpos/strength/confidence) and the realized from/to cpo (null when the following window
+// can't be measured). Only status==='reallocate' proposals yield a trial — abstains are not decisions to grade.
+function buildReallocationTrials(rows, { asOf, horizonWeeks, boundaries, decisionWeeks } = {}) {
+  const day = isoDate(asOf)
+  if (!day) return []
+  const dayMs = reallocDayMs(day)
+  if (!Number.isFinite(dayMs)) return []
+  const H = reallocPosInt(horizonWeeks,  REALLOC_EFFICACY_HORIZON_WEEKS)
+  const B = reallocPosInt(boundaries,    REALLOC_EFFICACY_BOUNDARIES)
+  const W = reallocPosInt(decisionWeeks, REALLOC_EFFICACY_DECISION_WEEKS)
+  const DAY_MS = 86400000
+  const list = Array.isArray(rows) ? rows : []
+  const trials = []
+  for (let k = 0; k < B; k++) {
+    const decisionEnd   = reallocIso(dayMs - (k + 1) * H * 7 * DAY_MS)
+    const decisionStart = reallocIso(dayMs - ((k + 1) * H + W) * 7 * DAY_MS)
+    const realizedEnd   = reallocIso(dayMs - k * H * 7 * DAY_MS)
+    const decisionRows = list.filter(r => { const d = isoDate(r.date); return d && d >= decisionStart && d <= decisionEnd })
+    const { proposal, proposal_outcome, proposal_outcome_label } = analyzeChannelReallocation(bucketReallocSeries(decisionRows))
+    if (!proposal || proposal.status !== 'reallocate') continue
+    const realizedRows = list.filter(r => { const d = isoDate(r.date); return d && d > decisionEnd && d <= realizedEnd })
+    const realizedVerdicts = assessChannelEfficiency(bucketReallocSeries(realizedRows), { minWindows: REALLOC_EFFICACY_REALIZED_MIN_WINDOWS })
+    const realizedCpo = new Map()
+    for (const v of (Array.isArray(realizedVerdicts) ? realizedVerdicts : [])) {
+      if (v && v.channel != null && Number.isFinite(v.cpo)) realizedCpo.set(v.channel, v.cpo)
+    }
+    trials.push({
+      as_of: decisionEnd,
+      outcome: proposal_outcome,
+      outcome_label: proposal_outcome_label,
+      decision: {
+        from: proposal.from, to: proposal.to,
+        from_cpo: proposal.from_cpo, to_cpo: proposal.to_cpo,
+        gap_pct: proposal.gap_pct, strength: proposal.strength, confidence: proposal.confidence,
+      },
+      realized: {
+        from_cpo: realizedCpo.has(proposal.from) ? realizedCpo.get(proposal.from) : null,
+        to_cpo:   realizedCpo.has(proposal.to)   ? realizedCpo.get(proposal.to)   : null,
+      },
+    })
+  }
+  return trials
+}
+
+// Shape a graded table for the wire: spread caller meta, always surface a calibration (neutral 1.0 when there
+// are no decided trials), attach the agency NOTE text per ranked/by_strength band (null until n≥4), expose
+// by_pair raw. AGENCY-ONLY fields (vindicated/refuted/hold/cpo/calibration) live here by design — Layer 25d
+// proves none of them ever reach a client payload.
+function serializeReallocationEfficacy(table, meta = {}) {
+  const t = table || {}
+  const byStrength = t.byStrength instanceof Map ? [...t.byStrength.values()] : []
+  const byPair     = t.byPair instanceof Map ? [...t.byPair.values()] : []
+  const note = (key) => { const nt = reallocationEfficacyNote(key, t); return nt ? nt.text : null }
+  return {
+    ...meta,
+    calibration: t.calibration || { factor: 1, hit_rate: null, mean_confidence: null, n: 0, credibility: 0, basis: 'no decided trials' },
+    overall: t.overall || null,
+    base: t.base || { rate: null, n: 0, prior: null },
+    ranked:      (Array.isArray(t.ranked) ? t.ranked : []).map(r => ({ ...r, note: note(r.key) })),
+    by_strength: byStrength.map(r => ({ ...r, note: note(r.key) })),
+    by_pair:     byPair,
+  }
+}
+
+// Agency drill-down: grade ONE client's reallocation track record. Pulls the (W + B·H)-week span once,
+// reconstructs+grades in memory, returns the serialized table tagged with the client id + episode params.
+async function getClientReallocationEfficacy(clientId, { asOf, horizonWeeks, boundaries, decisionWeeks } = {}) {
+  const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const H = reallocPosInt(horizonWeeks,  REALLOC_EFFICACY_HORIZON_WEEKS)
+  const B = reallocPosInt(boundaries,    REALLOC_EFFICACY_BOUNDARIES)
+  const W = reallocPosInt(decisionWeeks, REALLOC_EFFICACY_DECISION_WEEKS)
+  const start = reallocIso(reallocDayMs(day) - (W + B * H) * 7 * 86400000)
+  const rows = await loadReallocationFactRows({ clientId, start, end: day })
+  const trials = buildReallocationTrials(rows, { asOf: day, horizonWeeks: H, boundaries: B, decisionWeeks: W })
+  const table = reallocationEfficacyTable(trials)
+  return serializeReallocationEfficacy(table, {
+    as_of: day, client_id: String(clientId), trials: trials.length,
+    horizon_weeks: H, boundaries: B, decision_weeks: W,
+  })
+}
+
+// Agency headline: pool EVERY client's reconstructed trials into ONE calibration the engine can trust, plus a
+// names-and-counts by_client breakdown (who contributed how many graded decisions). ONE bulk read, sliced per
+// client in memory. NEVER rides a client payload — an internal media-buying instrument (Layer 25d enforces it).
+async function getPortfolioReallocationEfficacy({ asOf, horizonWeeks, boundaries, decisionWeeks } = {}) {
+  const day = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const H = reallocPosInt(horizonWeeks,  REALLOC_EFFICACY_HORIZON_WEEKS)
+  const B = reallocPosInt(boundaries,    REALLOC_EFFICACY_BOUNDARIES)
+  const W = reallocPosInt(decisionWeeks, REALLOC_EFFICACY_DECISION_WEEKS)
+  const start = reallocIso(reallocDayMs(day) - (W + B * H) * 7 * 86400000)
+  const [rows, clientsRes] = await Promise.all([
+    loadReallocationFactRows({ clientId: null, start, end: day }),
+    query('SELECT id, name FROM clients'),
+  ])
+  const nameById = new Map((clientsRes.rows || []).map(c => [String(c.id), c.name]))
+  const rowsByClient = new Map()
+  for (const r of rows) {
+    const cid = String(r.client_id)
+    let bucket = rowsByClient.get(cid)
+    if (!bucket) { bucket = []; rowsByClient.set(cid, bucket) }
+    bucket.push(r)
+  }
+  const allTrials = [], byClient = []
+  for (const [cid, crows] of rowsByClient) {
+    const trials = buildReallocationTrials(crows, { asOf: day, horizonWeeks: H, boundaries: B, decisionWeeks: W })
+    if (!trials.length) continue
+    allTrials.push(...trials)
+    byClient.push({ client_id: cid, client_name: nameById.get(cid) || cid, trials: trials.length })
+  }
+  byClient.sort((a, b) => (b.trials - a.trials) || a.client_name.localeCompare(b.client_name))
+  const table = reallocationEfficacyTable(allTrials)
+  return serializeReallocationEfficacy(table, {
+    as_of: day, scope: 'portfolio', clients: byClient.length, trials: allTrials.length,
+    horizon_weeks: H, boundaries: B, decision_weeks: W, by_client: byClient,
+  })
 }
 
 // ============================================================================
@@ -3065,6 +3243,12 @@ module.exports = {
   // NOT folded into GET /:clientId. loadChannelEfficiencySeries/bucketReallocSeries exported for wiring tests.
   getPortfolioReallocation, getClientReallocation, analyzeChannelReallocation,
   loadChannelEfficiencySeries, bucketReallocSeries,
+  // reallocationEfficacy (intel-v10 Layer 25): agency-only FEEDBACK LOOP grading past Layer-24 proposals
+  // against what REALLY happened, pooled into ONE confidence calibration. getPortfolioReallocationEfficacy
+  // mounts behind requireAuth (NEVER a client payload); getClient... + buildReallocationTrials /
+  // loadReallocationFactRows / serializeReallocationEfficacy exported for the route + wiring tests.
+  getPortfolioReallocationEfficacy, getClientReallocationEfficacy, buildReallocationTrials,
+  loadReallocationFactRows, serializeReallocationEfficacy,
   // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
   // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
   // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.

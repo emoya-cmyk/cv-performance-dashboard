@@ -433,6 +433,15 @@ export const api = {
   // getSystemic/getTrajectory/getPacing/getPulse — it NEVER rides getClientInsights(): the whole layer
   // is withheld from clients, nothing folds into the per-client payload. No params (trailing 26 weeks).
   getReallocation:    ()         => get('/api/insights/reallocation'),
+  // getReallocationEfficacy() → the FEEDBACK LOOP that closes getReallocation (intel-v10 Layer 25).
+  // getReallocation PRESCRIBES budget shifts; this grades whether past prescriptions actually PAID OFF —
+  // it reconstructs each prior proposal from the window it would have seen, re-measures the SAME from/to
+  // cost-per-outcome over the weeks that followed, and pools the whole book into ONE confidence
+  // CALIBRATION ("moderate reallocates held 7/10 → trust ~0.9×") plus a names-and-counts by_client
+  // breakdown. AGENCY-ONLY and the same sensitive boundary as getReallocation — it exposes per-client
+  // hit/miss verdicts, so (like getSystemic/getTrajectory/getPacing/getPulse) it NEVER rides
+  // getClientInsights(): nothing folds into the per-client payload. No params (trailing decision+horizon span).
+  getReallocationEfficacy: ()    => get('/api/insights/reallocation-efficacy'),
   // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
   // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
   // flags every client × flow metric whose trailing week has slid out of that client's OWN recent

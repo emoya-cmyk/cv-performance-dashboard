@@ -80,7 +80,7 @@ const {
   getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
-  getPortfolioReallocation,
+  getPortfolioReallocation, getPortfolioReallocationEfficacy,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -346,6 +346,28 @@ router.get('/reallocation', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET reallocation error', err.message)
     res.status(500).json({ error: 'Failed to load reallocation roster' })
+  }
+})
+
+// ── GET /api/insights/reallocation-efficacy ─────────────────────────────────────
+// The FEEDBACK LOOP that closes /reallocation (intel-v10 Layer 25): /reallocation PRESCRIBES budget
+// shifts; this grades whether past prescriptions actually PAID OFF. It reconstructs each Layer-24
+// proposal from the window it would have seen, re-measures the SAME from/to cost-per-outcome over the
+// weeks that followed, and pools every client's track record into ONE confidence CALIBRATION the engine
+// can multiply through — "moderate-strength reallocates have held 7/10 times, so trust them ~0.9×". The
+// most sensitive boundary there is: it exposes per-client hit/miss verdicts AND a names-and-counts
+// by_client breakdown, so — like /reallocation · /systemic · /trajectory · /pacing · /pulse — it lives
+// here behind requireAuth and NEVER rides the per-client GET /:clientId (or shared-link) payload;
+// getClientReallocationEfficacy is deliberately NOT folded into /:clientId. Declared before the :clientId
+// route so the literal "reallocation-efficacy" can never be captured as a client id. No params: the span
+// is the trailing (decision + boundaries·horizon) weeks, the clock is "now".
+router.get('/reallocation-efficacy', async (_req, res) => {
+  try {
+    const out = await getPortfolioReallocationEfficacy()
+    res.json(out)
+  } catch (err) {
+    console.error('[insights] GET reallocation-efficacy error', err.message)
+    res.status(500).json({ error: 'Failed to load reallocation-efficacy calibration' })
   }
 })
 
