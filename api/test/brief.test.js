@@ -382,3 +382,151 @@ test('generatePortfolioBrief NEVER carries an impact_reinforcement line', async 
   const res = await generatePortfolioBrief(AS_OF)
   assert.ok(!('impact_reinforcement' in res.pack))  // the agency brief shows the full panel instead
 })
+
+// ── D. LEAD-POLICY CONFINEMENT (13d) — the learned lead nudge re-aims, never leaks ──
+// intel-v7 layer 13 tunes WHICH triage lane leads the morning brief from our OWN recent
+// front-page hit rate (deriveLeadPolicy → bounded per-lane weights in [0.8,1.2], act_now
+// safety-floored at ≥1). That tuning is AGENCY-ONLY telemetry: the portfolio pack carries
+// the full lead_policy object (D2); the CLIENT pack must carry NONE of it. A tuned policy may
+// only re-AIM which adverse signal becomes the client's focus — never ride a weight, hit_rate,
+// lane bound, or the promote/demote vocabulary across the egress. We stub BOTH boundary calls
+// leadPolicyFor() reaches (getBriefImpact must not throw → deriveLeadPolicy returns the policy)
+// on their cached module objects, same idiom as Section C, so a deterministic TUNED policy
+// drives the egress with no DB replay; briefLeadPolicy.test.js (13a) proves the derivation.
+const { summarizeClientPulse } = require('../lib/pulseBriefing')
+const { buildClientBriefPack }  = require('../lib/pulseBrief')
+const leadPolicyEngine = require('../lib/briefLeadPolicy')
+const { narrateLeadPolicy } = leadPolicyEngine
+const realDeriveLeadPolicy  = leadPolicyEngine.deriveLeadPolicy
+test.after(() => { leadPolicyEngine.deriveLeadPolicy = realDeriveLeadPolicy })
+
+// A fully-formed TUNED policy (the exact deriveLeadPolicy shape): act_now promoted, worth_a_look
+// demoted, verify neutral — so the egress sees a real object full of machinery to (not) leak.
+const TUNED_POLICY = {
+  status: 'tuned', neutral_rate: 0.5, min_sample: 4,
+  bounds: { min: 0.8, max: 1.2 }, safety_floor_lanes: ['act_now'],
+  lanes: {
+    act_now:      { weight: 1.10, direction: 'promote', adjusted: true,  judged: 4, hit_rate: 0.75, label: 'earned',     reason: 'promoted',            safetyFloored: false },
+    worth_a_look: { weight: 0.90, direction: 'demote',  adjusted: true,  judged: 4, hit_rate: 0.25, label: 'overcalled', reason: 'demoted',             safetyFloored: false },
+    verify:       { weight: 1.0,  direction: 'neutral', adjusted: false, judged: 0, hit_rate: null, label: null,         reason: 'insufficient_sample', safetyFloored: false },
+  },
+  promoted: 1, demoted: 1, floored: 0, adjusted_count: 2,
+}
+
+// Drive leadPolicyFor() → TUNED_POLICY: getBriefImpact must merely NOT throw (its value is
+// ignored by the deriveLeadPolicy stub); an ungraded impact also zeroes impact_reinforcement,
+// isolating these tests to the lead-policy concern. impactEngine is Section C's binding.
+function stubTuned() {
+  impactEngine.getBriefImpact   = async () => ({ status: 'insufficient', label: null, hit_rate: null, hits: 0, judged: 0 })
+  leadPolicyEngine.deriveLeadPolicy = () => TUNED_POLICY
+}
+
+// Compound, unambiguous machinery key names that must NEVER appear at ANY depth of a client
+// pack (each cross-checked against buildClientBriefPack's whitelist — none collide with a real
+// client field). focus.direction (the metric trend up/down) is legitimate, asserted separately.
+const FORBIDDEN_KEYS = [
+  'lead_policy', 'leadPolicy', 'lead_weight', 'base_score', '__lead',
+  'safetyFloored', 'safety_floor_lanes', 'neutral_rate', 'min_sample',
+  'bounds', 'lanes', 'hit_rate', 'weight', 'adjusted_count',
+]
+// The promote/demote policy-direction vocabulary + bookkeeping tokens that must never cross as a
+// VALUE either — a serialized-pack scan catches a leak that smuggled them in as a string.
+const FORBIDDEN_TOKENS = /promote|demote|lead_weight|base_score|__lead|safety_floor|hit_rate|neutral_rate/
+
+function assertCleanClientPack(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_KEYS.includes(k), `${where}: client pack must not carry lead-policy field "${k}" (at ${path})`)
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(!FORBIDDEN_TOKENS.test(JSON.stringify(pack)), `${where}: lead-policy vocabulary leaked into the serialized client pack`)
+}
+
+// Minimal synthetic-signal factory (the insights.pulseBriefing.test.js shape) for the re-aim path.
+let sigSeq = 0
+function sig(o = {}) {
+  return {
+    client_id: o.client_id ?? `d-${++sigSeq}`,
+    metric:    o.metric ?? 'leads',
+    label:     o.label ?? 'Leads',
+    severity:  o.severity ?? 'critical',
+    adverse:   o.adverse ?? true,
+    direction: o.direction ?? 'down',
+    delta_pct: o.delta_pct ?? -40,
+    z:         o.z ?? -3,
+    ...(o.reliability != null ? { reliability: o.reliability } : {}),
+    ...(o.reliability_label != null ? { reliability_label: o.reliability_label } : {}),
+    ...(o.accuracy_label != null ? { accuracy_label: o.accuracy_label } : {}),
+  }
+}
+
+test('generateClientBrief carries NO lead-policy machinery, even when the policy is tuned (13d)', async () => {
+  await ready()
+  const c = await freshClient('Lead Policy Confinement Roofing Co')
+  stubTuned()
+
+  const res = await generateClientBrief(c, AS_OF)
+
+  // The brief still ships, grounded, in the morning voice.
+  assert.equal(res.grounded, true)
+  assert.match(res.brief_text, /^Good morning\./)
+  // The policy object is NOT attached to the client pack…
+  assert.ok(!('lead_policy' in res.pack), 'client pack must not carry lead_policy')
+  // …and none of its machinery rode along at any depth, top-level or nested.
+  assertCleanClientPack(res.pack, 'generateClientBrief')
+
+  // The persisted read-back — the row a client actually fetches — is just as clean.
+  const row = await getClientBrief(c, AS_OF)
+  assertCleanClientPack(row.pack, 'getClientBrief read-back')
+})
+
+test('generatePortfolioBrief DOES carry the full lead_policy — confinement is a split, not suppression (13d)', async () => {
+  await ready()
+  stubTuned()
+  await freshClient('Portfolio LeadPolicy A')
+
+  const res = await generatePortfolioBrief(AS_OF)
+  // The agency surface gets the very machinery the client is denied — proving the egress is a
+  // deliberate audience split, not a blanket suppression that would also blind the agency.
+  assert.ok('lead_policy' in res.pack, 'portfolio pack must carry lead_policy')
+  assert.deepEqual(res.pack.lead_policy, TUNED_POLICY)
+})
+
+test('summarizeClientPulse re-aims the focus under a tuned policy yet exposes only client fields (13d)', () => {
+  // The re-aim path with a REAL focus: ≥2 adverse signals across lanes so applyLeadPolicyToFeed
+  // actually runs (it no-ops below 2). Whatever lands in the lead slot, the client focus carries
+  // EXACTLY the five client-visible fields — never a weight, hit_rate, z, severity or tuning label.
+  const signals = [
+    sig({ metric: 'leads',   label: 'Leads',   severity: 'critical', reliability: 0.9, reliability_label: 'reliable', accuracy_label: 'proven',     delta_pct: -42, z: -3.1 }),
+    sig({ metric: 'revenue', label: 'Revenue', severity: 'warning',  reliability: 0.5, reliability_label: 'mixed',    accuracy_label: 'developing', delta_pct: -19, z: -1.5 }),
+    sig({ metric: 'jobs',    label: 'Jobs',    severity: 'warning',  delta_pct: -11, z: -1.0 }),
+  ]
+  const out = summarizeClientPulse(signals, { leadPolicy: TUNED_POLICY })
+
+  assert.equal(out.status, 'briefing')
+  assert.ok(out.focus, 'a real focus was chosen')
+  // EXACTLY the five client fields — nothing else smuggled onto the focus.
+  assert.deepEqual(Object.keys(out.focus).sort(), ['delta_pct', 'direction', 'label', 'lane', 'metric'])
+  // focus.direction is the METRIC trend (up/down/flat), never the policy promote/demote vocabulary.
+  assert.match(out.focus.direction, /^(up|down|flat)$/)
+  // The headline narration carries no tuning vocabulary either.
+  assert.ok(!FORBIDDEN_TOKENS.test(out.headline_text), 'headline must not leak lead-policy vocabulary')
+
+  // The full client pack built from this re-aimed briefing stays clean end-to-end.
+  const pack = buildClientBriefPack({ as_of: AS_OF, signals, briefing: out })
+  assertCleanClientPack(pack, 'summarizeClientPulse→buildClientBriefPack')
+  assert.ok(pack.focus, 'the pack carried the re-aimed focus through')
+})
+
+test('narrateLeadPolicy is silent for the client even when the agency narration is not (13d)', () => {
+  // The narrator is the last egress gate: the client audience ALWAYS gets '' — a tuned policy that
+  // speaks to the agency must stay mute to the client, with zero tuning vocabulary either way.
+  assert.equal(narrateLeadPolicy(TUNED_POLICY, { audience: 'client' }), '')
+  const agency = narrateLeadPolicy(TUNED_POLICY, { audience: 'agency' })
+  assert.equal(typeof agency, 'string')
+  assert.ok(agency.length > 0, 'the agency DOES hear the tuned policy (proving the client silence is a deliberate choice)')
+})
