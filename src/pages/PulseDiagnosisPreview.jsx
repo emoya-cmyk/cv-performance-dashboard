@@ -943,6 +943,164 @@ function BriefHealthPanelPreview({ data }) {
   )
 }
 
+// ── EDITORIAL PRECISION (intel-v7 12c) — preview twin of BriefImpactPanel on Intelligence.jsx.
+// The THIRD and sharpest self-audit of the morning brief: not "did we write it" (reliability) or
+// "did we deliver it" (the self-check banner), but "did the call we LED with hold up?" Each shipped
+// lead is replayed over the WINDOW mornings that followed it and graded earned / fair / overcalled —
+// a disjoint third vocabulary so it never blurs with narration coverage. Static graded render (cn →
+// template strings, no fetch/loading/error/no-data) so the preview matches this file. Agency-only.
+const BRIEF_IMPACT_TONE = {
+  earned:     { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', bar: 'bg-emerald-500', label: 'Well-aimed' },
+  fair:       { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   bar: 'bg-amber-400',   label: 'A fair record' },
+  overcalled: { pill: 'border-rose-200 bg-rose-50 text-rose-700',          dot: 'bg-rose-500',    bar: 'bg-rose-400',    label: 'Overcalling' },
+  'no-data':  { pill: 'border-slate-200 bg-slate-50 text-slate-500',       dot: 'bg-slate-300',   bar: 'bg-slate-200',   label: 'Building record' },
+}
+// One impact bucket → a three-state view: 'none' (no leads, —), 'pending' (leads logged but none
+// resolved — young calls still abstaining, not a 0%), 'graded' (carries its hit-rate %). Mirrors
+// briefCoverageView's shape so the stat atoms read identically across the panels.
+function briefImpactView(b) {
+  if (!b || !b.sample)  return { state: 'none',    pct: null, hits: 0, judged: 0, sample: 0 }
+  if (!b.judged)        return { state: 'pending',  pct: null, hits: 0, judged: 0, sample: b.sample }
+  return { state: 'graded', pct: b.hit_rate != null ? Math.round(b.hit_rate * 100) : 0, hits: b.hits, judged: b.judged, sample: b.sample }
+}
+// Humanize a triage-lane key ('act_now'→'Act now', 'worth_a_look'→'Worth a look', ''→'Unspecified').
+function laneLabel(key) {
+  const s = String(key || '').trim().replace(/_/g, ' ')
+  if (!s) return 'Unspecified'
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+function BriefImpactStatPreview({ label, view }) {
+  return (
+    <div className="flex-1 min-w-0">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 truncate">{label}</p>
+      {view.state === 'none'
+        ? <p className="text-sm font-black text-slate-300 leading-tight">—</p>
+        : view.state === 'pending'
+        ? <p className="text-sm font-bold text-slate-400 leading-tight" title="Leads logged, none resolved yet — still abstaining">Building</p>
+        : <p className="text-sm font-black text-slate-800 leading-tight tabular-nums">{view.pct}%<span className="ml-1 text-[11px] font-semibold text-slate-400">{view.hits}/{view.judged}</span></p>}
+    </div>
+  )
+}
+// One lane row: name · mini hit-rate bar · pct · hits/judged. A lane still abstaining shows an empty
+// track and a calm "—", never a misleading 0%.
+function BriefImpactLaneRowPreview({ name, bucket }) {
+  const view = briefImpactView(bucket)
+  const tone = BRIEF_IMPACT_TONE[bucket?.label] || BRIEF_IMPACT_TONE['no-data']
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-20 shrink-0 text-[11px] font-semibold text-slate-500 truncate" title={name}>{name}</span>
+      <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        {view.state === 'graded' && <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${view.pct}%` }} />}
+      </div>
+      <span className="w-9 shrink-0 text-right text-[11px] font-black tabular-nums text-slate-700">
+        {view.state === 'graded' ? `${view.pct}%` : '—'}
+      </span>
+      <span className="w-9 shrink-0 text-right text-[10px] font-semibold text-slate-400 tabular-nums">
+        {view.state === 'graded' ? `${view.hits}/${view.judged}` : `0/${view.sample}`}
+      </span>
+    </div>
+  )
+}
+
+// Shaped EXACTLY like GET /api/ai/brief-impact over a 30-day brief history graded on a 7-morning
+// follow-through: 14 trackable leads shipped, 11 resolved, 6 held up (~55% → 'fair'). The audience
+// split does real work — CLIENT leads earned their place (5/6, 83%) while PORTFOLIO leads overcalled
+// (1/5, 20%), netting to a fair overall. by_lane shows which triage lanes earned the lead: act_now
+// confirms best (3/4), tailwind is fair (2/3), worth_a_look overcalls (1/4), and verify is still
+// abstaining (0 resolved). Every bucket honours hits+misses+unknown===sample, and the audience and
+// lane splits each sum back to the overall. narrative is verbatim narrateBriefImpact(impact,'agency').
+const BRIEF_IMPACT = {
+  status: 'graded', reason: 'graded', window: 7, min_sample: 4,
+  sample: 14, judged: 11, hits: 6, misses: 5, unknown: 3,
+  hit_rate: 6 / 11, label: 'fair',
+  by_lane: {
+    act_now:      { sample: 5, judged: 4, hits: 3, misses: 1, unknown: 1, hit_rate: 3 / 4, label: 'earned' },
+    tailwind:     { sample: 3, judged: 3, hits: 2, misses: 1, unknown: 0, hit_rate: 2 / 3, label: 'fair' },
+    worth_a_look: { sample: 4, judged: 4, hits: 1, misses: 3, unknown: 0, hit_rate: 1 / 4, label: 'overcalled' },
+    verify:       { sample: 2, judged: 0, hits: 0, misses: 0, unknown: 2, hit_rate: null, label: null },
+  },
+  by_audience: {
+    client: { sample: 8, judged: 6, hits: 5, misses: 1, unknown: 2, hit_rate: 5 / 6, label: 'earned' },
+    agency: { sample: 6, judged: 5, hits: 1, misses: 4, unknown: 1, hit_rate: 1 / 5, label: 'overcalled' },
+  },
+  requested: { as_of: null, days: 30 },
+  narrative: 'Our morning leads have earned their place 6 of 11 times recently (~55%) — a fair record.',
+}
+
+function BriefImpactPanelPreview({ data }) {
+  const tone      = BRIEF_IMPACT_TONE[data.label] || BRIEF_IMPACT_TONE['no-data']
+  const hitPct    = data.hit_rate != null ? Math.round(data.hit_rate * 100) : 0
+  const narrative = (data.narrative || '').trim()
+  const days      = data.requested.days
+  const window    = data.window
+  const lanes     = Object.entries(data.by_lane || {})
+    .sort((a, b) => {
+      const ra = a[1]?.hit_rate, rb = b[1]?.hit_rate
+      if (ra == null && rb == null) return (b[1]?.sample || 0) - (a[1]?.sample || 0)
+      if (ra == null) return 1
+      if (rb == null) return -1
+      return rb - ra
+    })
+    .slice(0, 6)
+  return (
+    <div className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Crosshair className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Editorial precision</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">Did the call we led with hold up · last {days} days</p>
+        </div>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${tone.pill}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+          <Clock className="w-3 h-3" /> {window}-morning follow-through
+        </span>
+      </div>
+      <div className="px-4 py-4">
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-3xl font-black text-slate-900 leading-none tabular-nums">{hitPct}%</span>
+            <span className="text-[11px] font-bold text-slate-400">held up</span>
+          </div>
+          <p className="text-[11px] font-semibold text-slate-400 pb-0.5">
+            {data.hits} of {data.judged} {data.judged === 1 ? 'lead' : 'leads'} held up over the following mornings
+            {data.unknown > 0 ? ` · ${data.unknown} still abstaining` : ''}
+          </p>
+        </div>
+        <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+          <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${hitPct}%` }} />
+        </div>
+        {narrative && <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative}</p>}
+        <div className="mt-3 flex items-center gap-4 rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2">
+          <BriefImpactStatPreview label="Client leads"    view={briefImpactView(data.by_audience.client)} />
+          <span className="w-px self-stretch bg-slate-200" />
+          <BriefImpactStatPreview label="Portfolio leads" view={briefImpactView(data.by_audience.agency)} />
+        </div>
+        {lanes.length > 0 && (
+          <div className="mt-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Which lanes earned the lead</p>
+            <div className="space-y-1.5">
+              {lanes.map(([key, bucket]) => (
+                <BriefImpactLaneRowPreview key={key} name={laneLabel(key)} bucket={bucket} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          A third, separate question — not did we <span className="font-semibold text-slate-500">write</span> the brief or <span className="font-semibold text-slate-500">deliver</span> it, but did the call we
+          {' '}<span className="font-semibold text-slate-500">led with</span> hold up. A lead is graded only once its {window}-morning follow-through resolves — young calls abstain, never count against us.
+          {' '}<span className="font-semibold text-emerald-600">earned</span> ≥70% · <span className="font-semibold text-amber-600">fair</span> 40–69% · <span className="font-semibold text-rose-600">overcalled</span> &lt;40%. Agency-only.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -1050,6 +1208,31 @@ export default function PulseDiagnosisPreview() {
             keeps <span className="font-bold text-emerald-600">writing freely</span> — and because every fallback is grounded-by-construction,
             the banner says it plainly: <span className="font-bold text-slate-600">clients were never affected</span>. It rides a separate
             agency-only alert channel, never a client&rsquo;s digest.
+          </p>
+        </div>
+
+        {/* ── EDITORIAL PRECISION — the agency's THIRD self-audit of the morning brief (layer 12c),
+            full width. Reliability asks "did we write it"; the self-check asks "did we deliver it";
+            this asks the sharpest question of all — "did the call we LED with hold up?" Each shipped
+            lead is replayed over the WINDOW mornings that followed and graded earned/fair/overcalled
+            on a disjoint third vocabulary, so editorial precision can never be confused with narration
+            coverage or grounded-trust. Pure read (it replays the same verified day-pulse, never
+            regenerates), agency-only: the hit-rate and lane grades are internal calibration. ───────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Editorial precision</p>
+          <BriefImpactPanelPreview data={BRIEF_IMPACT} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The chain&rsquo;s final, hardest self-grade: not whether the brief was <span className="font-bold text-sky-600">written</span> or{' '}
+            <span className="font-bold text-emerald-600">delivered</span>, but whether the call it <span className="font-bold text-slate-600">led with held up</span>.
+            Every shipped lead is replayed over the <span className="font-bold text-slate-600">7 mornings that followed</span> — a call still firing the
+            same way <span className="font-bold text-emerald-600">confirms</span>, a reverted one <span className="font-bold text-rose-600">refutes</span> — and
+            young leads <span className="font-bold text-slate-600">abstain</span> rather than count against us. Here 6 of 11 resolved leads held up
+            (<span className="font-bold text-amber-600">~55% → fair</span>), and the split does the real teaching: the{' '}
+            <span className="font-bold text-emerald-600">client</span> leads earned their place (5/6) while the <span className="font-bold text-rose-600">portfolio</span> leads
+            overcalled (1/5), so we know exactly where to tighten selection. The lane breakdown ranks which calls deserve the front page —{' '}
+            <span className="font-bold text-emerald-600">Act now</span> confirms best, <span className="font-bold text-rose-600">Worth a look</span> overcalls, and a still-abstaining{' '}
+            <span className="font-bold text-slate-600">Verify</span> shows a calm &ldquo;—&rdquo; instead of a misleading 0%. A <span className="font-bold text-slate-600">third, disjoint
+            vocabulary</span> — earned / fair / overcalled — so it can never blur with narration coverage or grounded trust. <span className="font-bold text-slate-600">Agency-only</span>.
           </p>
         </div>
 
