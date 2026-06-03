@@ -1206,3 +1206,186 @@ test('the 16d audit guard is load-bearing — a lone run figure, a string identi
     'a real audit result spliced into a client pack must be rejected',
   )
 })
+
+// ───────────────────────────────────────────────────────────────────────────────────────────────
+// Section I — layer 17d: the REMEDIATOR is leak-proof, and rides the agency portfolio pack alone.
+//
+// 17 closes the lead-policy control loop: SENSE (14, the stability monitor) → ACT (13/15, the policy
+// and its governor) → AUDIT (16, the governance auditor) → ADJUST (17, this remediator). When the
+// auditor reports a correction that keeps churning, the remediator proposes the gentlest *structural*
+// fix — widen the dead-band, then tighten bounds, then pin to neutral — staged for one agency click,
+// always reversible, never touching a safety-floored lane. It is the most internal rung in the whole
+// tower, so it must be the most thoroughly confined: this is the FIFTH client-leak guard, joining
+// lead-policy (assertCleanClientPack), stability (assertNoStabilityMachinery), governor
+// (assertNoGovernanceMachinery) and audit (assertNoAuditMachinery).
+//
+// WIRING SPLIT — this mirrors the GOVERNOR (15d), not the route-only auditor (16d): when a fix is
+// staged, the remediation ATTACHES to the agency PORTFOLIO pack (brief.js: pack.lead_policy_remediation
+// = remediation, gated on shouldStageRemediation). So the live test below asserts the agency pack
+// CARRIES it while the client brief + its read-back carry none — and the client guard THROWS when
+// pointed at the agency pack, proving the client's silence is a real all-clear, not a dead guard.
+const { proposeLeadPolicyRemediation, shouldStageRemediation, narrateLeadPolicyRemediation } = require('../lib/briefLeadPolicyRemediation')
+
+// The remediator's identity lives entirely in compound snake_case structure + remedy enum VALUES —
+// never in plain English. So we forbid the structural keys and the enum tokens, and DELIBERATELY do
+// NOT forbid real words a client pack or prose legitimately uses (reversible, severity, remedy,
+// rationale, proposals) — those would false-positive. (widen_neutral_band ⊂ neutral_band, covered.)
+const FORBIDDEN_REMEDIATION_KEYS = ['lead_policy_remediation', 'remediation_reason', 'abstained_lanes', 'lanes_considered', 'lane_overrides', 'neutral_band']
+const FORBIDDEN_REMEDIATION_TOKENS = /lead_policy_remediation|remediation_reason|abstained_lanes|lanes_considered|lane_overrides|neutral_band|tighten_bounds|pin_neutral|remediation_proposed|safety_floored|at_ceiling/
+function assertNoRemediationMachinery(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_REMEDIATION_KEYS.includes(k), `${where}: client pack must not carry remediator field "${k}" (at ${path})`)
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(!FORBIDDEN_REMEDIATION_TOKENS.test(JSON.stringify(pack)), `${where}: remediator vocabulary leaked into the serialized client pack`)
+}
+
+// Build the remediator's input the honest way: a REAL audit (reusing Section H's AUDIT_CASES) over a
+// real policy literal, so every status below is EARNED end-to-end — history → audit → proposal — and
+// never hand-stamped. The fresh policy has no overrides (the ladder starts at rung 1); the floored
+// variant makes 'verify' untouchable so we can prove the safety asymmetry.
+const remPolicyFresh = govPolicy({})
+const remPolicyFloored = { ...govPolicy({}), safety_floor_lanes: ['act_now', 'verify'] }
+const auditOf = (n) => auditLeadPolicyGovernance(AUDIT_CASES[n].history)
+const REMEDIATION_CASES = [
+  // churning 'verify' + a fresh policy → the gentlest bounded fix is staged (rung 1, widen the dead-band).
+  { status: 'remediation_proposed', stages: true, lane: 'verify', remedy: 'widen_neutral_band', audit: auditOf(0), policy: remPolicyFresh },
+  // the SAME churn, but 'verify' is safety-floored → a floored lane is surfaced, never restructured → steady.
+  { status: 'steady', stages: false, abstainedLane: 'verify', abstainedReason: 'safety_floored', audit: auditOf(0), policy: remPolicyFloored },
+  // a correction that TOOK (effective) → the auditor isn't escalating → there is nothing to remediate.
+  { status: 'steady', stages: false, audit: auditOf(1), policy: remPolicyFresh },
+  // a single governed morning → the audit abstained on thin history → we abstain too (fail-safe).
+  { status: 'abstained', stages: false, audit: auditOf(3), policy: remPolicyFresh },
+]
+
+test('proposeLeadPolicyRemediation lands on each of its three statuses from REAL audits, and floors the floor (17d)', () => {
+  for (const c of REMEDIATION_CASES) {
+    const rem = proposeLeadPolicyRemediation(c.audit, c.policy)
+    assert.equal(rem.status, c.status, `this regime must remediate to "${c.status}" (got "${rem.status}")`)
+    assert.equal(shouldStageRemediation(rem), c.stages, `the staging hook must ${c.stages ? 'fire' : 'stay quiet'} for "${c.status}"`)
+    if (c.status === 'remediation_proposed') {
+      assert.ok(rem.proposals.length > 0, 'a proposed remediation carries at least one concrete fix')
+      const top = rem.proposals[0]
+      assert.equal(top.lane, c.lane, `the staged fix must name the churning lane "${c.lane}"`)
+      assert.equal(top.remedy, c.remedy, `the gentlest applicable remedy must be "${c.remedy}"`)
+      assert.equal(top.reversible, true, 'every staged fix is reversible by construction — it is a proposal, not a commit')
+      assert.ok(top.from && top.to, 'a staged fix carries both the current knob value and its target')
+    } else {
+      assert.equal(rem.proposals.length, 0, `a non-proposing remediation ("${c.status}") stages nothing`)
+    }
+    // the SAFETY ASYMMETRY: a floored churning lane is surfaced as abstained, never given a proposal.
+    if (c.abstainedLane) {
+      assert.deepEqual(rem.abstained_lanes, [{ lane: c.abstainedLane, reason: c.abstainedReason }],
+        `a safety-floored churning lane must abstain with reason "${c.abstainedReason}", never restructure`)
+      assert.equal(rem.remediation_reason, 'steady:all_abstained', 'an all-floored escalation is a deliberate steady, tagged as such')
+    }
+  }
+})
+
+test('narrateLeadPolicyRemediation is silent for the CLIENT across all three remediation statuses (17d)', () => {
+  for (const c of REMEDIATION_CASES) {
+    const rem = proposeLeadPolicyRemediation(c.audit, c.policy)
+    assert.equal(
+      narrateLeadPolicyRemediation(rem, { audience: 'client' }), '',
+      `client narration must be '' for remediation status "${c.status}" — re-tuning the auto-tuner is the deepest internal calibration`,
+    )
+  }
+})
+
+test('narrateLeadPolicyRemediation speaks to the AGENCY only when a fix is PROPOSED — clean across all five layers (17d)', () => {
+  for (const c of REMEDIATION_CASES) {
+    const rem = proposeLeadPolicyRemediation(c.audit, c.policy)
+    const agency = narrateLeadPolicyRemediation(rem, { audience: 'agency' })
+    assert.equal(typeof agency, 'string')
+    if (c.status === 'remediation_proposed') {
+      assert.ok(agency.length > 0, 'the agency SHOULD hear a staged structural fix — proving the client \'\' above is a deliberate split, not an empty feature')
+      assert.ok(!FORBIDDEN_REMEDIATION_TOKENS.test(agency), 'agency remediation narration must carry no remediator identifier')
+      assert.ok(!FORBIDDEN_AUDIT_TOKENS.test(agency),       'agency remediation narration must carry no auditor identifier')
+      assert.ok(!FORBIDDEN_GOV_TOKENS.test(agency),         'agency remediation narration must carry no governor identifier')
+      assert.ok(!FORBIDDEN_HEALTH_TOKENS.test(agency),      'agency remediation narration must carry no stability-monitor identifier')
+      assert.ok(!FORBIDDEN_TOKENS.test(agency),             'agency remediation narration must carry no lead-policy identifier')
+    } else {
+      assert.equal(agency, '', `the agency stays silent on remediation status "${c.status}" — a loop that needs no structural fix is not news`)
+    }
+  }
+})
+
+test('neither a live client brief nor its read-back carries the remediator — but the agency portfolio pack does (the 17d split) (17d)', async () => {
+  await ready()
+  // the deepest control-plane regime: a lane oscillates every morning, the governor corrects it daily,
+  // the auditor sees that correction churning and escalates — so THIS morning the remediator stages a
+  // real structural fix and rides the agency portfolio pack (one rung up from the governor's wiring).
+  stubOscillatingWithEarned()
+  const c = await freshClient('Lead Policy Remediation Confinement Roofing Co')
+
+  const res = await generateClientBrief(c, AS_OF)
+  assert.equal(res.grounded, true)
+  assert.match(res.brief_text, /^Good morning\./)
+  // the client pack carries none of the remediator — at any depth — and none of the four layers beneath it.
+  assert.ok(!('lead_policy_remediation' in res.pack), 'the client pack must not carry the staged remediation')
+  assertNoRemediationMachinery(res.pack, 'generateClientBrief under a live staged remediation')
+  assertNoAuditMachinery(res.pack, 'generateClientBrief under a live staged remediation')
+  assertNoGovernanceMachinery(res.pack, 'generateClientBrief under a live staged remediation')
+  assertNoStabilityMachinery(res.pack, 'generateClientBrief under a live staged remediation')
+  assertCleanClientPack(res.pack, 'generateClientBrief under a live staged remediation')
+  // and the persisted read-back — the row a client actually fetches — is just as clean.
+  const row = await getClientBrief(c, AS_OF)
+  assertNoRemediationMachinery(row.pack, 'getClientBrief read-back under a live staged remediation')
+
+  // THE WIRING SPLIT (mirrors the governor 15d, NOT the route-only auditor 16d): the remediation
+  // ATTACHES to the agency portfolio pack when a fix is staged. The probe proved one live
+  // generatePortfolioBrief under this exact regime deterministically stages widen_neutral_band.
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok('lead_policy_remediation' in port.pack, 'the agency portfolio pack DOES carry the staged remediation')
+  assert.equal(port.pack.lead_policy_remediation.status, 'remediation_proposed', 'and what it carries is a real staged proposal')
+  // running the CLIENT guard over that same agency pack THROWS — proof the guard is load-bearing and
+  // the client pack's silence above is a real all-clear, not a guard that never fires.
+  assert.throws(
+    () => assertNoRemediationMachinery(port.pack, 'portfolio-pack-remediation-probe'),
+    /remediator field|remediator vocabulary/,
+    'the agency pack carries remediation machinery — the client guard MUST trip on it',
+  )
+})
+
+test('the 17d remediation guard is load-bearing — a lone key, a smuggled enum, or a real proposal trips it; and it never false-positives (17d)', () => {
+  // a pack clean of every other machinery key but carrying a single remediator override map is caught BY NAME.
+  assert.throws(
+    () => assertNoRemediationMachinery({ focus: { metric: 'leads', lane_overrides: {} } }, 'override-key-probe'),
+    /lane_overrides/,
+    'a lone remediator override map in a client pack must be rejected by name',
+  )
+  // a remedy enum smuggled in as a plain string VALUE is caught by the token sweep (widen_neutral_band ⊂ neutral_band).
+  assert.throws(
+    () => assertNoRemediationMachinery({ note: 'we should widen_neutral_band on that lane' }, 'enum-token-probe'),
+    /remediator vocabulary/,
+    'a remediator remedy identifier leaked as a string must be rejected by the token sweep',
+  )
+  // …and the guard is not vacuously throwing — a structurally similar but clean pack passes.
+  assert.doesNotThrow(
+    () => assertNoRemediationMachinery({ focus: { metric: 'leads', trend: 'down' } }, 'clean-probe'),
+    'a clean client pack with no remediator machinery must pass',
+  )
+  // CRITICAL discipline: real-English words a live client pack or prose legitimately uses — reversible,
+  // severity, remedy, rationale, the monitor lane, marketing copy — are NOT forbidden. The remediator's
+  // identity lives in its compound snake_case + remedy enums, so it can never false-positive on English.
+  assert.doesNotThrow(
+    () => assertNoRemediationMachinery({
+      triage: { lane: 'monitor', label: 'recurring revenue' },
+      note: 'this change is fully reversible; severity is low and the remedy is simple — see the rationale',
+    }, 'false-positive-probe'),
+    'the remediation guard must never trip on real words like reversible / severity / remedy / rationale or the monitor lane',
+  )
+  // belt-and-suspenders: a REAL staged remediation spliced into a client pack can never ride along.
+  const realRem = proposeLeadPolicyRemediation(auditOf(0), remPolicyFresh)
+  assert.equal(realRem.status, 'remediation_proposed', 'sanity: the spliced remediation is a real proposal')
+  assert.throws(
+    () => assertNoRemediationMachinery({ insight: { lead_policy_remediation: realRem } }, 'real-remediation-probe'),
+    /remediator field|remediator vocabulary/,
+    'a real staged remediation spliced into a client pack must be rejected',
+  )
+})
