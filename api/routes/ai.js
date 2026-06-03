@@ -51,6 +51,7 @@ const {
   listRecentBriefs,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
+const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -274,10 +275,17 @@ router.get('/brief-health', async (req, res) => {
   try {
     const rows    = await listRecentBriefs({ asOf, days })
     const summary = summarizeBriefQuality(rows)
+    // summarizeBriefQuality GRADES (a standing pull); assessBriefDelivery turns that grade
+    // into a VERDICT an agency surface + the Monday digest can act on — silent on healthy,
+    // a worst-of-two-audience alarm with a self-heal step when the narrator is failing.
+    // Agency-only by construction: this whole route is 403-gated, and the verdict's own
+    // narration is agency-voiced (client → '').
+    const signal = assessBriefDelivery(summary)
     res.json({
       ...summary,
       requested: { as_of: asOf || null, days },
       narrative: narrateBriefHealth(summary.overall, { audience: 'agency' }),
+      delivery: { ...signal, narrative: narrateBriefDelivery(signal, { audience: 'agency' }) },
     })
   } catch (err) {
     console.error('[ai] GET brief-health error', err.message)

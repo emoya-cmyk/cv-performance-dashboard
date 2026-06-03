@@ -10,9 +10,12 @@
 const cron           = require('node-cron')
 const { query }      = require('./db')
 const { runSync }    = require('./routes/sync')
-const { sendDigest } = require('./lib/emailDigest')
+const { sendDigest, sendBriefDeliveryAlert } = require('./lib/emailDigest')
 const { getOrGenerateRecap } = require('./lib/recap')
 const { runInsightsForAll }  = require('./lib/insights')
+const { listRecentBriefs }      = require('./lib/brief')
+const { summarizeBriefQuality } = require('./lib/briefQuality')
+const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelivery')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -137,6 +140,27 @@ function startScheduler() {
     }
 
     console.log(`[digest] done — ${sent} sent, ${errors} errors`)
+
+    // ── Narration self-check — does the agency need to know its OWN brief-writer
+    //    is failing? ────────────────────────────────────────────────────────────
+    // The digest above is per-client and client-facing; this is its agency-only
+    // counterpart. Grade the last 30 mornings of our own narrator and, ONLY when
+    // its voice is degrading, push a single internal alert (BRIEF_ALERT_TO) with the
+    // self-heal step. Silent + self-healing otherwise — clients already saw the safe,
+    // grounded template, so nothing they received was ever wrong. Isolated in its own
+    // try so a brief-health hiccup can't disturb the client digest run above, and
+    // placed AFTER it so it fires even if the digest loop itself threw.
+    try {
+      const briefRows = await listRecentBriefs({ asOf: null, days: 30 })
+      const signal    = assessBriefDelivery(summarizeBriefQuality(briefRows))
+      const narrative = narrateBriefDelivery(signal, { audience: 'agency' })
+      const latestAsOf = briefRows.length ? briefRows[briefRows.length - 1].as_of : null
+      const r = await sendBriefDeliveryAlert({ signal, narrative, asOf: latestAsOf })
+      console.log(`[brief-alert] narrator ${signal.status}` +
+        (r.sent ? ` → alerted ${r.to}` : ` (${r.reason})`))
+    } catch (err) {
+      console.error('[brief-alert] fatal', err.message)
+    }
   })
 
   console.log(`[scheduler] digest on schedule: ${DIGEST_SCHEDULE}`)

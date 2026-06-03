@@ -220,4 +220,100 @@ async function sendDigest({ client, stats, prevStats, goal, update, recap }) {
   return data
 }
 
-module.exports = { sendDigest, buildHtml }
+// ── Agency-only narration self-check alert ────────────────────────────────────
+// The autonomous PUSH half of the narration-delivery monitor (intel-v7 layer 11):
+// every Monday the scheduler grades its OWN morning-brief narrator and, ONLY when
+// that voice is degrading, emails the agency one line — what's failing + the
+// self-heal step. Strictly agency-INTERNAL: the verdict names model fallbacks and
+// fellback streaks a client must never see, so it rides BRIEF_ALERT_TO (the agency's
+// own inbox), NEVER a client.digest_email, and the body says so out loud. Silent on a
+// healthy narrator by construction. Graceful + autonomous: an unset recipient or a
+// missing Resend key downgrades to a loud server-log line, never a thrown send — the
+// failure is surfaced one way or another, and the digest run is never put at risk.
+function buildBriefAlertHtml({ narrative, signal, asOf }) {
+  const stalled = signal.status === 'stalled'
+  const accent  = stalled ? '#e11d48' : '#f59e0b'                 // rose / amber — mirrors the UI bands
+  const label   = stalled ? 'Morning Brief narration has stalled'
+                          : 'Morning Brief narration is degrading'
+  const stream  = signal.audience === 'agency' ? 'portfolio brief' : 'client brief'
+  const recent  = signal.latest_as_of ? ` · most recent ${esc(signal.latest_as_of)}` : ''
+  const ranAt   = asOf ? esc(asOf) : 'the latest mornings'
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Morning Brief narration health</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+        <tr><td style="background:#fff;border-radius:16px;padding:26px;border:1px solid #e2e8f0;border-top:4px solid ${accent};">
+          <p style="margin:0 0 4px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.14em;color:${accent};">
+            Narrator self-check · ${stalled ? 'stalled' : 'degrading'}
+          </p>
+          <h1 style="margin:0 0 14px;font-size:20px;font-weight:900;color:#0f172a;line-height:1.2;">${label}</h1>
+          <p style="margin:0 0 16px;font-size:14px;color:#334155;line-height:1.55;">${esc(narrative)}</p>
+          <p style="margin:0 0 18px;font-size:12px;color:#64748b;line-height:1.6;">
+            Failing stream: <strong style="color:#1e293b;">${stream}</strong>${recent}<br>
+            Graded over the narrator's briefs through ${ranAt}.
+          </p>
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td>
+            <a href="${BASE_URL}/intelligence"
+               style="display:inline-block;background:#0f172a;color:#fff;font-size:13px;font-weight:800;
+                      text-decoration:none;padding:11px 22px;border-radius:10px;">Open Narration Health →</a>
+          </td></tr></table>
+          <p style="margin:18px 0 0;font-size:11px;color:#94a3b8;line-height:1.6;border-top:1px solid #f1f5f9;padding-top:12px;">
+            This is an internal narration self-check. Your clients never receive it — their dashboards and
+            digests already fell back to the safe, fully-grounded template, so every number they saw stayed correct.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+}
+
+// Fire-and-forget agency alert. Returns a {sent}/{skipped,reason} verdict (never
+// throws on a config gap) so the caller can log a one-liner. Throws only if a
+// genuinely-configured Resend send fails — that surfaces in the scheduler's catch.
+async function sendBriefDeliveryAlert({ signal, narrative, asOf } = {}) {
+  // Silent on a healthy narrator — the common case. The caller already gates on
+  // signal.alert; this double-guard keeps the function safe to call unconditionally.
+  if (!signal || !signal.alert) return { skipped: true, reason: 'healthy' }
+  const line = (narrative && narrative.trim()) || ''
+  if (!line) return { skipped: true, reason: 'no-narrative' }
+
+  // Agency-only recipient, resolved at call time (no restart needed to configure it,
+  // and each branch stays unit-testable). This is NEVER a client.digest_email.
+  const to = process.env.BRIEF_ALERT_TO || null
+  if (!to) {
+    // Autonomous + graceful: with no inbox wired the failure still lands loudly in the
+    // server log, so a degrading narrator is never silently dropped.
+    console.warn(`[brief-alert] narrator ${signal.status} but BRIEF_ALERT_TO unset — ${line}`)
+    return { skipped: true, reason: 'no-recipient' }
+  }
+  if (!resend) {
+    console.warn(`[brief-alert] narrator ${signal.status} but RESEND_API_KEY unset — ${line}`)
+    return { skipped: true, reason: 'no-resend' }
+  }
+
+  const subject = signal.status === 'stalled'
+    ? 'Morning Brief narration STALLED — action needed'
+    : 'Morning Brief narration degrading — worth a look'
+
+  const { data, error } = await resend.emails.send({
+    from: FROM,
+    to,
+    subject,
+    html: buildBriefAlertHtml({ narrative: line, signal, asOf }),
+  })
+
+  if (error) throw new Error(error.message || JSON.stringify(error))
+  return { sent: true, to, severity: signal.severity, data }
+}
+
+module.exports = { sendDigest, buildHtml, sendBriefDeliveryAlert, buildBriefAlertHtml }
