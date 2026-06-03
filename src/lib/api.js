@@ -262,6 +262,22 @@ export const api = {
   // graded). `days` sizes the trajectory window (default 90 — efficacy grades a history of decisions,
   // not one morning's snapshot; clamp 1..365).
   getBriefEmphasisEfficacy: (days)       => get(`/api/ai/brief-emphasis-efficacy${days ? `?days=${days}` : ''}`),
+  // THE CONTROLLER — closes the second-order loop (intel-v9 21, agency-only, 403 for client tokens).
+  // getBriefEmphasisEfficacy MEASURES whether layer 19's cap flexes worked and emits a bounded
+  // step-scale per direction; THIS feeds that learned scale back into the MAGNITUDE of 19's next
+  // flex — endorse (lean_in, step +1) when a direction is paying off, temper (ease_off, step −1)
+  // when it isn't, hold (identity) when neutral or unmeasured. So the system doesn't just react to
+  // reception once and grade it forever — the grade re-shapes the next reaction. reception → flex
+  // (19) → efficacy (20) → scaled flex (21). Honest by abstention: no flex to scale, or no measured
+  // efficacy → identity pass-through of 19's decision (control_move 'none'). Strictly agency-only —
+  // 403s a client token, narrateEmphasisControl is '' for the client audience, and none of the
+  // control vocabulary crosses the client egress (proven in 21d). Returns the applyEmphasisControl
+  // superset ({ status, also_cap, delta, direction, controlled, control_move, control_reason,
+  // step_scale, base_step, controlled_step, base_cap, min_cap, max_cap, emphasis_also_cap,
+  // helpful_rate, label, trend, n, emphasis_reason }) plus echoed `requested` + one agency-voiced
+  // `narrative` (empty unless the controller actually moved the cap). `days` sizes the efficacy
+  // window the controller reads (default 90; clamp 1..365).
+  getBriefEmphasisControl:  (days)       => get(`/api/ai/brief-emphasis-control${days ? `?days=${days}` : ''}`),
   // CONSUMER OWN-VOTE (intel-v8 18d, client-scoped — the OUTWARD half of the engagement loop).
   // getBriefEngagement above reads the whole-book aggregate (agency-only, 403 for a client token);
   // THESE two are all a client ever touches — their own 👍/👎 on their own morning brief, one day.

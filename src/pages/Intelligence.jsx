@@ -4,6 +4,7 @@ import {
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
   Crosshair, BarChart3, Scale, Award, TrendingDown, Radar, Users, Sparkles, ArrowUpCircle, Activity,
   Gauge, ShieldAlert, AlertOctagon, Wrench, Minus, Scissors, Stethoscope, RotateCcw, ThumbsUp,
+  ArrowRight,
 } from 'lucide-react'
 import { api, USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -241,6 +242,12 @@ export default function Intelligence() {
           tunes the next one. Sits right after the engagement panel so the page reads "the reader
           grading the brief" → "and the brief grading its own self-tuning." Agency-only, USE_API-gated. */}
       {USE_API && <BriefEmphasisEfficacyPanel />}
+
+      {/* emphasis control (21c) — the controller that CLOSES the loop: it feeds the measured
+          step-scale above back into the magnitude of tomorrow's reception flex (lean in / ease
+          off / hold). Sits right after efficacy so the page reads "the brief grading its own
+          self-tuning" → "and the self-tuning re-tuning itself from the grade." Agency-only, USE_API-gated. */}
+      {USE_API && <BriefEmphasisControlPanel />}
 
       {/* triage roster — the per-client synthesis capstone, worst-first. Clicking a
           row pivots the feed's client filter so "where to look first" and the matching
@@ -1611,6 +1618,184 @@ function BriefEmphasisEfficacyPanel() {
           The <span className="font-semibold text-slate-500">self-improving</span> rung — the loop above flexes the brief's breadth on every reception grade; this grades whether the flex paid off and tunes the next one.
           {' '}<span className="font-semibold text-emerald-600">Widening</span> should sustain reception · <span className="font-semibold text-amber-600">tightening</span> should recover it.
           {' '}The learned step-scale stays bounded <span className="tabular-nums">0.5×–1.25×</span> — easy to ease off, earned to lean in.
+          {' '}Agency-only; a reader never sees their attention being tuned.
+        </p>
+      </div>
+    </section>
+  )
+}
+
+/* ── emphasis control — intel-v9 (21c): the rung that CLOSES the second-order loop ──────────────
+   The two panels above are the ACT and MEASURE halves of the engagement loop: layer 19 flexes
+   tomorrow's supporting-cast cap on every reception grade, and layer 20 grades whether that flex
+   paid off — emitting a bounded step-scale per direction. But until now nothing fed that grade
+   BACK: layer 19 kept flexing with the same fixed ±1 step forever, deaf to its own measured track
+   record. This is the rung that feeds it back — the CONTROLLER. It reads GET /api/ai/brief-
+   emphasis-control (agency-only), pairs layer 19's reception-driven flex with layer 20's measured
+   step-scale for that same direction, and adjusts the flex's MAGNITUDE by one gentle step: lean in
+   (reach one row further) when the direction is measured to be paying off, ease off (pull one row
+   back) when it isn't, hold (identity) when the measurement is neutral or not yet graded. So the
+   system stops reacting to reception once and grading it forever — the grade re-shapes the next
+   reaction. reception → flex (19) → efficacy (20) → scaled flex (21), the loop closed. SAFETY is
+   asymmetric by design: leaning in is earned twice (reception says widen AND past widening measured
+   as sustaining), easing off is always free, and the cap never leaves the [MIN_CAP, MAX_CAP] rails
+   — the headline plus one row always survive. Honest by abstention: no flex to scale, or no measured
+   efficacy → it passes 19's call through untouched and says so. PRIVACY (load-bearing): pure
+   second-order meta-telemetry no client may see — the narrator returns '' for the client audience
+   and none of the control vocabulary crosses the client egress (proven in 21d). Sits right after the
+   efficacy panel so the page reads "the brief grading its own self-tuning" → "and the self-tuning
+   re-tuning itself from that grade." Self-fetching, USE_API-gated, agency-only. */
+const EMPHASIS_CONTROL_TONE = {
+  lean_in:  { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', icon: ArrowUpCircle, label: 'Leaning in',  shipText: 'text-emerald-700', shipBox: 'border-emerald-200 bg-emerald-50' },
+  ease_off: { pill: 'border-amber-200 bg-amber-50 text-amber-700',       icon: RotateCcw,     label: 'Easing off',  shipText: 'text-amber-700',   shipBox: 'border-amber-200 bg-amber-50' },
+  hold:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Minus,         label: 'Holding',     shipText: 'text-slate-500',   shipBox: 'border-slate-200 bg-slate-50' },
+  none:     { pill: 'border-slate-200 bg-slate-50 text-slate-500',       icon: Inbox,         label: 'Standing by', shipText: 'text-slate-500',   shipBox: 'border-slate-200 bg-slate-50' },
+}
+
+// control_reason → one plain-English clause for the line beneath the pipeline. Kept free of every
+// machine token (no step_scale / control_* / lean_in / ease_off) so it can ride the agency surface
+// and reads as prose to a non-technical operator — the controller explaining itself in words.
+const EMPHASIS_CONTROL_REASON = {
+  efficacy_endorsed:     'past flexes this direction measured as paying off, so it reaches one row further',
+  efficacy_tempered:     'past flexes this direction measured as not paying off, so it pulls one row back',
+  efficacy_neutral:      'the measured outcome sits right at the neutral mark, so it holds the flex as it stands',
+  no_flex_to_scale:      'the reception loop is holding the brief at its baseline breadth, so there is no flex to scale yet',
+  insufficient_efficacy: 'not enough measured outcomes yet to know whether to lean in or ease off, so it holds 19’s call untouched',
+}
+
+// Layer 19's pre-control flex, as a short label: how far it moved the cap off the baseline, which way.
+function preFlexLabel(ctrl) {
+  const base = ctrl?.base_cap
+  const pre  = ctrl?.emphasis_also_cap
+  if (base == null || pre == null) return 'steady'
+  if (pre > base) return `widen +${pre - base}`
+  if (pre < base) return `tighten −${base - pre}`
+  return 'steady'
+}
+
+function BriefEmphasisControlPanel() {
+  const [status, setStatus] = useState('loading')   // loading | done | error
+  const [ctrl, setCtrl]     = useState(null)
+  const [error, setError]   = useState('')
+
+  const fetchControl = useCallback(async () => {
+    setStatus('loading'); setError('')
+    try {
+      const c = await api.getBriefEmphasisControl()
+      setCtrl(c); setStatus('done')
+    } catch (e) {
+      setError(e?.message || 'Could not load emphasis control'); setStatus('error')
+    }
+  }, [])
+
+  useEffect(() => { fetchControl() }, [fetchControl])
+
+  const move       = ctrl?.control_move || 'none'
+  const tone       = EMPHASIS_CONTROL_TONE[move] || EMPHASIS_CONTROL_TONE.none
+  const MoveIcon   = tone.icon
+  const days       = ctrl?.requested?.days || 90
+  const narrative  = (ctrl?.narrative || '').trim()
+  const reasonText = EMPHASIS_CONTROL_REASON[ctrl?.control_reason] || ''
+  // The controller ENGAGED (efficacy was graded → it ran the scale) on lean_in / ease_off / hold.
+  // 'none' means it had nothing to act on (no flex, or efficacy not yet graded) — a calm standby.
+  const engaged    = move === 'lean_in' || move === 'ease_off' || move === 'hold'
+  const scale      = Number(ctrl?.step_scale)
+  const scaleLabel = Number.isFinite(scale) ? `×${scale.toFixed(2)}` : '×1.00'
+  const scaleColor = Number.isFinite(scale) && scale > 1 ? 'text-emerald-700'
+    : Number.isFinite(scale) && scale < 1 ? 'text-amber-700' : 'text-slate-500'
+  const preCap     = ctrl?.emphasis_also_cap
+  const cap        = ctrl?.also_cap
+  const reasonCap  = reasonText ? reasonText.charAt(0).toUpperCase() + reasonText.slice(1) + '.' : ''
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <SlidersHorizontal className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Emphasis control</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            The self-tuning, re-tuned from its own grade · last {days} days
+          </p>
+        </div>
+        {status === 'done' && (
+          <span className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.pill)} title={`Controller move: ${move}`}>
+            <MoveIcon className="w-3 h-3" /> {tone.label}
+          </span>
+        )}
+        <button
+          onClick={fetchControl}
+          disabled={status === 'loading'}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed transition"
+        >
+          {status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      <div className="px-4 py-4">
+        {status === 'loading' && (
+          <div className="flex items-center gap-2 text-sm text-slate-400 py-6 justify-center">
+            <Loader2 className="w-4 h-4 animate-spin" /> Feeding the grade back into the next flex…
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <AlertTriangle className="w-5 h-5 text-rose-400" />
+            <p className="text-sm font-semibold text-slate-600">{error || 'Could not load emphasis control'}</p>
+            <button
+              onClick={fetchControl}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:border-slate-300 hover:text-slate-900 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Try again
+            </button>
+          </div>
+        )}
+
+        {status === 'done' && !engaged && (
+          <div className="flex items-start gap-2 text-sm text-slate-400 py-2">
+            <Inbox className="w-4 h-4 shrink-0 mt-0.5" />
+            <p className="leading-relaxed">{reasonCap || 'The controller is standing by — it engages once the reception loop flexes and that flex earns a measured grade.'}</p>
+          </div>
+        )}
+
+        {status === 'done' && engaged && (
+          <>
+            {/* the loop closing, left → right: 19 proposed → 20 measured → 21 shipped */}
+            <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-1.5">
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Reception flex</p>
+                <p className="mt-1 text-2xl font-black text-slate-900 tabular-nums leading-none">{preCap}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">{preFlexLabel(ctrl)}</p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-slate-300 shrink-0 mx-auto" />
+              <div className="rounded-xl border border-slate-100 bg-white px-2 py-2.5 text-center">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Measured</p>
+                <p className={cn('mt-1 text-2xl font-black tabular-nums leading-none', scaleColor)}>{scaleLabel}</p>
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">efficacy</p>
+              </div>
+              <ArrowRight className="w-4 h-4 text-slate-300 shrink-0 mx-auto" />
+              <div className={cn('rounded-xl border-2 px-2 py-2.5 text-center', tone.shipBox)}>
+                <p className={cn('text-[9px] font-bold uppercase tracking-wide', tone.shipText)}>Shipped</p>
+                <p className="mt-1 text-2xl font-black text-slate-900 tabular-nums leading-none">{cap}</p>
+                <p className={cn('mt-1 text-[10px] font-bold', tone.shipText)}>{tone.label}</p>
+              </div>
+            </div>
+
+            {(narrative || reasonCap) && (
+              <p className="mt-3 text-sm text-slate-600 leading-relaxed">{narrative || reasonCap}</p>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The rung that <span className="font-semibold text-slate-500">closes the loop</span> — reception flexes the brief's breadth, efficacy grades the flex, and this feeds that grade back into the next flex's size.
+          {' '}<span className="font-semibold text-emerald-600">Lean in</span> when a direction is paying off · <span className="font-semibold text-amber-600">ease off</span> when it isn't · hold otherwise.
+          {' '}Leaning in is earned twice, easing off is always free, and the cap never leaves its rails.
           {' '}Agency-only; a reader never sees their attention being tuned.
         </p>
       </div>
