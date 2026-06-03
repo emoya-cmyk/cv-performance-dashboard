@@ -54,9 +54,11 @@ process.env.SQLITE_PATH = DB_PATH
 const db = require('../db')
 const { getBriefImpact }       = require('../lib/briefImpactEngine')
 const { narrateBriefImpact }   = require('../lib/briefImpact')
-const { PORTFOLIO_KEY }        = require('../lib/brief')
+const { PORTFOLIO_KEY, leadPolicyHealthFor } = require('../lib/brief')
 const { resolvePortfolioScope } = require('../routes/ai')
 const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
+const policyHealth = require('../lib/briefLeadPolicyHealth')
+const { narrateLeadPolicyHealth, shouldRevertToNeutral } = policyHealth
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -248,4 +250,54 @@ test('GET /api/ai/lead-policy — agency-gated, derives a well-formed tuned poli
   assert.match(agencyNarr, /front-page track record/, 'agency narration names the learned track record')
   assert.match(agencyNarr, /lead more with paid/, 'and the specific learned promotion')
   assert.equal(narrateLeadPolicy(policy, { audience: 'client' }), '', 'lead-selection tuning is never client-facing')
+})
+
+// ── 4. the watch-the-watcher read seam (14b): GET /api/ai/lead-policy-health grades the
+//    TRAJECTORY of the tuner over the same real join — six day-anchors, one deriveLeadPolicy
+//    apiece (leadPolicyHealthFor → leadPolicyHistoryFor) — and the verdict is agency-gated +
+//    client-silent, exactly like /lead-policy. We assert only what the MONOTONIC crash corpus
+//    makes deterministic: a flat-then-crash can promote/neutral `paid` but never demote it, so
+//    the tuner's trajectory cannot oscillate. The precise verdict STATUS (saturated_high once
+//    `paid` pins to the band ceiling, vs settling/stable while it climbs) rides on the engine's
+//    default grading window and is deliberately NOT asserted — only the stability invariants are.
+test('GET /api/ai/lead-policy-health — agency-gated, well-formed over the real join, NEVER reverts on a monotonic crash, and stays client-silent', async () => {
+  // same gate the route applies before it ever reads (identical posture to /lead-policy)
+  assert.deepEqual(resolvePortfolioScope({ user: { role: 'agency' } }), {}, 'agency may read the loop-stability verdict')
+  assert.equal(resolvePortfolioScope({ user: { role: 'client', id: CLIENT_ID } }).status, 403, 'a client token is refused the portfolio-wide stability verdict')
+
+  // rebuild the exact flat-then-crash corpus, independent of test order
+  await reset()
+  await db.query('INSERT INTO clients (id, name) VALUES ($1,$2)', [CLIENT_ID, CLIENT_NAME])
+  const leads = Array.from({ length: SPAN + 1 }, (_, i) => (i < 64 ? 200 : 5))
+  await seedDaily(CLIENT_ID, 'leads', leads)
+  for (const idx of [73, 75, 77, 79, 81, 83]) {
+    await seedBrief({ scopeKey: CLIENT_ID, asOf: isoAtIdx(idx), audience: 'client', clientId: CLIENT_ID, pack: clientFocus('leads', 'down', 'paid') })
+  }
+
+  // the route body, verbatim in spirit: walk the tuner's last six grades and judge their stability
+  const v = await leadPolicyHealthFor(ASOF)
+
+  // well-formed verdict shape (never an abstain on this corpus — every anchor mints a policy)
+  assert.equal(typeof v.status, 'string', 'a verdict carries a status string')
+  assert.notEqual(v.status, 'abstained', 'six in-corpus anchors clear the min-history floor')
+  assert.ok(v.counts && v.bounds && v.lanes, 'verdict carries counts, bounds and per-lane state')
+  // the window math is exact: default span is the monitor window (6), and every anchor produced
+  // a (truthy) policy, so history fills the window and window_used pins to min(history_len, 6).
+  assert.ok(v.history_len >= policyHealth.DEFAULT_MIN_HISTORY && v.history_len <= policyHealth.DEFAULT_WINDOW,
+    `history_len sits within [${policyHealth.DEFAULT_MIN_HISTORY}, ${policyHealth.DEFAULT_WINDOW}]: ${v.history_len}`)
+  assert.equal(v.window_used, Math.min(v.history_len, policyHealth.DEFAULT_WINDOW), 'window_used = min(history_len, monitor window)')
+
+  // THE STABILITY INVARIANT — a monotonic crash can only ever promote/neutral `paid`, never
+  // demote it, so the tuner's trajectory carries ZERO promote↔demote reversals and the monitor
+  // must NOT order a revert. This is the deterministic spine of the test.
+  assert.equal(v.counts.oscillating, 0, 'a monotonic crash trajectory has no oscillating lane')
+  assert.equal(shouldRevertToNeutral(v), false, 'and so the monitor never orders a self-heal')
+  assert.notEqual(v.recommended_action, 'revert_to_neutral', 'the recommended action is never revert on a monotonic crash')
+  if (v.lanes.paid) assert.equal(v.lanes.paid.flips, 0, 'the paid lane never reverses direction here')
+  // bounds are the same well-formed band the tuner published: symmetric, straddling neutral
+  assert.ok(v.bounds.max > 1 && v.bounds.min > 0 && v.bounds.min < 1, `bounds straddle neutral: ${JSON.stringify(v.bounds)}`)
+
+  // the agency may hear the verdict; the client voice is silent under EVERY status the monitor emits
+  assert.equal(typeof narrateLeadPolicyHealth(v, { audience: 'agency' }), 'string', 'agency narration is a string (possibly empty when settling/idle)')
+  assert.equal(narrateLeadPolicyHealth(v, { audience: 'client' }), '', 'loop-stability monitoring is never client-facing')
 })

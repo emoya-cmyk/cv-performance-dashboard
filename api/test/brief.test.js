@@ -530,3 +530,120 @@ test('narrateLeadPolicy is silent for the client even when the agency narration 
   assert.equal(typeof agency, 'string')
   assert.ok(agency.length > 0, 'the agency DOES hear the tuned policy (proving the client silence is a deliberate choice)')
 })
+
+// ── Section E — layer 14: watch the watcher (the stability monitor, wired) ─────────
+// 14a proved the monitor's grading in isolation; here we prove the WIRING: across a real
+// brief generation, generatePortfolioBrief consults the loop's TRAJECTORY (six day-anchors,
+// one deriveLeadPolicy per anchor inside leadPolicyDecisionFor) and (1) on a STABLE history
+// keeps the tuned policy AND attaches the stable verdict for the agency, (2) on an
+// OSCILLATING history SELF-HEALS — it drops the tuned policy back to neutral and attaches an
+// 'unstable'/'revert_to_neutral' verdict that tells the agency why the lead order went
+// neutral, and (3) the client pack carries NONE of it under either regime.
+//
+// Both regimes are driven by the SAME module-object stubs Section D uses (impactEngine /
+// leadPolicyEngine, restored by the file-level test.after hooks). The oscillation stub flips a
+// NON-floored lane (worth_a_look) promote↔demote across the six anchors via a fresh per-call
+// closure counter — never touching the safety-floored act_now — so countFlips sees ≥2
+// reversals and the monitor's oscillation branch fires. Every snapshot stays status:'tuned',
+// so the ONLY reason the policy is suppressed is the revert gate, not a non-tuned status.
+function oscSnapshot(k) {
+  const promote = (k % 2 === 0) // even anchor → promote, odd → demote: a clean alternation
+  return {
+    status: 'tuned', neutral_rate: 0.5, min_sample: 4,
+    bounds: { min: 0.8, max: 1.2 }, safety_floor_lanes: ['act_now'],
+    lanes: {
+      // the safety lane is held perfectly still and neutral — it must NEVER be the oscillator.
+      act_now:      { weight: 1.0, direction: 'neutral', adjusted: false, judged: 0, hit_rate: null, label: null, reason: 'insufficient_sample', safetyFloored: false },
+      // the oscillator: mid-band weights (never at a bound → no saturation masks the flip) with
+      // a flipping direction. Not floored → floor-masking can't pre-empt the oscillation branch.
+      worth_a_look: promote
+        ? { weight: 1.1, direction: 'promote', adjusted: true, judged: 4, hit_rate: 0.70, label: 'earned',     reason: 'promoted', safetyFloored: false }
+        : { weight: 0.9, direction: 'demote',  adjusted: true, judged: 4, hit_rate: 0.30, label: 'overcalled', reason: 'demoted',  safetyFloored: false },
+      verify:       { weight: 1.0, direction: 'neutral', adjusted: false, judged: 0, hit_rate: null, label: null, reason: 'insufficient_sample', safetyFloored: false },
+    },
+    promoted: promote ? 1 : 0, demoted: promote ? 0 : 1, floored: 0, adjusted_count: 1,
+  }
+}
+function stubOscillating() {
+  impactEngine.getBriefImpact = async () => ({ status: 'insufficient', label: null, hit_rate: null, hits: 0, judged: 0 })
+  let k = 0
+  leadPolicyEngine.deriveLeadPolicy = () => oscSnapshot(k++)
+}
+
+// The stability-monitor vocabulary — compound, snake_case machine identifiers that could never
+// occur in a human morning-brief sentence — that must NEVER cross to the client at any depth.
+// (Disjoint from Section D's lead-policy set; 14d folds both into the dedicated leak-proof pass.)
+const FORBIDDEN_HEALTH_KEYS = [
+  'lead_policy_health', 'recommended_action', 'verdict_reason', 'revert_to_neutral',
+  'floor_masked', 'high_run', 'low_run', 'mask_runs', 'window_used', 'history_len',
+]
+const FORBIDDEN_HEALTH_TOKENS = /lead_policy_health|recommended_action|verdict_reason|revert_to_neutral|floor_masked|high_run|low_run|mask_runs|window_used|history_len/
+function assertNoStabilityMachinery(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_HEALTH_KEYS.includes(k), `${where}: client pack must not carry stability-monitor field "${k}" (at ${path})`)
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(!FORBIDDEN_HEALTH_TOKENS.test(JSON.stringify(pack)), `${where}: stability-monitor vocabulary leaked into the serialized client pack`)
+}
+
+test('generatePortfolioBrief on a STABLE loop keeps the tuned policy AND attaches the stable verdict (14b)', async () => {
+  await ready()
+  stubTuned() // six identical TUNED_POLICY snapshots → zero spread → a converged, stable verdict
+  await freshClient('Portfolio Stability A')
+
+  const res = await generatePortfolioBrief(AS_OF)
+
+  // The tuned order still applies (the monitor saw nothing to heal)…
+  assert.ok('lead_policy' in res.pack, 'a stable loop keeps the learned policy')
+  assert.deepEqual(res.pack.lead_policy, TUNED_POLICY, 'and it is the unmodified learned policy')
+  // …and the agency also gets the stability verdict that VOUCHES the loop is holding steady.
+  assert.ok('lead_policy_health' in res.pack, 'the stability verdict rides along for the agency')
+  assert.equal(res.pack.lead_policy_health.status, 'stable')
+  assert.equal(res.pack.lead_policy_health.recommended_action, 'trust')
+})
+
+test('generatePortfolioBrief SELF-HEALS an oscillating loop — drops the policy, attaches the unstable verdict (14b)', async () => {
+  await ready()
+  stubOscillating() // worth_a_look flips promote↔demote across the six anchors → oscillation
+  await freshClient('Portfolio Stability B')
+
+  const res = await generatePortfolioBrief(AS_OF)
+
+  // The watcher caught the tuner thrashing and SUPPRESSED the policy back to a neutral order…
+  assert.ok(!('lead_policy' in res.pack), 'an oscillating loop suppresses the tuned policy (self-heal)')
+  // …yet the agency is told EXACTLY why the lead order went neutral this morning.
+  assert.ok('lead_policy_health' in res.pack, 'the unstable verdict explains the neutral lead order')
+  assert.equal(res.pack.lead_policy_health.status, 'unstable')
+  assert.equal(res.pack.lead_policy_health.recommended_action, 'revert_to_neutral')
+  // the verdict fingers the oscillating lane (the safety lane stayed put and is never blamed)
+  assert.equal(res.pack.lead_policy_health.lanes.worth_a_look.state, 'oscillating')
+  assert.ok(res.pack.lead_policy_health.counts.oscillating >= 1, 'at least one lane is flagged oscillating')
+  assert.notEqual(res.pack.lead_policy_health.lanes.act_now && res.pack.lead_policy_health.lanes.act_now.state, 'oscillating')
+})
+
+test('generateClientBrief exposes NONE of the stability monitor — under a healthy OR an oscillating loop (14b)', async () => {
+  await ready()
+  const c = await freshClient('Stability Confinement Roofing Co')
+  stubOscillating() // the most machinery-laden regime: a suppression decision + an unstable verdict
+
+  const res = await generateClientBrief(c, AS_OF)
+
+  // The brief still ships in the morning voice…
+  assert.equal(res.grounded, true)
+  assert.match(res.brief_text, /^Good morning\./)
+  // …carrying neither the policy nor its stability verdict, at any depth.
+  assert.ok(!('lead_policy' in res.pack), 'client pack must not carry lead_policy')
+  assert.ok(!('lead_policy_health' in res.pack), 'client pack must not carry the stability verdict')
+  assertCleanClientPack(res.pack, 'generateClientBrief under oscillation')      // Section D lead-policy guard
+  assertNoStabilityMachinery(res.pack, 'generateClientBrief under oscillation') // layer-14 monitor guard
+
+  // and the persisted read-back — the row a client actually fetches — is just as clean.
+  const row = await getClientBrief(c, AS_OF)
+  assertCleanClientPack(row.pack, 'getClientBrief read-back under oscillation')
+  assertNoStabilityMachinery(row.pack, 'getClientBrief read-back under oscillation')
+})

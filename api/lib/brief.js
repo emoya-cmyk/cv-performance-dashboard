@@ -27,6 +27,11 @@ const { getClientPulse, getPortfolioPulse }              = require('./insights')
 const { buildClientBriefPack, buildPortfolioBriefPack }  = require('./pulseBrief')
 const { summarizePortfolioPulse, summarizeClientPulse }  = require('./pulseBriefing')
 const { generateBriefText }                              = require('./ai')
+// intel-v7 layer 14 — watch the watcher. Pure, dependency-free (requires nothing,
+// no ./brief cycle), so a top-level require is safe where briefImpactEngine /
+// briefLeadPolicy must stay lazy. Used by the morning generators' self-healing gate
+// and by leadPolicyHealthFor below.
+const policyHealth                                       = require('./briefLeadPolicyHealth')
 
 // The portfolio brief spans every client, so it has no client id to key on; it
 // lives under this single reserved scope. Exported so the route layer and tests
@@ -130,6 +135,64 @@ async function leadPolicyFor(asOf) {
   }
 }
 
+// ── intel-v7 layer 14: watch the watcher ─────────────────────────────────────
+// leadPolicyFor hands back ONE morning's policy; the stability monitor needs the
+// TRAJECTORY. leadPolicyHistoryFor walks the day-anchors of an inclusive window
+// ending at `asOf`, OLDEST->NEWEST, deriving the policy that WOULD have been live each
+// morning (getBriefImpact is re-graded to each anchor, so this reconstructs the real
+// arc, not N copies of today). Each kept element is a { as_of, policy } wrapper —
+// exactly the shape briefLeadPolicyHealth.normSnapshot consumes, so newest.policy
+// recovers the unmodified policy with no stripping. A morning whose grade errored
+// contributes nothing (leadPolicyFor already returns null there) so it reads as a gap,
+// never a throw. span is clamped to [DEFAULT_MIN_HISTORY, HISTORY_SPAN_MAX]: two is the
+// fewest the monitor will judge, fourteen caps the per-morning replay cost; the default
+// is the monitor's own window so a once-daily generation mints exactly that many grades.
+const HISTORY_SPAN_MAX = 14
+function clampSpan(span) {
+  if (span == null || span === '') return policyHealth.DEFAULT_WINDOW
+  const n = Math.floor(Number(span))
+  if (!Number.isFinite(n)) return policyHealth.DEFAULT_WINDOW
+  return Math.max(policyHealth.DEFAULT_MIN_HISTORY, Math.min(HISTORY_SPAN_MAX, n))
+}
+
+async function leadPolicyHistoryFor(asOf, span) {
+  const to  = asOf || defaultAsOf()
+  const n   = clampSpan(span)
+  const out = []
+  for (let i = n - 1; i >= 0; i--) {
+    const day    = isoDayMinus(to, i)
+    const policy = await leadPolicyFor(day)
+    if (policy) out.push({ as_of: day, policy })
+  }
+  return out
+}
+
+// The stability verdict over that window — pure read, never throws (assessLeadPolicyHealth
+// abstains on thin history). Used by the agency read endpoint AND echoed nowhere to the
+// client. Fail-safe: any assembly error bubbles as an abstained-shaped throw only if
+// leadPolicyFor itself were unsafe, which it is not.
+async function leadPolicyHealthFor(asOf, span) {
+  return policyHealth.assessLeadPolicyHealth(await leadPolicyHistoryFor(asOf, span))
+}
+
+// One pass that yields everything the morning generators need: the policy live at `asOf`
+// (or null when its own grade errored), the stability verdict over the window, and the
+// self-heal signal. The window is assembled ONCE here, not twice. `policy` is the newest
+// snapshot ONLY when it actually lands on the target morning — a stale tail (the target
+// day errored to null) must never masquerade as today's policy, so it falls back to null
+// and the brief stays untuned. `revert` true means the loop is oscillating and the
+// generators must SUPPRESS the policy (fall back to the neutral lead order) even though a
+// 'tuned' policy exists — the monitor healing the tuner it watches.
+async function leadPolicyDecisionFor(asOf, span) {
+  const to      = asOf || defaultAsOf()
+  const history = await leadPolicyHistoryFor(to, span)
+  const health  = policyHealth.assessLeadPolicyHealth(history)
+  const revert  = policyHealth.shouldRevertToNeutral(health)
+  const newest  = history.length ? history[history.length - 1] : null
+  const policy  = (newest && newest.as_of === to) ? newest.policy : null
+  return { policy, history, health, revert }
+}
+
 /**
  * Build, narrate, verify and persist a client's morning brief for one day.
  * @param {string} clientId
@@ -147,8 +210,13 @@ async function generateClientBrief(clientId, asOf) {
   // never carries the policy object — only the re-aimed focus crosses the egress, never a
   // weight, hit_rate or lane label. pulse.signals is rankPulse(enriched), a pure sort, so
   // recomputing from it is set-identical to what getClientPulse already summarised.
-  const leadPolicy = await leadPolicyFor(day)
-  const briefing   = (leadPolicy && leadPolicy.status === 'tuned' && Array.isArray(pulse.signals))
+  // SELF-HEALING GATE (layer 14): `revert` is true when the stability monitor finds the
+  // tuning loop oscillating, so we drop back to the neutral lead order even though a
+  // 'tuned' policy exists — a thrashing tuner is worse than no tuner. No stability field
+  // ever reaches the client pack; only the (re-aimed or neutral) focus crosses the egress.
+  const { policy: leadPolicy, revert } = await leadPolicyDecisionFor(day)
+  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned' && !revert)
+  const briefing    = (applyPolicy && Array.isArray(pulse.signals))
     ? summarizeClientPulse(pulse.signals, { leadPolicy })
     : pulse.briefing
   const pack  = buildClientBriefPack({ ...pulse, briefing })
@@ -184,8 +252,12 @@ async function generatePortfolioBrief(asOf) {
   // and confidence are permutation-invariant and never move; otherwise this is a stable
   // no-op and `briefing` is the live pulse's own briefing. pulse.roster is rankPulse(roster),
   // a pure sort, so recomputing from it is set-identical to what getPortfolioPulse summarised.
-  const leadPolicy = await leadPolicyFor(day)
-  const briefing   = (leadPolicy && leadPolicy.status === 'tuned' && Array.isArray(pulse.roster))
+  // SELF-HEALING GATE (layer 14): when the stability monitor finds the loop oscillating
+  // (`revert`), we suppress the tuned order and fall back to neutral here too — and the
+  // health verdict below tells the agency WHY the lead order went neutral this morning.
+  const { policy: leadPolicy, health, revert } = await leadPolicyDecisionFor(day)
+  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned' && !revert)
+  const briefing    = (applyPolicy && Array.isArray(pulse.roster))
     ? summarizePortfolioPulse(pulse.roster, { leadPolicy })
     : pulse.briefing
   const pack  = buildPortfolioBriefPack({ ...pulse, briefing })
@@ -194,8 +266,15 @@ async function generatePortfolioBrief(asOf) {
   // The learned-policy panel is AGENCY-ONLY telemetry (lane weights, hit_rates, what moved).
   // Set AFTER narration so the LLM narrator + grounding verifier never see the machinery —
   // mirrors clientImpactReinforcement's placement. Only ever attached to the portfolio
-  // (agency) pack; the client pack carries no lead_policy (see generateClientBrief).
-  if (leadPolicy && leadPolicy.status === 'tuned') pack.lead_policy = leadPolicy
+  // (agency) pack; the client pack carries no lead_policy (see generateClientBrief). Gated
+  // on applyPolicy, NOT just 'tuned': on revert the policy is suppressed and must not appear.
+  if (applyPolicy) pack.lead_policy = leadPolicy
+  // WATCH THE WATCHER (layer 14): the loop's own stability verdict — agency-only, attached
+  // whenever there is enough history to judge (status !== 'abstained'), INDEPENDENT of
+  // whether the policy applied. When the loop oscillates the policy above is suppressed and
+  // THIS is the only thing that explains the neutral lead order to the agency. Set after
+  // narration so the narrator/verifier never see it, and never on the client pack.
+  if (health && health.status !== 'abstained') pack.lead_policy_health = health
 
   await upsertBrief({
     scopeKey: PORTFOLIO_KEY, asOf: day, audience: 'agency', clientId: null,
@@ -300,6 +379,9 @@ module.exports = {
   getOrGenerateClientBrief,
   getOrGeneratePortfolioBrief,
   listRecentBriefs,
+  leadPolicyHistoryFor,
+  leadPolicyHealthFor,
+  leadPolicyDecisionFor,
   defaultAsOf,
   PORTFOLIO_KEY,
 }

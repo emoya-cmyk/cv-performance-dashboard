@@ -48,13 +48,14 @@ const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
 const {
   generateClientBrief, generatePortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
-  listRecentBriefs,
+  listRecentBriefs, leadPolicyHealthFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
 const { getBriefImpact } = require('../lib/briefImpactEngine')
 const { narrateBriefImpact } = require('../lib/briefImpact')
 const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
+const { narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -352,6 +353,40 @@ router.get('/lead-policy', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET lead-policy error', err.message)
     res.status(500).json({ error: 'Failed to load lead policy' })
+  }
+})
+
+// ── GET /api/ai/lead-policy-health ──────────────────────────────────────────────
+// WATCH THE WATCHER. /lead-policy (above) TUNES the lead loop; this judges whether that
+// loop is still trustworthy or has begun chasing its own tail. It reads a HISTORY of the
+// recent daily policies and flags three pathologies a single snapshot hides — oscillation
+// (a lane flips promote<->demote morning after morning), saturation (a weight pinned at the
+// ±20% bound for days), floor-masking (the act_now safety floor catching the same lane run
+// after run, an overcall the valve is hiding) — and carries ONE self-healing action:
+// 'revert_to_neutral' on oscillation, the SAME signal the morning generators consult before
+// they apply the policy (lib/brief.leadPolicyDecisionFor). Pure agency calibration — lane
+// weights, what's thrashing, what we suppressed — so it shares the 403 gate and agency-voiced
+// narration. ?days=N sizes the history window (mornings of policy to assess); absent → the
+// monitor's own default window, so a plain GET mints exactly that many deterministic grades.
+router.get('/lead-policy-health', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  // Pass the span through ONLY when explicitly requested; otherwise let leadPolicyHealthFor
+  // fall to the monitor's window (assembling 30 anchors would mint 30 sequential grades).
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const health = await leadPolicyHealthFor(asOf, span)
+    res.json({
+      ...health,
+      requested: { as_of: asOf || null, days: health.window_used },
+      narrative: narrateLeadPolicyHealth(health, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET lead-policy-health error', err.message)
+    res.status(500).json({ error: 'Failed to load lead policy health' })
   }
 })
 

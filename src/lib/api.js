@@ -242,6 +242,17 @@ export const api = {
   // deriveLeadPolicy shape ({ status, neutral_rate, bounds, safety_floor_lanes, lanes, promoted,
   // demoted, floored, adjusted_count }) plus echoed `requested` + one agency-voiced `narrative`.
   getLeadPolicy:            (days)       => get(`/api/ai/lead-policy${days ? `?days=${days}` : ''}`),
+  // WATCH THE WATCHER (intel-v7 14, agency-only, 403 for client tokens). lead-policy TUNES the
+  // lead loop; lead-policy-health judges whether that loop is still trustworthy or chasing its
+  // own tail — it reads a HISTORY of recent daily policies and flags oscillation (a lane flips
+  // promote<->demote morning after morning), saturation (a weight pinned at the ±20% bound), and
+  // floor-masking (the act_now safety floor catching the same lane run after run). Carries one
+  // self-healing recommended_action ('revert_to_neutral' on oscillation — the same signal the
+  // morning brief consults before it applies the policy). Returns the assessLeadPolicyHealth shape
+  // ({ status, recommended_action, as_of, window_used, history_len, bounds, lanes, counts,
+  // verdict_reason }) plus echoed `requested` + one agency-voiced `narrative`. `days` sizes the
+  // history window (mornings to assess); absent → the monitor's own default window.
+  getLeadPolicyHealth:      (days)       => get(`/api/ai/lead-policy-health${days ? `?days=${days}` : ''}`),
   // Explore (Sprint 2): semantic query over the atomic fact grain.
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),
