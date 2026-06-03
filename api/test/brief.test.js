@@ -570,6 +570,24 @@ function stubOscillating() {
   leadPolicyEngine.deriveLeadPolicy = () => oscSnapshot(k++)
 }
 
+// The layer-15 WIN fixture: the SAME proven oscillation (worth_a_look thrashing → an
+// 'unstable'/'revert_to_neutral' verdict) PLUS a separately-earned, rock-steady promote lane
+// (tailwind) that NEVER flips and sits mid-band (1.15, clear of the 1.2 ceiling → not saturated).
+// The old blunt revert would have thrown tailwind out with everything else the instant
+// worth_a_look thrashed; the governor must neutralise ONLY worth_a_look and keep tailwind live.
+function oscEarnedSnapshot(k) {
+  const snap = oscSnapshot(k) // identical oscillation → identical verdict; we only ADD a healthy lane
+  snap.lanes.tailwind = { weight: 1.15, direction: 'promote', adjusted: true, judged: 6, hit_rate: 0.75, label: 'earned', reason: 'promoted', safetyFloored: false }
+  snap.promoted += 1
+  snap.adjusted_count += 1
+  return snap
+}
+function stubOscillatingWithEarned() {
+  impactEngine.getBriefImpact = async () => ({ status: 'insufficient', label: null, hit_rate: null, hits: 0, judged: 0 })
+  let k = 0
+  leadPolicyEngine.deriveLeadPolicy = () => oscEarnedSnapshot(k++)
+}
+
 // The stability-monitor vocabulary — compound, snake_case machine identifiers that could never
 // occur in a human morning-brief sentence — that must NEVER cross to the client at any depth.
 // (Disjoint from Section D's lead-policy set; 14d folds both into the dedicated leak-proof pass.)
@@ -608,23 +626,64 @@ test('generatePortfolioBrief on a STABLE loop keeps the tuned policy AND attache
   assert.equal(res.pack.lead_policy_health.recommended_action, 'trust')
 })
 
-test('generatePortfolioBrief SELF-HEALS an oscillating loop — drops the policy, attaches the unstable verdict (14b)', async () => {
+test('generatePortfolioBrief surgically neutralises the lone oscillating lane → it was the only weighted one, so the order collapses to idle (15b)', async () => {
   await ready()
   stubOscillating() // worth_a_look flips promote↔demote across the six anchors → oscillation
   await freshClient('Portfolio Stability B')
 
   const res = await generatePortfolioBrief(AS_OF)
 
-  // The watcher caught the tuner thrashing and SUPPRESSED the policy back to a neutral order…
-  assert.ok(!('lead_policy' in res.pack), 'an oscillating loop suppresses the tuned policy (self-heal)')
-  // …yet the agency is told EXACTLY why the lead order went neutral this morning.
-  assert.ok('lead_policy_health' in res.pack, 'the unstable verdict explains the neutral lead order')
+  // LAYER 15 — the governor no longer throws out the WHOLE policy on a thrash (the old blunt
+  // revert). It resets ONLY the lane that is shaking (worth_a_look). Here that lane is the
+  // policy's sole weighted lane, so neutralising it leaves nothing adjusted → the governed order
+  // collapses to idle and no lead_policy is applied. Same neutral OUTCOME the blunt revert gave,
+  // reached surgically — had another lane earned its lift it would have survived (next test).
+  assert.ok(!('lead_policy' in res.pack), 'neutralising the sole weighted lane collapses the order to idle (no policy applied)')
+  // the governor's OWN verdict rides along for the agency: it DID act — a weight was reset.
+  assert.ok('lead_policy_governance' in res.pack, 'the governance verdict explains what the surgeon did')
+  assert.equal(res.pack.lead_policy_governance.status, 'corrected')
+  assert.ok(res.pack.lead_policy_governance.counts.neutralized >= 1, 'at least one lane was neutralised')
+  const neutralised = res.pack.lead_policy_governance.interventions.find(i => i.lane === 'worth_a_look')
+  assert.ok(neutralised && neutralised.action === 'neutralize', 'the oscillating lane is the one that was neutralised')
+  // …and the stability verdict that DIAGNOSED the thrash still attaches independently.
+  assert.ok('lead_policy_health' in res.pack, 'the unstable verdict explains why the lead order went neutral')
   assert.equal(res.pack.lead_policy_health.status, 'unstable')
   assert.equal(res.pack.lead_policy_health.recommended_action, 'revert_to_neutral')
   // the verdict fingers the oscillating lane (the safety lane stayed put and is never blamed)
   assert.equal(res.pack.lead_policy_health.lanes.worth_a_look.state, 'oscillating')
   assert.ok(res.pack.lead_policy_health.counts.oscillating >= 1, 'at least one lane is flagged oscillating')
   assert.notEqual(res.pack.lead_policy_health.lanes.act_now && res.pack.lead_policy_health.lanes.act_now.state, 'oscillating')
+})
+
+test('generatePortfolioBrief SURGICALLY governs an oscillation — neutralises the thrashing lane but KEEPS the earned one (the layer-15 win) (15b)', async () => {
+  await ready()
+  stubOscillatingWithEarned() // worth_a_look thrashes; tailwind holds a steady, honestly-earned promotion
+  await freshClient('Portfolio Stability C')
+
+  const res = await generatePortfolioBrief(AS_OF)
+
+  // THE WIN over blunt revert: a learned order STILL applies. The old all-or-nothing self-heal
+  // would have dropped the WHOLE policy the moment worth_a_look thrashed — taking tailwind's
+  // honest lift down with it. The governor resets ONLY the shaking lane and keeps the rest live.
+  assert.ok('lead_policy' in res.pack, 'an earned lane survives the oscillation (surgical, not blunt)')
+  assert.equal(res.pack.lead_policy.status, 'tuned')
+  // the thrashing lane is reset to neutral…
+  assert.equal(res.pack.lead_policy.lanes.worth_a_look.weight, 1)
+  assert.equal(res.pack.lead_policy.lanes.worth_a_look.direction, 'neutral')
+  // …while the earned lane rides untouched (the blunt revert would have lost this lift).
+  assert.equal(res.pack.lead_policy.lanes.tailwind.weight, 1.15)
+  assert.equal(res.pack.lead_policy.lanes.tailwind.direction, 'promote')
+  // the governance verdict tells the agency it corrected exactly the one lane…
+  assert.ok('lead_policy_governance' in res.pack, 'the governance verdict rides along for the agency')
+  assert.equal(res.pack.lead_policy_governance.status, 'corrected')
+  assert.ok(res.pack.lead_policy_governance.counts.neutralized >= 1)
+  const neutralised = res.pack.lead_policy_governance.interventions.find(i => i.lane === 'worth_a_look')
+  assert.ok(neutralised && neutralised.action === 'neutralize', 'worth_a_look is the neutralised lane')
+  // …and the pre-governance weight is preserved for reversibility (snapshot carries the raw order).
+  assert.notEqual(res.pack.lead_policy_governance.snapshot.lanes.worth_a_look.weight, 1)
+  // the diagnosis (unstable / revert) still attaches independently of the corrective action.
+  assert.equal(res.pack.lead_policy_health.status, 'unstable')
+  assert.equal(res.pack.lead_policy_health.recommended_action, 'revert_to_neutral')
 })
 
 test('generateClientBrief exposes NONE of the stability monitor — under a healthy OR an oscillating loop (14b)', async () => {

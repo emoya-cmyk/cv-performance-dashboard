@@ -32,6 +32,11 @@ const { generateBriefText }                              = require('./ai')
 // briefLeadPolicy must stay lazy. Used by the morning generators' self-healing gate
 // and by leadPolicyHealthFor below.
 const policyHealth                                       = require('./briefLeadPolicyHealth')
+// intel-v7 layer 15 — the governor. Consumes policyHealth's verdict and returns the
+// surgically-governed policy to apply (neutralise only oscillating lanes, hold saturated
+// lanes at bound, respect the floor, pass healthy lanes through), superseding layer 14's
+// blunt all-or-nothing revert. Pure and dependency-free, so a top-level require is safe.
+const { governLeadPolicy }                               = require('./briefLeadPolicyGovernor')
 
 // The portfolio brief spans every client, so it has no client id to key on; it
 // lives under this single reserved scope. Exported so the route layer and tests
@@ -175,22 +180,39 @@ async function leadPolicyHealthFor(asOf, span) {
   return policyHealth.assessLeadPolicyHealth(await leadPolicyHistoryFor(asOf, span))
 }
 
+// The governor's verdict over that window — what it corrected, held or floored on the live
+// policy, and why. Pure read, never throws (governLeadPolicy abstains when there is no policy
+// or the health is unassessable). Used by the agency read endpoint; echoed nowhere to the
+// client. Reuses the single-pass decision so the window is assembled once, not again.
+async function leadPolicyGovernanceFor(asOf, span) {
+  const { governance } = await leadPolicyDecisionFor(asOf, span)
+  return governance
+}
+
 // One pass that yields everything the morning generators need: the policy live at `asOf`
 // (or null when its own grade errored), the stability verdict over the window, and the
 // self-heal signal. The window is assembled ONCE here, not twice. `policy` is the newest
 // snapshot ONLY when it actually lands on the target morning — a stale tail (the target
 // day errored to null) must never masquerade as today's policy, so it falls back to null
-// and the brief stays untuned. `revert` true means the loop is oscillating and the
-// generators must SUPPRESS the policy (fall back to the neutral lead order) even though a
-// 'tuned' policy exists — the monitor healing the tuner it watches.
+// and the brief stays untuned. `governed` is what the generators actually apply: the LAYER-15
+// governor consumes the stability verdict and returns the policy with only the unhealthy lanes
+// corrected — superseding layer 14's blunt revert, which suppressed the WHOLE learned order the
+// moment one lane oscillated. `governance` is the agency-only record of what it corrected;
+// `revert` is retained for the read endpoint's back-compat signal but no longer gates apply.
 async function leadPolicyDecisionFor(asOf, span) {
-  const to      = asOf || defaultAsOf()
-  const history = await leadPolicyHistoryFor(to, span)
-  const health  = policyHealth.assessLeadPolicyHealth(history)
-  const revert  = policyHealth.shouldRevertToNeutral(health)
-  const newest  = history.length ? history[history.length - 1] : null
-  const policy  = (newest && newest.as_of === to) ? newest.policy : null
-  return { policy, history, health, revert }
+  const to         = asOf || defaultAsOf()
+  const history    = await leadPolicyHistoryFor(to, span)
+  const health     = policyHealth.assessLeadPolicyHealth(history)
+  const revert     = policyHealth.shouldRevertToNeutral(health)
+  const newest     = history.length ? history[history.length - 1] : null
+  const policy     = (newest && newest.as_of === to) ? newest.policy : null
+  // Layer 15: surgically govern the policy against its own stability verdict. On an oscillating
+  // lane the governor neutralises ONLY that lane (lanes that earned their weight stay live); on
+  // saturation it holds at bound (refuses to auto-widen); on a floor-mask it respects the floor.
+  // healthy/abstained verdicts pass the policy through untouched — fail-safe by construction.
+  const governance = governLeadPolicy(policy, health)
+  const governed   = governance.governed
+  return { policy, governed, governance, history, health, revert }
 }
 
 /**
@@ -210,12 +232,15 @@ async function generateClientBrief(clientId, asOf) {
   // never carries the policy object — only the re-aimed focus crosses the egress, never a
   // weight, hit_rate or lane label. pulse.signals is rankPulse(enriched), a pure sort, so
   // recomputing from it is set-identical to what getClientPulse already summarised.
-  // SELF-HEALING GATE (layer 14): `revert` is true when the stability monitor finds the
-  // tuning loop oscillating, so we drop back to the neutral lead order even though a
-  // 'tuned' policy exists — a thrashing tuner is worse than no tuner. No stability field
-  // ever reaches the client pack; only the (re-aimed or neutral) focus crosses the egress.
-  const { policy: leadPolicy, revert } = await leadPolicyDecisionFor(day)
-  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned' && !revert)
+  // SELF-GOVERNING GATE (layer 15): we apply the GOVERNED policy, not the raw one. The
+  // governor has already neutralised any oscillating lane in place (a thrashing lane is
+  // worse than no lane) while keeping the lanes that earned their weight live — superseding
+  // layer 14's blunt revert, which dropped the WHOLE order the moment one lane wobbled. We
+  // apply whenever the governed order still tunes something (status 'tuned'); if every lane
+  // collapsed to neutral (status 'idle') this is a stable no-op. No governance or stability
+  // field ever reaches the client pack; only the re-aimed focus crosses the egress.
+  const { governed: leadPolicy } = await leadPolicyDecisionFor(day)
+  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned')
   const briefing    = (applyPolicy && Array.isArray(pulse.signals))
     ? summarizeClientPulse(pulse.signals, { leadPolicy })
     : pulse.briefing
@@ -252,11 +277,12 @@ async function generatePortfolioBrief(asOf) {
   // and confidence are permutation-invariant and never move; otherwise this is a stable
   // no-op and `briefing` is the live pulse's own briefing. pulse.roster is rankPulse(roster),
   // a pure sort, so recomputing from it is set-identical to what getPortfolioPulse summarised.
-  // SELF-HEALING GATE (layer 14): when the stability monitor finds the loop oscillating
-  // (`revert`), we suppress the tuned order and fall back to neutral here too — and the
-  // health verdict below tells the agency WHY the lead order went neutral this morning.
-  const { policy: leadPolicy, health, revert } = await leadPolicyDecisionFor(day)
-  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned' && !revert)
+  // SELF-GOVERNING GATE (layer 15): apply the GOVERNED order. The governor neutralises only
+  // the oscillating lanes in place and keeps the earned ones live, superseding layer 14's
+  // blunt all-or-nothing revert; the governance + health records below tell the agency WHAT
+  // it corrected and WHY. Apply whenever the governed order still tunes something ('tuned').
+  const { governed: leadPolicy, governance, health } = await leadPolicyDecisionFor(day)
+  const applyPolicy = !!(leadPolicy && leadPolicy.status === 'tuned')
   const briefing    = (applyPolicy && Array.isArray(pulse.roster))
     ? summarizePortfolioPulse(pulse.roster, { leadPolicy })
     : pulse.briefing
@@ -264,16 +290,22 @@ async function generatePortfolioBrief(asOf) {
   const { text, model, grounded } = await generateBriefText(pack)
 
   // The learned-policy panel is AGENCY-ONLY telemetry (lane weights, hit_rates, what moved).
-  // Set AFTER narration so the LLM narrator + grounding verifier never see the machinery —
-  // mirrors clientImpactReinforcement's placement. Only ever attached to the portfolio
-  // (agency) pack; the client pack carries no lead_policy (see generateClientBrief). Gated
-  // on applyPolicy, NOT just 'tuned': on revert the policy is suppressed and must not appear.
+  // `leadPolicy` here is the GOVERNED order (the raw pre-governance order stays recoverable
+  // from governance.snapshot). Set AFTER narration so the LLM narrator + grounding verifier
+  // never see the machinery — mirrors clientImpactReinforcement's placement. Only ever
+  // attached to the portfolio (agency) pack; the client pack carries no lead_policy (see
+  // generateClientBrief). Gated on applyPolicy: a fully-collapsed ('idle') order is omitted.
   if (applyPolicy) pack.lead_policy = leadPolicy
-  // WATCH THE WATCHER (layer 14): the loop's own stability verdict — agency-only, attached
-  // whenever there is enough history to judge (status !== 'abstained'), INDEPENDENT of
-  // whether the policy applied. When the loop oscillates the policy above is suppressed and
-  // THIS is the only thing that explains the neutral lead order to the agency. Set after
-  // narration so the narrator/verifier never see it, and never on the client pack.
+  // GOVERN THE TUNER (layer 15): the governor's own record of what it corrected this morning
+  // — which lanes it neutralised, held at bound or floored, and why. Agency-only, attached
+  // whenever there was a policy to assess (status !== 'abstained'), INDEPENDENT of whether
+  // the governed order applied — when every lane collapses, THIS explains the neutral order.
+  // Supersedes layer 14's health verdict as the primary 'why'; we keep that too, just below.
+  if (governance && governance.status !== 'abstained') pack.lead_policy_governance = governance
+  // WATCH THE WATCHER (layer 14): the loop's own raw stability verdict — agency-only, attached
+  // whenever there is enough history to judge (status !== 'abstained'), INDEPENDENT of whether
+  // the policy applied. Set after narration so the narrator/verifier never see it, never on
+  // the client pack. Retained alongside the governance record above for full diagnosis.
   if (health && health.status !== 'abstained') pack.lead_policy_health = health
 
   await upsertBrief({
@@ -381,6 +413,7 @@ module.exports = {
   listRecentBriefs,
   leadPolicyHistoryFor,
   leadPolicyHealthFor,
+  leadPolicyGovernanceFor,
   leadPolicyDecisionFor,
   defaultAsOf,
   PORTFOLIO_KEY,

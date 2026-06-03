@@ -48,7 +48,7 @@ const { generateRecap, getOrGenerateRecap } = require('../lib/recap')
 const {
   generateClientBrief, generatePortfolioBrief,
   getOrGenerateClientBrief, getOrGeneratePortfolioBrief,
-  listRecentBriefs, leadPolicyHealthFor,
+  listRecentBriefs, leadPolicyHealthFor, leadPolicyGovernanceFor,
 } = require('../lib/brief')
 const { summarizeBriefQuality, narrateBriefHealth } = require('../lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('../lib/briefDelivery')
@@ -56,6 +56,7 @@ const { getBriefImpact } = require('../lib/briefImpactEngine')
 const { narrateBriefImpact } = require('../lib/briefImpact')
 const { deriveLeadPolicy, narrateLeadPolicy } = require('../lib/briefLeadPolicy')
 const { narrateLeadPolicyHealth } = require('../lib/briefLeadPolicyHealth')
+const { narrateLeadPolicyGovernance } = require('../lib/briefLeadPolicyGovernor')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 
 const router = express.Router()
@@ -387,6 +388,39 @@ router.get('/lead-policy-health', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET lead-policy-health error', err.message)
     res.status(500).json({ error: 'Failed to load lead policy health' })
+  }
+})
+
+// ── GET /api/ai/lead-policy-governance ──────────────────────────────────────────
+// CLOSE THE LOOP. /lead-policy TUNES the lead loop, /lead-policy-health JUDGES it; this is
+// what the morning brief now ACTS on. The governor consumes that same stability verdict and
+// autonomously applies the safe corrective to the live policy — neutralising ONLY an
+// oscillating lane (the lanes that earned their weight stay live), holding a saturated lane
+// at its bound, and respecting the act_now floor — superseding layer 14's blunt, whole-policy
+// revert. It returns the governed order the morning generators now apply, plus the per-lane
+// record of what it corrected and why (interventions, counts, the pre-governance snapshot).
+// Pure agency calibration — governed weights, what was neutralised/held/floored — so it shares
+// the 403 gate and agency-voiced narration. ?days=N sizes the window assessed; absent → the
+// monitor's own default, so a plain GET mints exactly that many deterministic grades to govern.
+router.get('/lead-policy-governance', async (req, res) => {
+  const scope = resolvePortfolioScope(req)
+  if (scope.error) return res.status(scope.status).json({ error: scope.error })
+  const { asOf, error } = resolveAsOf(req.query.as_of)
+  if (error) return res.status(400).json({ error })
+  // Same span discipline as /lead-policy-health: pass through only when explicitly requested,
+  // otherwise let the single-pass decision fall to the monitor's own window.
+  const span = (req.query.days == null || req.query.days === '') ? undefined : resolveDays(req.query.days)
+
+  try {
+    const governance = await leadPolicyGovernanceFor(asOf, span)
+    res.json({
+      ...governance,
+      requested: { as_of: asOf || null, days: span ?? null },
+      narrative: narrateLeadPolicyGovernance(governance, { audience: 'agency' }),
+    })
+  } catch (err) {
+    console.error('[ai] GET lead-policy-governance error', err.message)
+    res.status(500).json({ error: 'Failed to load lead policy governance' })
   }
 })
 
