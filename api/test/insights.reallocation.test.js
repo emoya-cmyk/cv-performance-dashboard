@@ -63,10 +63,30 @@ const {
   analyzeChannelReallocation,
   loadChannelEfficiencySeries,
   bucketReallocSeries,
+  // ── the CLIENT-facing read path (GET /api/insights/:clientId) reconstructed in the 24d
+  // CONFINEMENT block below, byte-faithful to routes/insights.js, so the leak guard runs over
+  // the ACTUAL client wire payload — not a hand-rolled stand-in for it ──
+  getInsightFeed,
+  getClientStanding,
+  getRecentRecoveries,
+  getClientPacing,
+  getClientPulse,
+  getEfficacyTable,
+  attachEfficacyNotes,
+  attachEscalations,
+  clientSafePulse,
 } = require('../lib/insights')
 // The PURE narrator, unit-tested exhaustively in channelEfficiency.test.js. Here it is
 // the leak-posture oracle: same proposal → '' for clients, a sentence for the agency.
-const { narrateReallocation } = require('../lib/channelEfficiency')
+// reallocationRails is the compact agency move the engine/UI consume — dense with the
+// machinery (from_cpo/to_cpo/suggested_shift/test_fraction), so 24d uses it as a load-bearing
+// agency surface the client guard MUST trip on.
+const { narrateReallocation, reallocationRails } = require('../lib/channelEfficiency')
+const { scoreClient } = require('../lib/health')
+// Layer 24 rides NO brief (unlike 18-23 — it lives on its own agency /reallocation route); we
+// assert the client brief pack stays clean belt-and-suspenders, and that the portfolio brief
+// never carries the reallocation vocabulary either.
+const { generateClientBrief, getClientBrief, generatePortfolioBrief } = require('../lib/brief')
 
 test.after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -274,4 +294,280 @@ test('reallocation is agency-only: no narration on the per-client object, "" for
   })
   assert.ok(agency.length > 0)
   assert.ok(agency.includes('Facebook/Meta') && agency.includes('Google Ads'))
+})
+
+// ============================================================
+// 24d — CHANNEL-REALLOCATION CONFINEMENT: the first PRESCRIPTIVE budget layer is the one turn of
+// the whole intelligence tower that rides NEITHER a client byte NOR any brief pack. Every layer
+// 18-23 confinement guarded a field that travels INSIDE the morning brief (the client pack carries
+// the effect, the agency pack the machinery); layer 24 is structurally stricter — the reallocation
+// proposal exists ONLY as the return of getClientReallocation / getPortfolioReallocation, served on
+// the agency-gated /api/insights/reallocation route, and is folded into NO pack at all. So the two
+// things 24d must prove are: (1) the client-facing GET /api/insights/:clientId payload — the actual
+// wire shape the client view fetches — never carries the reallocation vocabulary, computed on a
+// client whose data WOULD generate a live move; and (2) the narrator is '' for a client audience
+// UNCONDITIONALLY while the agency hears a real, identifier-free budget sentence.
+//
+// The reallocation fingerprints are CLEANLY DISTINCTIVE — like 23's, and unlike 22's run-counters
+// that collided with the layer-14 lead-policy monitor. `from_cpo`/`to_cpo`/`suggested_shift`/
+// `test_fraction`/`saved_per_outcome`/`gap_pct`/`pull_candidate`/`push_candidate` and the coined
+// verb `reallocat*` are emitted by channelEfficiency + its insights.js wiring ALONE; grep confirms
+// no sibling that rides the client payload or any pack names them. The one trap the empirical token
+// scan caught: `saturat`/`easing` are emitted by sibling layers that DO ride the client surface
+// (briefLeadPolicy*/systemic/pulse*/ai/insights), so they are DELIBERATELY SPARED — forbidding them
+// would false-positive a clean client egress and break the gate (the same discipline that made 23d
+// spare bare `reach`, 22d spare bare `hold`/`idle`). `\bcpo\b` is word-anchored so it catches the
+// realized cost-per-outcome identifier without ever catching "cost"/"cost per lead", the plain
+// English the client surface speaks freely.
+// ============================================================
+
+// The reconstructed GET /api/insights/:clientId res.json — byte-faithful to routes/insights.js: the
+// SAME six loaders, the SAME attachEscalations(attachEfficacyNotes(...)) decoration, the SAME inline
+// severity tally, the SAME nine client-safe keys incl health/benchmark/pulse(clientSafePulse). The
+// asOf-aware loaders are pinned to ASOF so both sides of the egress split are computed on the
+// identical reallocation-worthy snapshot the agency surfaces see. getClientReallocation is NEVER
+// called here — that architectural disjointness is exactly what this block guards.
+const CLIENT_PAYLOAD_KEYS = [
+  'client_id', 'insights', 'count', 'by_severity',
+  'health', 'benchmark', 'recoveries', 'pacing', 'pulse',
+]
+async function clientFacingPayload(clientId) {
+  const [insights, standing, recoveries, pacing, pulse, effTable] = await Promise.all([
+    getInsightFeed(clientId, { limit: 50 }),
+    getClientStanding(clientId, { asOf: ASOF }),
+    getRecentRecoveries(clientId, { limit: 10, days: 30 }),
+    getClientPacing(clientId, { asOf: ASOF }),
+    getClientPulse(clientId, { asOf: ASOF }),
+    getEfficacyTable(),
+  ])
+  const annotated = attachEscalations(attachEfficacyNotes(insights, effTable), effTable)
+  const t = { critical: 0, warning: 0, info: 0 }
+  for (const i of annotated) if (t[i.severity] != null) t[i.severity]++
+  return {
+    client_id: clientId,
+    insights: annotated,
+    count: annotated.length,
+    by_severity: t,
+    health: scoreClient(annotated),
+    benchmark: standing,
+    recoveries,
+    pacing,
+    pulse: clientSafePulse(pulse),
+  }
+}
+
+// Distinctive structural compounds. from_cpo/to_cpo/suggested_shift/test_fraction are emitted on
+// EVERY actionable reallocate move (and on reallocationRails), so guarding them by name is a
+// COMPLETE structural guard — no proposal, rails object, or roster entry can ride along without
+// tripping. Plus saved_per_outcome/gap_pct and the two conceptual wrapper names. DELIBERATELY NOT
+// bare `from`/`to`/`confidence`/`strength`/`message`/`channel`/`outcome`/`status`/`as_of` — generic
+// or shared client-safe facts (a focus carries a from/to date range, a finding carries a message and
+// a channel, an own-vote carries as_of) caught (where distinctive) by the token sweep below.
+const FORBIDDEN_REALLOC_KEYS = [
+  'channel_reallocation', 'reallocation',
+  'from_cpo', 'to_cpo', 'saved_per_outcome', 'gap_pct', 'suggested_shift', 'test_fraction',
+]
+// Distinctive reallocation tokens only — the coined verb, the two internal candidate flags, the
+// word-anchored realized cost-per-outcome identifier, and the structural compounds as strings.
+// DELIBERATELY NOT `saturat`/`easing` (emitted by sibling layers that legitimately ride the client
+// payload and the brief — forbidding them false-positives a clean egress), NOT bare `from`/`to`/
+// `shift`/`gap`/`cost`/`confidence`/`strength`/`message`/`lead`/`leads`/channel labels/dollar values
+// (real client facts the surface speaks freely), and `\bcpo\b` is anchored so "cost"/"cost per lead"
+// pass clean. Mirrors 23d sparing bare `reach`, 22d sparing bare `hold`/`idle`.
+const FORBIDDEN_REALLOC_TOKENS =
+  /reallocat|pull_candidate|push_candidate|\bcpo\b|from_cpo|to_cpo|suggested_shift|test_fraction|saved_per_outcome|gap_pct/
+
+function assertNoReallocation(payload, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_REALLOC_KEYS.includes(k),
+          `${where}: client egress must not carry reallocation field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(payload, 'payload')
+  assert.ok(
+    !FORBIDDEN_REALLOC_TOKENS.test(JSON.stringify(payload)),
+    `${where}: reallocation vocabulary leaked into the serialized client egress`
+  )
+}
+
+test('24d — narrateReallocation is silent for the CLIENT unconditionally; the agency hears the budget move across tentative/strong, identifier-free', async () => {
+  await ready()
+  const c = await seedReallocClient('realloc confinement narration')
+
+  // Sanity: the live fixture produced a dense, actionable reallocate proposal — the move the
+  // /api/insights/reallocation route serves — so the agency narration below is non-vacuous.
+  const out = await getClientReallocation(c, { asOf: ASOF })
+  assert.equal(out.proposal.status, 'reallocate')
+  assert.equal(out.proposal.from, 'meta')
+  assert.equal(out.proposal.to, 'google_ads')
+
+  // THE INVARIANT: the consumer never hears the budget call — for ANY proposal shape (reallocate
+  // tentative or strong, hold, insufficient, null, malformed, junk), client narration is ''
+  // UNCONDITIONALLY (the audience gate returns before the status gate is even consulted).
+  const STRONG = { ...out.proposal, strength: 'strong' }
+  for (const [name, p] of [
+    ['reallocate-tentative', out.proposal],
+    ['reallocate-strong', STRONG],
+    ['hold', { status: 'hold', from: 'meta', to: 'google_ads' }],
+    ['insufficient', { status: 'insufficient', from: null, to: null }],
+    ['null', null], ['malformed', { status: 'reallocate' }], ['junk', 'nope'],
+  ]) {
+    assert.equal(narrateReallocation(p, { audience: 'client' }), '', `client narration must be '' for ${name}`)
+  }
+
+  const labels = { meta: 'Facebook/Meta', google_ads: 'Google Ads' }
+  // The agency DOES hear the move — on BOTH the tentative (level-gap) and strong (climbing-cost)
+  // shapes — proving the client silence is a deliberate split, not a dead feature…
+  const agencyTentative = narrateReallocation(out.proposal, { audience: 'agency', labels, outcomeLabel: out.proposal_outcome_label })
+  const agencyStrong    = narrateReallocation(STRONG,       { audience: 'agency', labels, outcomeLabel: out.proposal_outcome_label })
+  assert.ok(agencyTentative.length > 0 && agencyStrong.length > 0, 'the agency hears the move on both shapes')
+  assert.match(agencyTentative, /lower cost/, 'the tentative move reads as plain budget English')
+  assert.match(agencyStrong, /climbing|holds its cost/, 'the strong move reads as plain budget English')
+  // …and stays mute on the two non-actionable states (nothing to do yet).
+  for (const silent of ['hold', 'insufficient']) {
+    assert.equal(narrateReallocation({ status: silent, from: 'meta', to: 'google_ads' }, { audience: 'agency' }), '',
+      `the agency is silent on the ${silent} state`)
+  }
+
+  // Even the candid agency sentences carry NO machine identifier — they speak human labels and
+  // "cost per lead", never 'cpo'/'reallocate'/'suggested_shift'/'gap_pct' — so they could not seed
+  // a leak even if mis-routed onto a client surface, and they never leak the raw channel keys.
+  for (const s of [agencyTentative, agencyStrong]) {
+    assert.ok(!FORBIDDEN_REALLOC_TOKENS.test(s), 'agency budget sentence carries no reallocation identifier')
+    assert.ok(s.includes('Facebook/Meta') && s.includes('Google Ads'), 'agency sentence speaks human labels')
+    assert.ok(!s.includes('google_ads'), 'agency sentence never leaks the raw channel key')
+  }
+})
+
+test('24d — the reallocation move trips the client guard, yet the client read path and the brief carry none of its vocabulary: an agency endpoint-only split', async () => {
+  await ready()
+  const c = await seedReallocClient('realloc confinement egress')
+
+  // THE AGENCY SURFACE: the proposal the /reallocation route returns is dense with from_cpo/to_cpo/
+  // suggested_shift/test_fraction/gap_pct + the reallocate status → the client guard MUST trip on
+  // it, confirming the cleanliness below is a real split, not a vacuous pass.
+  const out = await getClientReallocation(c, { asOf: ASOF })
+  assert.throws(
+    () => assertNoReallocation(out.proposal, 'reallocation-proposal-probe'),
+    /reallocation field|reallocation vocabulary/,
+    'the reallocate proposal is dense with machinery — the client guard MUST trip on it')
+  // the compact rails the engine/UI consume trip it too — and they are NON-NULL on this very
+  // proposal, so the proof is live, not theoretical.
+  const rails = reallocationRails(out.proposal)
+  assert.ok(rails && rails.from_cpo != null, 'the reallocate proposal yields live rails the engine acts on')
+  assert.throws(() => assertNoReallocation(rails, 'reallocation-rails-probe'),
+    /reallocation field|reallocation vocabulary/, 'the agency rails must trip the client guard')
+  // and the agency roster entry (names the client, carries the move) trips it as well.
+  const { roster } = await getPortfolioReallocation({ asOf: ASOF })
+  const entry = roster.find(r => r.client_id === String(c))
+  assert.ok(entry, 'the reallocate client is on the agency roster')
+  assert.throws(() => assertNoReallocation(entry, 'reallocation-roster-probe'),
+    /reallocation field|reallocation vocabulary/, 'the agency roster entry must trip the client guard')
+
+  // THE CLIENT SURFACE (A): the actual GET /api/insights/:clientId wire payload — reconstructed
+  // byte-faithful — carries NONE of the reallocation machinery, and its key-set is EXACTLY the nine
+  // client-safe keys (no reallocation wrapper among them), on the SAME client whose data just
+  // generated the live move above.
+  const payload = await clientFacingPayload(c)
+  assertNoReallocation(payload, 'clientFacingPayload')
+  assert.deepEqual(Object.keys(payload).sort(), [...CLIENT_PAYLOAD_KEYS].sort(),
+    'the per-client payload exposes exactly the nine client-safe keys — no reallocation surface among them')
+
+  // THE CLIENT SURFACE (B): layer 24 rides NO brief, but prove it belt-and-suspenders — the
+  // always-structured client brief pack (and its persisted read-back, the row the client fetches)
+  // carry none of the vocabulary.
+  const cli = await generateClientBrief(c, ASOF)
+  assert.equal(cli.grounded, true)
+  assertNoReallocation(cli.pack, 'generateClientBrief')
+  const cliRow = await getClientBrief(c, ASOF)
+  assertNoReallocation(cliRow.pack, 'getClientBrief read-back')
+
+  // THE PORTFOLIO PACK: the reallocation layer is endpoint-only — it rides neither the client nor
+  // the agency/portfolio brief pack (it exists only as the route's return). Prove the portfolio pack
+  // never carries the vocabulary either, by token sweep AND by name at any depth.
+  const port = await generatePortfolioBrief(ASOF)
+  assert.ok(!FORBIDDEN_REALLOC_TOKENS.test(JSON.stringify(port.pack)),
+    'the reallocation vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_REALLOC_KEYS.includes(k), `the portfolio pack must not carry the reallocation field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+})
+
+test('24d — the reallocation guard is load-bearing: a smuggled cpo, shift, or gap trips it; legit client fields never do', () => {
+  // each distinctive structural compound is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoReallocation({ move: { from_cpo: 60 } }, 'from-cpo-probe'),
+    /reallocation field/, 'a lone from_cpo must be rejected by name')
+  assert.throws(() => assertNoReallocation({ move: { to_cpo: 30 } }, 'to-cpo-probe'),
+    /reallocation field/, 'a lone to_cpo must be rejected by name')
+  assert.throws(() => assertNoReallocation({ move: { suggested_shift: 100 } }, 'shift-probe'),
+    /reallocation field/, 'a lone suggested_shift must be rejected by name')
+  assert.throws(() => assertNoReallocation({ move: { test_fraction: 0.1 } }, 'fraction-probe'),
+    /reallocation field/, 'a lone test_fraction must be rejected by name')
+  assert.throws(() => assertNoReallocation({ move: { gap_pct: 0.5 } }, 'gap-probe'),
+    /reallocation field/, 'a lone gap_pct must be rejected by name')
+  assert.throws(() => assertNoReallocation({ move: { saved_per_outcome: 30 } }, 'saved-probe'),
+    /reallocation field/, 'a lone saved_per_outcome must be rejected by name')
+  assert.throws(() => assertNoReallocation({ box: { channel_reallocation: {} } }, 'wrapper-probe'),
+    /reallocation field/, 'a lone channel_reallocation wrapper must be rejected by name')
+
+  // the coined verb, the internal candidate flags, and a bare cpo, smuggled as plain strings, are
+  // caught by the token sweep.
+  assert.throws(() => assertNoReallocation({ note: 'we will reallocate budget next week' }, 'reallocat-token-probe'),
+    /reallocation vocabulary/, "the verb ('reallocate') leaked as a string must be rejected")
+  assert.throws(() => assertNoReallocation({ note: 'flagged pull_candidate this week' }, 'pull-cand-probe'),
+    /reallocation vocabulary/, "'pull_candidate' leaked as a string must be rejected")
+  assert.throws(() => assertNoReallocation({ note: 'tagged push_candidate' }, 'push-cand-probe'),
+    /reallocation vocabulary/, "'push_candidate' leaked as a string must be rejected")
+  assert.throws(() => assertNoReallocation({ note: 'the cpo on this channel rose' }, 'cpo-token-probe'),
+    /reallocation vocabulary/, "a bare 'cpo' leaked as a string must be rejected")
+  // the whole reallocate move trips (structural compounds + status all present).
+  assert.throws(() => assertNoReallocation({ status: 'reallocate', from_cpo: 60, to_cpo: 30, suggested_shift: 100, test_fraction: 0.1, gap_pct: 0.5 }, 'full-move-probe'),
+    /reallocation field|reallocation vocabulary/, 'a full reallocate move must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the channel labels and outcome words the client surface speaks freely — 'Google Ads',
+  //   'Facebook/Meta', 'leads'/'lead', 'cost', and dollar cost-per-lead figures — none is a
+  //   reallocation token (\bcpo\b is anchored so "cost"/"cost per lead" pass clean).
+  assert.doesNotThrow(
+    () => assertNoReallocation({ focus: { label: 'Leads', metric: 'leads', direction: 'up', delta_pct: 12 }, note: 'Google Ads brought in leads at about $30 cost per lead while Facebook/Meta ran near $60.' }, 'channel-prose-probe'),
+    'the channel labels, leads, and cost-per-lead prose are legit client facts and must pass clean')
+  //   a client focus (Section D) carrying bare from/to (a date range), confidence, strength — none
+  //   forbidden (we forbid only the compound machine identifiers from_cpo/.../test_fraction).
+  assert.doesNotThrow(
+    () => assertNoReallocation({ focus: { from: '2026-05-01', to: '2026-05-31', metric: 'leads', label: 'Leads', confidence: 0.8, strength: 'clear' } }, 'client-focus-probe'),
+    'bare from/to/confidence/strength in a client focus are legit and must pass clean')
+  //   an adverse finding's channel + outcome + plain message — 'channel'/'outcome'/'message' are
+  //   everyday client vocabulary, and even bare 'shifted budget' prose is disjoint from the tokens.
+  assert.doesNotThrow(
+    () => assertNoReallocation({ insights: [{ severity: 'warning', channel: 'google_ads', outcome: 'leads', message: 'Leads dipped this week; we shifted budget toward the cheaper channel.' }] }, 'finding-probe'),
+    "a finding's channel/outcome/message — incl bare 'shifted budget' prose — must pass clean")
+  //   the sibling-layer words SPARED on purpose — 'saturated'/'easing' ride the client payload via
+  //   briefLeadPolicy*/systemic/pulse* — must pass clean (the empirical trap this block avoided).
+  assert.doesNotThrow(
+    () => assertNoReallocation({ pulse: [{ metric: 'leads', note: 'demand is saturated; growth is easing into the weekend.' }] }, 'sibling-words-probe'),
+    "the sibling-layer 'saturated'/'easing' words ride the client surface and must pass clean")
+  //   the consumer's own engagement vote — the only byte they send back.
+  assert.doesNotThrow(
+    () => assertNoReallocation({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+
+  // FINAL disjointness ledger: the distinctive reallocation tokens never appear in the generic
+  // English the client surface actually uses (this string deliberately includes bare `from`, `to`,
+  // `shift`, `gap`, `cost`, `confidence`, `strength`, `lead`, `leads`, `channel`, `budget`, and the
+  // sibling words `saturated`/`easing` — ALL legal) — so the sweep can never false-positive a legit
+  // client egress on a reallocation identifier (mirrors 23d's closing ledger sparing bare `reach`).
+  assert.ok(!FORBIDDEN_REALLOC_TOKENS.test('from to shift gap cost confidence strength lead leads channel budget saturated demand easing growth Google Ads Facebook Meta cost per lead lower cost holds its cost'),
+    'the reallocation sweep is disjoint from the generic English the client surface actually uses')
 })
