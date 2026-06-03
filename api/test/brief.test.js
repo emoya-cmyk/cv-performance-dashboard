@@ -1018,3 +1018,191 @@ test('the 15d governance guard is load-bearing — a lone intervention log, a st
     'a real governance verdict spliced into a client pack must be rejected',
   )
 })
+
+// ── Section H — layer 16d: the AUDITOR is agency-only, and it rides NEITHER pack ──
+// 13d/14d/15d each closed a layer at the NARRATOR and proved a live client brief carries none of
+// its vocabulary. The auditor closes the loop one rung higher AND with a different wiring shape:
+// where the governor ATTACHES to the agency portfolio pack (a per-morning verdict), the auditor is
+// a CROSS-MORNING rollup served ONLY by its agency-gated route — it is never a pack field at all.
+// So this pass proves three things: (1) the narrator is '' for the client across ALL four audit
+// statuses while the agency hears only 'churning'; (2) a live client brief — under the richest
+// control-plane regime — carries none of the auditor; and (3) the agency portfolio pack does NOT
+// carry it either (the governor rides the pack, the auditor rides the route), with the new guard
+// load-bearing and provably disjoint from the legitimate client vocabulary (`monitor`, "churn").
+const { auditLeadPolicyGovernance, shouldEscalateGovernance, narrateLeadPolicyGovernanceAudit } = require('../lib/briefLeadPolicyAudit')
+
+// The auditor's vocabulary — compound, snake_case control-plane identifiers that could never
+// surface in a human morning-brief sentence — that must NEVER cross to the client at any depth.
+// Disjoint from the lead-policy (D), stability (F) and governor (G) sets; 16d adds the FOURTH
+// confinement pass. DELIBERATELY excludes the roll-up/outcome WORDS (churning, recurring,
+// intermittent, resolved, one_off, escalate) and the legit client lane `monitor`: each is a real
+// English or marketing term ("churn rate", "recurring revenue") that could ride a real client pack,
+// so forbidding it would false-positive. The audit's identity lives in its snake_case structure.
+const FORBIDDEN_AUDIT_KEYS = [
+  'lead_policy_governance_audit',  // the route-only audit object — must never become a pack attach
+  'audit_reason',                  // the roll-up reason code (e.g. churning:verify)
+  'corrections',                   // a per-lane count of mornings the governor reset it
+  'current_run', 'max_run',        // the per-lane recurrence-run figures
+  'corrected_mornings', 'advisory_mornings', 'quiet_mornings', // the morning-type tallies
+]
+const FORBIDDEN_AUDIT_TOKENS = /lead_policy_governance_audit|audit_reason|corrected_mornings|advisory_mornings|quiet_mornings|current_run|max_run/
+function assertNoAuditMachinery(pack, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_AUDIT_KEYS.includes(k), `${where}: client pack must not carry auditor field "${k}" (at ${path})`)
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(pack, 'pack')
+  assert.ok(!FORBIDDEN_AUDIT_TOKENS.test(JSON.stringify(pack)), `${where}: auditor vocabulary leaked into the serialized client pack`)
+}
+
+// Mint REAL governor decisions to assemble a history the auditor reads — the status is EARNED from
+// the same Section-G fixtures (a real assessed verdict → a real governLeadPolicy result), never
+// hand-stamped. The 'corrected' case neutralises the thrashing `verify` lane; 'advised' only holds a
+// lane at its bound (an advisory non-action, NOT a correction); 'clean' touches nothing.
+const auditGov = (caseObj) => governLeadPolicy(caseObj.policy, assessLeadPolicyHealth(caseObj.history))
+const audCorrected = auditGov(GOVERNANCE_CASES[0]) // interventions: [{ lane:'verify', action:'neutralize' }]
+const audAdvised   = auditGov(GOVERNANCE_CASES[1]) // interventions: [{ lane:'tailwind', action:'hold_at_bound' }]
+const audClean     = auditGov(GOVERNANCE_CASES[2]) // interventions: []
+const auditMorning = (asOf, gov) => ({ as_of: asOf, governance: gov }) // the { as_of, governance } shape brief.js persists
+
+// One history per audit status, each landing UNAMBIGUOUSLY on a single status (asserted below, so a
+// drifting threshold trips the fixture, not a silent pass). `escalates` is the escalation hook's
+// expected verdict — true ONLY for churning.
+const AUDIT_CASES = [
+  // the SAME lane reset on FOUR consecutive mornings — the corrective is being fought, not healing.
+  { status: 'churning', escalates: true, history: [
+    auditMorning('2026-05-30', audCorrected), auditMorning('2026-05-31', audCorrected),
+    auditMorning('2026-06-01', audCorrected), auditMorning('2026-06-02', audCorrected) ] },
+  // reset on the first two mornings, then it TOOK — the lane graduated back to riding on its own.
+  { status: 'effective', escalates: false, history: [
+    auditMorning('2026-05-30', audCorrected), auditMorning('2026-05-31', audCorrected),
+    auditMorning('2026-06-01', audClean), auditMorning('2026-06-02', audClean) ] },
+  // two mornings that only ever HELD a lane at its bound — advisory, never a correction → quiet.
+  { status: 'quiet', escalates: false, history: [
+    auditMorning('2026-06-01', audAdvised), auditMorning('2026-06-02', audAdvised) ] },
+  // a single governed morning — one morning is not a track record → abstained (fail-safe).
+  { status: 'abstained', escalates: false, history: [ auditMorning('2026-06-02', audCorrected) ] },
+]
+
+test('auditLeadPolicyGovernance lands on each of its four statuses from REAL governor decisions (16d)', () => {
+  for (const c of AUDIT_CASES) {
+    const audit = auditLeadPolicyGovernance(c.history)
+    // the fixture really does build the status it claims — honest coverage, not a lucky pass.
+    assert.equal(audit.status, c.status, `fixture for "${c.status}" must audit to that status (got "${audit.status}")`)
+    // and the one self-improving hook agrees with the posture: escalate ONLY when churning.
+    assert.equal(shouldEscalateGovernance(audit), c.escalates, `escalation hook must ${c.escalates ? 'fire' : 'stay quiet'} for "${c.status}"`)
+    if (c.status === 'churning') {
+      assert.deepEqual(audit.recommendation, { action: 'escalate', lanes: ['verify'] }, 'churning escalates EXACTLY the recurring lane')
+    } else {
+      assert.equal(audit.recommendation.action, 'none', `a non-churning audit recommends nothing ("${c.status}")`)
+    }
+  }
+})
+
+test('narrateLeadPolicyGovernanceAudit is silent for the client across ALL four audit statuses (16d)', () => {
+  for (const c of AUDIT_CASES) {
+    const audit = auditLeadPolicyGovernance(c.history)
+    // how well our OWN auto-corrector is converging is the most internal telemetry in the stack —
+    // the client egress is '' for every status, full stop.
+    assert.equal(
+      narrateLeadPolicyGovernanceAudit(audit, { audience: 'client' }), '',
+      `client narration must be '' for audit status "${c.status}"`,
+    )
+  }
+})
+
+test('narrateLeadPolicyGovernanceAudit speaks to the AGENCY only when CHURNING — clean across all four layers (16d)', () => {
+  for (const c of AUDIT_CASES) {
+    const audit = auditLeadPolicyGovernance(c.history)
+    const agency = narrateLeadPolicyGovernanceAudit(audit, { audience: 'agency' })
+    assert.equal(typeof agency, 'string')
+    if (c.status === 'churning') {
+      // a corrective that keeps coming back is the one audit finding worth raising to the agency…
+      assert.ok(agency.length > 0, `agency SHOULD hear a churning audit (proving the client '' is a deliberate choice)`)
+      // …and even that candid sentence carries no machine identifier — from ANY of the FOUR layers.
+      assert.ok(!FORBIDDEN_AUDIT_TOKENS.test(agency), 'agency audit narration must carry no auditor identifier')
+      assert.ok(!FORBIDDEN_GOV_TOKENS.test(agency),   'agency audit narration must carry no governor identifier')
+      assert.ok(!FORBIDDEN_HEALTH_TOKENS.test(agency),'agency audit narration must carry no stability identifier')
+      assert.ok(!FORBIDDEN_TOKENS.test(agency),       'agency audit narration must carry no lead-policy identifier')
+    } else {
+      // effective / quiet / abstained are "nothing the agency must act on" — the narrator stays mute.
+      assert.equal(agency, '', `agency stays silent on audit status "${c.status}" — a corrective that takes is not news`)
+    }
+  }
+})
+
+test('neither a live client brief nor the agency portfolio pack carries the auditor — it rides the route alone (16d)', async () => {
+  await ready()
+  const c = await freshClient('Governance Audit Confinement Roofing Co')
+  // the richest control-plane regime: a thrashing lane is reset live this morning (a CORRECTED
+  // governance rides the agency pack) — the audit is the layer ABOVE that, and rides neither pack.
+  stubOscillatingWithEarned()
+
+  const res = await generateClientBrief(c, AS_OF)
+  // the brief still ships, grounded, in the morning voice…
+  assert.equal(res.grounded, true)
+  assert.match(res.brief_text, /^Good morning\./)
+  // …carrying none of the auditor, at any depth, and clean of the three layers beneath it too.
+  assert.ok(!('lead_policy_governance_audit' in res.pack), 'client pack must not carry the governance audit')
+  assertNoAuditMachinery(res.pack, 'generateClientBrief under a live governance')
+  assertCleanClientPack(res.pack, 'generateClientBrief under a live governance')
+  assertNoStabilityMachinery(res.pack, 'generateClientBrief under a live governance')
+  assertNoGovernanceMachinery(res.pack, 'generateClientBrief under a live governance')
+  // and the persisted read-back — the row a client actually fetches — is just as clean.
+  const row = await getClientBrief(c, AS_OF)
+  assertNoAuditMachinery(row.pack, 'getClientBrief read-back')
+
+  // THE WIRING SPLIT: the agency portfolio pack carries the GOVERNOR (a per-morning verdict) but
+  // NOT the auditor — the audit is a cross-morning rollup exposed ONLY by its agency-gated route
+  // (briefImpact.integration proves the 403). Running the audit guard over that same agency pack
+  // PASSES: the auditor's vocabulary is disjoint from the governor's, so its silence on the client
+  // pack above is a real all-clear, not telemetry hiding under a governor key.
+  const port = await generatePortfolioBrief(AS_OF)
+  assert.ok('lead_policy_governance' in port.pack, 'sanity: the portfolio pack DOES carry the governor (the audit is the rung above)')
+  assert.ok(!('lead_policy_governance_audit' in port.pack), 'the auditor is route-only — it never rides the portfolio pack')
+  assert.doesNotThrow(
+    () => assertNoAuditMachinery(port.pack, 'portfolio-pack-audit-probe'),
+    'the auditor vocabulary is disjoint from the governor — the agency pack carries the governor but no audit machinery',
+  )
+})
+
+test('the 16d audit guard is load-bearing — a lone run figure, a string identifier, or a real audit trips it; and it never false-positives (16d)', () => {
+  // a pack clean of every other machinery key but carrying a single auditor `current_run` is caught BY NAME
+  // (before 16d no audit key sat on any forbidden list).
+  assert.throws(
+    () => assertNoAuditMachinery({ focus: { metric: 'leads', current_run: 3 } }, 'current-run-probe'),
+    /current_run/,
+    'a lone auditor run figure in a client pack must be rejected by name',
+  )
+  // an auditor counts identifier smuggled in as a plain string VALUE is caught by the token sweep.
+  assert.throws(
+    () => assertNoAuditMachinery({ note: 'corrected_mornings were many' }, 'token-probe'),
+    /auditor vocabulary/,
+    'an auditor identifier leaked as a string must be rejected by the token sweep',
+  )
+  // …and the guard is not vacuously throwing — a structurally similar clean pack passes.
+  assert.doesNotThrow(
+    () => assertNoAuditMachinery({ focus: { metric: 'leads', trend: 'down' } }, 'clean-probe'),
+    'a clean pack with no auditor machinery must pass',
+  )
+  // CRITICAL discipline: the legit client lane `monitor` and marketing words (churn, recurring) are
+  // NOT forbidden — proof the token set is disjoint from real client vocabulary and cannot false-
+  // positive on a live pack. This is why the regex forbids only snake_case structure, not words.
+  assert.doesNotThrow(
+    () => assertNoAuditMachinery({ triage: { lane: 'monitor', label: 'recurring revenue', note: 'churn held flat' } }, 'false-positive-probe'),
+    'the audit guard must never trip on the legit monitor lane or marketing words like churn / recurring',
+  )
+  // belt-and-suspenders: a REAL audit result spliced into a client pack can never ride along.
+  const realAudit = auditLeadPolicyGovernance(AUDIT_CASES[0].history)
+  assert.equal(realAudit.status, 'churning', 'sanity: the real audit is churning')
+  assert.equal(realAudit.recommendation.action, 'escalate', 'sanity: it recommends escalation')
+  assert.throws(
+    () => assertNoAuditMachinery({ insight: { lead_policy_governance_audit: realAudit } }, 'real-audit-probe'),
+    /auditor field|auditor vocabulary/,
+    'a real audit result spliced into a client pack must be rejected',
+  )
+})
