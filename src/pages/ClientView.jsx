@@ -578,6 +578,37 @@ function AccountHealth({ health }) {
   )
 }
 
+// ── Data-freshness note — the SINGLE client-safe egress of the self-healing pipeline ──
+// Backstage, lib/connectionWatchdog + lib/connectionHealth run the whole retry/backoff/
+// token-expiry machinery and the agency sees every feed's status, failure counts, error
+// excerpts, and reconnect CTAs on the Pipeline-health panel (A3). The client gets exactly
+// ONE deliberately-vague sentence, already authored server-side by clientConnectionNote and
+// shipped as { degraded, severity:'info'|'notice', note } — no feed name, no status taxonomy,
+// no count, no operator/credential vocabulary, and never an ask to act. This component is a
+// pure renderer of that sentence: it reads no machinery, derives only TONE from severity, and
+// self-gates on note.degraded so a healthy (or disabled-only) portfolio renders nothing.
+function DataFreshnessNote({ note }) {
+  if (!note || !note.degraded || !note.note) return null
+  // severity is 'notice' (the team is already on it — warmer amber tone) or 'info' (it's
+  // self-recovering — calm slate tone). Tone is the ONLY thing severity controls; the words
+  // come entirely from the server string so the client surface can never drift from it.
+  const warm = note.severity === 'notice'
+  const tone = warm
+    ? { box: 'border-amber-100 bg-amber-50/60', icon: 'text-amber-500' }
+    : { box: 'border-slate-100 bg-slate-50',    icon: 'text-slate-400' }
+  return (
+    <div className={`rounded-2xl border ${tone.box} shadow-sm px-5 py-4 mb-4 fade-up`} style={{ animationDelay: '.05s' }}>
+      <div className="flex items-start gap-3">
+        <RefreshCw className={`w-4 h-4 mt-0.5 shrink-0 ${tone.icon}`} />
+        <div className="min-w-0">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Data freshness</p>
+          <p className="text-sm text-slate-600 leading-relaxed font-medium">{note.note}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Your Week in Review — the grounded weekly recap, in the client's own inbox words ──
 // lib/recap.js writes one plain-English narration of each client's most recently completed
 // week, grounded so every number in it was checked against the same verified facts the rest
@@ -1368,6 +1399,7 @@ export default function ClientView({ store }) {
   const [pulse,        setPulse]       = useState(null)   // { signals[], as_of, window, lookback_days } — this client's OWN intra-week daily pulse (own numbers, names no peer)
   const [recap,        setRecap]       = useState(null)   // grounded weekly recap row — the same narration that opens this client's Monday email
   const [brief,        setBrief]       = useState(null)   // grounded AI MORNING brief — { brief_text, pack:{period,posture,...} } over THIS client's own intra-week pulse
+  const [connNote,     setConnNote]    = useState(null)   // { degraded, severity:'info'|'notice', note } — the ONE leak-proof client-safe degraded-data note (clientConnectionNote); never any feed name/status/count
 
   const {
     stats = {}, prevStats = {}, weeklyTrend = [],
@@ -1410,8 +1442,13 @@ export default function ClientView({ store }) {
         // payload. Each signal carries a client_message — own numbers, names no peer — so it's safe to
         // surface here exactly as pacing/standing are. Empty/in-band/data-thin → no signals → panel hides.
         setPulse(d?.pulse && Array.isArray(d.pulse.signals) ? d.pulse : null)
+        // The single client-safe degraded-data note (server-authored by clientConnectionNote). The
+        // whole self-healing pipeline runs backstage; this is the ONE sanctioned egress, already
+        // reduced to { degraded, severity, note } with no feed name, status, count, or recovery
+        // machinery to leak. Store the object as-is; the banner self-gates on `.degraded`.
+        setConnNote(d?.connection_note && typeof d.connection_note === 'object' ? d.connection_note : null)
       })
-      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null); setPulse(null) })
+      .catch(() => { setInsights([]); setHealth(null); setStanding(null); setRecoveries([]); setPacing(null); setPulse(null); setConnNote(null) })
     // Weekly recap — the grounded, plain-English narration of the most recently completed
     // week (lib/recap.js), the very same text that opens this client's Monday email. The
     // recap layer degrades to a deterministic template even with no API key, so this is
@@ -1597,6 +1634,14 @@ export default function ClientView({ store }) {
               </div>
             </div>
           </div>
+
+          {/* ── Data-freshness note — the ONE client-safe egress of the self-healing pipeline ──
+              Deliberately UNGATED (no revenue/leads/spend gate): a brand-new account whose very
+              first sync is still in flight is exactly when the reassuring info-tone note matters
+              most. Self-gates internally on note.degraded, so a healthy/disabled portfolio renders
+              nothing. Carries only the server-authored sentence — never a feed name, status,
+              count, or any recovery machinery. */}
+          <DataFreshnessNote note={connNote} />
 
           {/* ── Goal Progress Ring ── */}
           <GoalRing

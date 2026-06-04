@@ -28,6 +28,7 @@ const {
   assessConnection,
   summarizeConnectionHealth,
   narrateConnectionHealth,
+  clientConnectionNote,
   classifyError,
   computeBackoff,
   redactError,
@@ -455,4 +456,116 @@ test('missing asOf: error/auth states still classify; undated-success reads HEAL
   assert.equal(auth.status, STATUS.AUTH_EXPIRED)          // doesn't need asOf
   const h = assessConnection(conn('b', { last_synced_at: hoursBefore(2), runs: [okRun(hoursBefore(2))] }), null)
   assert.equal(h.status, STATUS.HEALTHY)                  // can't prove stale w/o asOf
+})
+
+// ── clientConnectionNote (A4): the ONE leak-proof client-facing egress ─────────
+// Tokens the deliberately-vague note must NEVER contain — agency taxonomy, counts,
+// recovery machinery, the credential vocabulary, and any ask directed at the client.
+const FORBIDDEN_NOTE_TOKENS = [
+  // status taxonomy
+  'healthy', 'stale', 'erroring', 'auth_expired', 'never_synced', 'disabled',
+  // recovery / machinery vocabulary
+  'reconnect', 'sign-in', 'sign in', 'log in', 'login', 'token', 'credential',
+  'oauth', 'authorize', 'authoriz', 'expired', 'expire', 'revoked', 'backoff',
+  'retry', 'retries', 'attempt', 'escalate', 'operator', 'sync', 'error', 'fail',
+  // imperative asks (the client must never be told to act — reconnecting is ours)
+  'please', 'click', 'you need', 'you must', 'visit', 'go to',
+]
+// Assert a note string is free of every forbidden token AND carries no integer count.
+function assertNoteLeakProof(note) {
+  const low = String(note).toLowerCase()
+  for (const t of FORBIDDEN_NOTE_TOKENS) {
+    assert.ok(!low.includes(t), `note leaked forbidden token "${t}": ${note}`)
+  }
+  assert.ok(!/\d/.test(note), `note leaked a numeric count: ${note}`)
+}
+
+test('clientConnectionNote: all-healthy/disabled → not degraded, empty note', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: hoursBefore(2), runs: [okRun(hoursBefore(2))] }),  // HEALTHY
+    conn('b', { is_active: false }),                                               // DISABLED
+  ], ASOF)
+  assert.deepEqual(clientConnectionNote(recs), { degraded: false, severity: 'none', note: '' })
+})
+
+test('clientConnectionNote: empty / non-array / all-garbage → not degraded', () => {
+  for (const input of [[], null, undefined, 'nope', [null, undefined]]) {
+    assert.deepEqual(clientConnectionNote(input), { degraded: false, severity: 'none', note: '' })
+  }
+})
+
+test('clientConnectionNote: self-healing only (no operator gate) → info tone, no action ask', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: hoursBefore(2), runs: [okRun(hoursBefore(2))] }),                         // HEALTHY
+    conn('b', { last_synced_at: daysBefore(2), runs: [errRun(hoursBefore(1), '503'), okRun(daysBefore(2))] }), // ERRORING (transient)
+    conn('c', { last_synced_at: hoursBefore(60), runs: [okRun(hoursBefore(60))] }),                       // STALE
+  ], ASOF)
+  // sanity: this fixture must NOT contain an operator-gated feed
+  assert.ok(!recs.some(r => r.operator_required))
+  const out = clientConnectionNote(recs)
+  assert.equal(out.degraded, true)
+  assert.equal(out.severity, 'info')
+  assert.ok(out.note.length > 0)
+  assertNoteLeakProof(out.note)
+})
+
+test('clientConnectionNote: any operator-gated feed → notice tone ("team is on it"), still leak-proof', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: hoursBefore(2), runs: [okRun(hoursBefore(2))] }),                         // HEALTHY
+    conn('b', { last_synced_at: daysBefore(4), runs: [errRun(hoursBefore(1), 'invalid_grant'), okRun(daysBefore(4))] }), // AUTH_EXPIRED (operator)
+    conn('c', { last_synced_at: daysBefore(2), runs: [errRun(hoursBefore(1), '503'), okRun(daysBefore(2))] }), // ERRORING (transient)
+  ], ASOF)
+  assert.ok(recs.some(r => r.operator_required))   // sanity: an auth gate is present
+  const out = clientConnectionNote(recs)
+  assert.equal(out.degraded, true)
+  assert.equal(out.severity, 'notice')
+  assert.ok(out.note.length > 0)
+  assertNoteLeakProof(out.note)
+})
+
+test('clientConnectionNote: a brand-new first-sync-pending feed rides the gentle info tone', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: hoursBefore(2), runs: [okRun(hoursBefore(2))] }),  // HEALTHY
+    conn('z'),                                                                     // NEVER_SYNCED (never attempted)
+  ], ASOF)
+  const out = clientConnectionNote(recs)
+  assert.equal(out.degraded, true)
+  assert.equal(out.severity, 'info')
+  assertNoteLeakProof(out.note)
+})
+
+test('clientConnectionNote: EVERY degraded note across all degraded states is leak-proof', () => {
+  // Drive each non-healthy/non-disabled status through the note and audit the wording.
+  const states = [
+    [conn('s', { last_synced_at: hoursBefore(60), runs: [okRun(hoursBefore(60))] })],                          // STALE
+    [conn('e', { last_synced_at: daysBefore(2), runs: [errRun(hoursBefore(1), '503'), okRun(daysBefore(2))] })], // ERRORING
+    [conn('x', { last_synced_at: daysBefore(2), runs: Array.from({ length: 8 }, (_, i) => errRun(hoursBefore(i + 1), '500')).concat(okRun(daysBefore(2))) })], // ERRORING exhausted
+    [conn('a', { last_synced_at: daysBefore(4), runs: [errRun(hoursBefore(1), 'invalid_grant'), okRun(daysBefore(4))] })], // AUTH_EXPIRED
+    [conn('n', { runs: [errRun(hoursBefore(1), '401')] })],                                                     // NEVER_SYNCED auth
+    [conn('m', { runs: [errRun(hoursBefore(1), '503')] })],                                                     // NEVER_SYNCED transient
+    [conn('p')],                                                                                                // NEVER_SYNCED pending
+  ]
+  for (const s of states) {
+    const recs = assessConnectionHealth(s, ASOF)
+    const out  = clientConnectionNote(recs)
+    assert.equal(out.degraded, true, recs[0] && recs[0].status)
+    assert.ok(['info', 'notice'].includes(out.severity))
+    assertNoteLeakProof(out.note)
+  }
+})
+
+test('clientConnectionNote: deterministic — identical input → identical output', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: daysBefore(4), runs: [errRun(hoursBefore(1), 'invalid_grant'), okRun(daysBefore(4))] }),
+    conn('b', { last_synced_at: daysBefore(2), runs: [errRun(hoursBefore(1), '503'), okRun(daysBefore(2))] }),
+  ], ASOF)
+  assert.equal(JSON.stringify(clientConnectionNote(recs)), JSON.stringify(clientConnectionNote(recs)))
+})
+
+test('clientConnectionNote: shape is exactly {degraded,severity,note} — no machinery rides along', () => {
+  const recs = assessConnectionHealth([
+    conn('a', { last_synced_at: daysBefore(4), runs: [errRun(hoursBefore(1), 'invalid_grant'), okRun(daysBefore(4))] }),
+  ], ASOF)
+  const out = clientConnectionNote(recs)
+  assert.deepEqual(Object.keys(out).sort(), ['degraded', 'note', 'severity'])
 })

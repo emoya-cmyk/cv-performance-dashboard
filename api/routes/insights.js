@@ -81,7 +81,7 @@ const {
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
   getPortfolioReallocation, getPortfolioReallocationEfficacy, getReallocationEfficacyHealth,
-  getConnectionHealth,
+  getConnectionHealth, getClientConnectionNote,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -538,7 +538,7 @@ router.get('/:clientId', async (req, res) => {
     if (!(await clientExists(clientId))) {
       return res.status(404).json({ error: 'client not found' })
     }
-    const [insights, standing, recoveries, pacing, pulse, effTable] = await Promise.all([
+    const [insights, standing, recoveries, pacing, pulse, effTable, connectionNote] = await Promise.all([
       getInsightFeed(clientId, { limit: parseLimit(req.query.limit, 50) }),
       getClientStanding(clientId),
       // recent WINS for this client — problems the engine flagged that then cleared.
@@ -555,6 +555,12 @@ router.get('/:clientId', async (req, res) => {
       // client-safe "this play has worked X% of the time" note onto adverse findings that
       // already carry advice. Names no peer; quotes only the play's own track record.
       getEfficacyTable(),
+      // the ONE client-safe egress for pipeline trouble (A4): { degraded, severity, note } and
+      // nothing else. If a data connection is stale/erroring/auth-expired, this is a soft "some
+      // data is catching up / your team is on it" line — it never names a channel, a status, a
+      // count, the credential vocabulary, or any ask. All the agency machinery
+      // (getConnectionHealth) is dropped at the source inside getClientConnectionNote.
+      getClientConnectionNote(clientId),
     ])
     // self-improving join: first ANNOTATE each adverse, advised finding with its play's proven
     // track record (efficacy_note, n≥4 decided), then ESCALATE — where that record proves the play
@@ -587,6 +593,10 @@ router.get('/:clientId', async (req, res) => {
       // envelope: the EFFECT (the signal already fired at the tuned band) rides through, the dial
       // never egresses — machinery-free on the WIRE, not merely unread by the client UI.
       pulse: clientSafePulse(pulse),
+      // "is my data current?" — a soft, deliberately-vague degraded note when a pipeline
+      // connection is behind, and NOTHING when everything is healthy. { degraded, severity, note }
+      // only; leak-proof by construction (see getClientConnectionNote / clientConnectionNote).
+      connection_note: connectionNote,
     })
   } catch (err) {
     console.error('[insights] GET client feed error', err.message)

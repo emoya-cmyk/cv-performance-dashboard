@@ -72,6 +72,10 @@ const {
   getClientPacing,
   getClientPulse,
   getEfficacyTable,
+  // the seventh loader (intel-v11 A4): the ONE client-safe pipeline-trouble egress,
+  // { degraded, severity, note } and nothing else — reconstructed alongside the other six so
+  // the leak guard runs over the REAL ten-key wire payload.
+  getClientConnectionNote,
   attachEfficacyNotes,
   attachEscalations,
   clientSafePulse,
@@ -322,23 +326,26 @@ test('reallocation is agency-only: no narration on the per-client object, "" for
 // ============================================================
 
 // The reconstructed GET /api/insights/:clientId res.json — byte-faithful to routes/insights.js: the
-// SAME six loaders, the SAME attachEscalations(attachEfficacyNotes(...)) decoration, the SAME inline
-// severity tally, the SAME nine client-safe keys incl health/benchmark/pulse(clientSafePulse). The
-// asOf-aware loaders are pinned to ASOF so both sides of the egress split are computed on the
-// identical reallocation-worthy snapshot the agency surfaces see. getClientReallocation is NEVER
-// called here — that architectural disjointness is exactly what this block guards.
+// SAME seven loaders, the SAME attachEscalations(attachEfficacyNotes(...)) decoration, the SAME inline
+// severity tally, the SAME ten client-safe keys incl health/benchmark/pulse(clientSafePulse)/
+// connection_note(clientConnectionNote). The asOf-aware loaders are pinned to ASOF so both sides of
+// the egress split are computed on the identical reallocation-worthy snapshot the agency surfaces
+// see. getClientReallocation is NEVER called here — that architectural disjointness is exactly what
+// this block guards.
 const CLIENT_PAYLOAD_KEYS = [
   'client_id', 'insights', 'count', 'by_severity',
   'health', 'benchmark', 'recoveries', 'pacing', 'pulse',
+  'connection_note',
 ]
 async function clientFacingPayload(clientId) {
-  const [insights, standing, recoveries, pacing, pulse, effTable] = await Promise.all([
+  const [insights, standing, recoveries, pacing, pulse, effTable, connectionNote] = await Promise.all([
     getInsightFeed(clientId, { limit: 50 }),
     getClientStanding(clientId, { asOf: ASOF }),
     getRecentRecoveries(clientId, { limit: 10, days: 30 }),
     getClientPacing(clientId, { asOf: ASOF }),
     getClientPulse(clientId, { asOf: ASOF }),
     getEfficacyTable(),
+    getClientConnectionNote(clientId, { asOf: ASOF }),
   ])
   const annotated = attachEscalations(attachEfficacyNotes(insights, effTable), effTable)
   const t = { critical: 0, warning: 0, info: 0 }
@@ -353,6 +360,7 @@ async function clientFacingPayload(clientId) {
     recoveries,
     pacing,
     pulse: clientSafePulse(pulse),
+    connection_note: connectionNote,
   }
 }
 
@@ -471,13 +479,13 @@ test('24d — the reallocation move trips the client guard, yet the client read 
     /reallocation field|reallocation vocabulary/, 'the agency roster entry must trip the client guard')
 
   // THE CLIENT SURFACE (A): the actual GET /api/insights/:clientId wire payload — reconstructed
-  // byte-faithful — carries NONE of the reallocation machinery, and its key-set is EXACTLY the nine
+  // byte-faithful — carries NONE of the reallocation machinery, and its key-set is EXACTLY the ten
   // client-safe keys (no reallocation wrapper among them), on the SAME client whose data just
   // generated the live move above.
   const payload = await clientFacingPayload(c)
   assertNoReallocation(payload, 'clientFacingPayload')
   assert.deepEqual(Object.keys(payload).sort(), [...CLIENT_PAYLOAD_KEYS].sort(),
-    'the per-client payload exposes exactly the nine client-safe keys — no reallocation surface among them')
+    'the per-client payload exposes exactly the ten client-safe keys — no reallocation surface among them')
 
   // THE CLIENT SURFACE (B): layer 24 rides NO brief, but prove it belt-and-suspenders — the
   // always-structured client brief pack (and its persisted read-back, the row the client fetches)

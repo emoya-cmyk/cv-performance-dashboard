@@ -409,11 +409,65 @@ function narrateConnectionHealth(record, opts = {}) {
   }
 }
 
+// ============================================================
+// THE CLIENT-FACING DEGRADED NOTE (A4) — the ONE leak-proof egress.
+//
+// Everything else in this module is agency machinery: statuses, error classes, failure
+// counts, backoff seconds, operator-required flags, reconnect prompts. None of it may
+// ride a per-client payload. This function is the single, deliberately-vague exception:
+// given the SAME assessed records the agency surface reads, it emits only whether *some*
+// of the client's data is mid-refresh and whether a person is already handling it —
+// nothing more. It returns ONE of three shapes and never anything else:
+//
+//   not degraded → { degraded:false, severity:'none',   note:'' }
+//   self-healing → { degraded:true,  severity:'info',   note:<gentle, no-action> }
+//   team-handled → { degraded:true,  severity:'notice', note:<reassuring, no-action> }
+//
+// LEAK-PROOF CONTRACT — the note string NEVER contains, and this function NEVER returns:
+//   • a status name (HEALTHY/STALE/ERRORING/AUTH_EXPIRED/NEVER_SYNCED/DISABLED)
+//   • a failure count, attempt count, or ANY integer about the connections
+//   • recovery internals (backoff, next_attempt_at, attempts, exhausted, retryable)
+//   • the operator_required flag, an error excerpt, or a channel/provider name
+//   • the words reconnect / sign-in / token / credential / OAuth / authorize / expired
+//   • ANY instruction asking the CLIENT to act — reconnecting is the agency's job, always
+// It uses vague quantifiers ("some"), never the count, and the apostrophe-free wording is
+// deliberate (these are JS string literals). A leak-proof test asserts the serialized
+// per-client payload contains none of the forbidden tokens.
+//
+// "Troubled" is the freshness sense only: any feed that is neither HEALTHY nor a
+// deliberately-DISABLED feed. Brand-new first-syncs and mild staleness ride the gentlest
+// 'info' tone; the presence of ANY operator-gated feed only shifts the TONE to 'notice'
+// ("your team is already on it") — it never escalates wording into an ask or a leak.
+function clientConnectionNote(records, opts = {}) {
+  void opts   // reserved for signature stability; the note is client-only by construction
+  const recs = Array.isArray(records) ? records.filter(Boolean) : []
+  const troubled = recs.filter(
+    r => r.status !== STATUS.HEALTHY && r.status !== STATUS.DISABLED
+  )
+  if (troubled.length === 0) {
+    return { degraded: false, severity: 'none', note: '' }
+  }
+  const needsTeam = troubled.some(r => r.operator_required)
+  if (needsTeam) {
+    return {
+      degraded: true,
+      severity: 'notice',
+      note: 'Some of your data is refreshing more slowly than usual. Your team is already on it, so no action is needed on your end.',
+    }
+  }
+  return {
+    degraded: true,
+    severity: 'info',
+    note: 'Some of your data is still catching up and is refreshing on its own. Nothing is needed on your end.',
+  }
+}
+
 module.exports = {
   assessConnectionHealth,
   assessConnection,
   summarizeConnectionHealth,
   narrateConnectionHealth,
+  clientConnectionNote,
   classifyError,
   computeBackoff,
   redactError,

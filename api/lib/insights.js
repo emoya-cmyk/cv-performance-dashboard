@@ -89,7 +89,7 @@ const { detectCoverageGaps } = require('./coverage')
 // state, assesses, and auto-recovers everything EXCEPT auth (the Class-C hard stop).
 // getConnectionHealth (below) is the agency-only READ surface over both.
 const { loadConnectionStates, assessConnectionStates } = require('./connectionWatchdog')
-const { narrateConnectionHealth } = require('./connectionHealth')
+const { narrateConnectionHealth, clientConnectionNote } = require('./connectionHealth')
 
 // Intra-week early-warning (PURE): the weekly engine is blind BETWEEN Mondays — a client can
 // crater on a Tuesday and nothing is said until the week closes. dayPulse watches the trailing-
@@ -2874,6 +2874,23 @@ async function getConnectionHealth({ clientId = null, asOf } = {}) {
   }
 }
 
+// getClientConnectionNote(clientId, { asOf }) — the A4 CLIENT-SAFE counterpart to the agency
+// getConnectionHealth above, and the ONE deliberately-vague egress for connection trouble onto
+// a per-client payload. It loads ONLY this client's connection states, assesses them, and hands
+// the records to clientConnectionNote — which returns nothing but { degraded, severity, note }:
+// a soft "some data is catching up / your team is on it" line that never names a channel, a
+// status, a count, the credential vocabulary, or any ask. Everything the agency getter carries
+// (channel names, reconnect steps, redacted error excerpts, backoff/attempt machinery,
+// operator_required) is dropped HERE, at the source, so it can never ride the wire to a client.
+// Healthy/disabled-only → { degraded:false, severity:'none', note:'' }. Computed on READ.
+async function getClientConnectionNote(clientId, { asOf } = {}) {
+  if (clientId == null) return { degraded: false, severity: 'none', note: '' }
+  const when = asOf ? String(asOf) : new Date().toISOString()
+  const states = await loadConnectionStates(query, { clientId })
+  const { records } = assessConnectionStates(states, when, {})
+  return clientConnectionNote(records)
+}
+
 // ============================================================================
 // INTRA-WEEK PULSE (intel-v7) — the early-warning organ over the ATOMIC DAILY grain.
 //
@@ -3343,6 +3360,7 @@ module.exports = {
   // connection-health watchdog (per-channel coverage gaps off the atomic fact grain)
   loadChannelCoverage,
   getConnectionHealth,
+  getClientConnectionNote,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,
