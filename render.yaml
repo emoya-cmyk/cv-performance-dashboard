@@ -34,6 +34,19 @@ services:
       - key: CRON_SECRET
         sync: false                  # Enter in Render dashboard — not stored in repo
 
+      # ── AI narration (Anthropic) — OPTIONAL ───────────────────────────────────
+      # UNSET = the AI layer degrades gracefully: the weekly recap / brief render
+      # deterministic, evidence-grounded templates (HTTP 200) and POST /api/ai/ask
+      # returns 503 (NO_AI). Set this to enable LLM narration — the numbers the model
+      # is allowed to state are still produced by code (the evidence pack), never
+      # invented. Enter in the Render dashboard; not stored in the repo.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # OPTIONAL cost cap — max paid AI calls/hour/caller (recap/brief/ask). Code
+      # default is 60 when unset; override here only to tighten/loosen the budget.
+      - key: AI_RATE_MAX
+        sync: false
+
       # ── Optional: shared Google OAuth credentials ─────────────────────────────
       # Set once here; all Google connectors (Ads, GBP, GA4, LSA) will use these
       # so clients only need to provide their refresh_token, not client_id/secret.
