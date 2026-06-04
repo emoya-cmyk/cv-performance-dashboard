@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope, Target } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope, Target, CheckCircle2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -305,6 +305,47 @@ const VOICE_CONFIDENCE = {
   withheld:  { chip: 'text-slate-600 bg-slate-50 border-slate-200',       agency: 'Withheld',  client: 'Unsettled' },
 }
 
+// intel-v14 D7 — the INDEPENDENT cross-lens second opinion. D4–D6 calibrate how firmly the nowcast
+// may speak by backtesting its OWN past error — but a self-backtest is structurally blind to a regime
+// change: right at a turning point it can speak most confidently exactly when it is most wrong. D7
+// adds the guard a backtest cannot: it cross-checks the projection's trajectory against the genuinely
+// independent `delta` lens (how the lead metric has moved SINCE THE CALLER LAST LOOKED — its own
+// reference frame, not the buffered run the projection extends), and the server attaches
+// `nowcast.corroboration` (status 'corroborated') whenever there is a projected nowcast AND an
+// independent delta for the lead — even on a short session too young to grade, so the second opinion
+// can land before any track record does. It NEVER inflates confidence: it can only add an "aligned"
+// reassurance (the independent move points the same way) or a "mixed" caution (it points the other
+// way — the streak may be breaking). This map gives that verdict a small at-a-glance pill beside the
+// accuracy chip plus a level-colored note line, visually distinct from the muted self-graded accuracy
+// note so a reader sees it as a SEPARATE lens agreeing or disagreeing. Every field is from the
+// already-leak-safe `corroboration` (a metric label + direction words + small counts; no tenant
+// identity), so it renders identically on agency and client — `tone` re-voices only the pill label,
+// never the honest note sentence (the server keeps that line surface-independent by design).
+const CORROBORATION = {
+  aligned: { Icon: CheckCircle2, chip: 'text-emerald-700 bg-emerald-50 border-emerald-200', note: 'text-emerald-600', agency: 'Corroborated', client: 'Confirmed' },
+  mixed:   { Icon: AlertCircle,  chip: 'text-amber-700 bg-amber-50 border-amber-200',       note: 'text-amber-600',   agency: 'Mixed signal', client: 'Mixed' },
+}
+
+// The at-a-glance corroboration pill for the nowcast header, sitting beside the accuracy chip.
+// Level-colored (aligned=emerald, mixed=amber) with the matching icon; agency reads "Corroborated"/
+// "Mixed signal", client the softer "Confirmed"/"Mixed". Hover reveals the full honest note on either
+// surface. Renders nothing unless the server cross-checked the lead against ≥1 independent lens.
+function CorroborationChip({ corroboration, tone }) {
+  if (!corroboration || corroboration.status !== 'corroborated') return null
+  const c = CORROBORATION[corroboration.level]
+  if (!c) return null
+  const Icon = c.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${c.chip}`}
+      title={corroboration.note || undefined}
+    >
+      <Icon size={10} strokeWidth={2.5} />
+      {tone === 'client' ? c.client : c.agency}
+    </span>
+  )
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -370,6 +411,14 @@ function NowcastStrip({ nowcast, tone }) {
   // original D3 headline rides untouched, byte-identical to a pre-D6 strip.
   const voice = nowcast.voice && nowcast.voice.status === 'voiced' ? nowcast.voice : null
   const vc = voice ? (VOICE_CONFIDENCE[voice.confidence] || VOICE_CONFIDENCE.measured) : null
+  // intel-v14 D7 — the independent cross-lens second opinion, present only when the server could
+  // cross-check the lead projection against an independent delta (the caller sent a `since`). Absent ⇒
+  // chip + note simply omitted, byte-identical to a pre-D7 strip. It attaches independently of the
+  // accuracy ladder, so it can appear on a short session that has no track record (accuracy) yet.
+  const corroboration =
+    nowcast.corroboration && nowcast.corroboration.status === 'corroborated' ? nowcast.corroboration : null
+  const cc = corroboration ? CORROBORATION[corroboration.level] || null : null
+  const CueIcon = cc ? cc.Icon : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -391,6 +440,7 @@ function NowcastStrip({ nowcast, tone }) {
               </span>
             )}
             {accuracy && <AccuracyChip accuracy={accuracy} tone={tone} />}
+            {corroboration && <CorroborationChip corroboration={corroboration} tone={tone} />}
           </div>
           {voice ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
@@ -407,6 +457,12 @@ function NowcastStrip({ nowcast, tone }) {
           ) : null}
           {note && (
             <p className="mt-0.5 text-[11px] text-slate-400">{note}</p>
+          )}
+          {corroboration && corroboration.note && cc && (
+            <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${cc.note}`}>
+              {CueIcon && <CueIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
+              <span>{corroboration.note}</span>
+            </p>
           )}
 
           <div className="mt-2 flex flex-wrap gap-1.5">
