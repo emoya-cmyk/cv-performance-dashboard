@@ -380,3 +380,68 @@ test('intel-v14 D2: a multi-read streak surfaces as a `trend` ("climbed N straig
     assert.ok(!serialized.includes(needle), `trend leaked tenant identity: ${needle}`)
   }
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2d — intel-v14 D3: the optional live `nowcast` block. Proves the WIRING
+// (runScopeInsight projects the trend forward ONLY once it is on a confirmed
+// streak); the projection math itself is owned by scopeNowcast.test.js. The
+// nowcast rides strictly on top of D2 — no streak ⇒ no `trend` ⇒ no `nowcast`,
+// so the envelope is byte-identical to every pre-D3 caller.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D3: omitting `history` ⇒ NO nowcast key (rides on the trend block)', async () => {
+  const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('trend' in result, false)
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D3: a trend that is not yet trending ⇒ NO nowcast key (a blip is not a streak)', async () => {
+  // history(1) + the fresh read = 2 reads ⇒ trend present but status "insufficient".
+  // Nothing is streaking, so there is nothing to project forward.
+  const result = await runScopeInsight(
+    { ...INPUT, history: [[{ metric: 'revenue', current: 9000 }]] },
+    fakeQuery(CURRENT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.ok(result.trend, 'trend attached when history is non-empty')
+  assert.notStrictEqual(result.trend.status, 'trending')
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D3: a confirmed streak surfaces a `nowcast` projecting the run forward at pace', async () => {
+  // Same setup as the D2 streak: prior reads 8000 then 10000, fresh read (NEXT_RAW) totals
+  // 12400 ⇒ a 2-step up-run from 8000 to 12400. The nowcast continues it AT PACE: the run's
+  // average step is (12400 − 8000) ÷ 2 = 2200, so the next update projects to ~14600.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // it only attaches once the trend is actually trending…
+  assert.strictEqual(result.trend.status, 'trending')
+  assert.ok(result.nowcast, 'nowcast attached when the trend is on a streak')
+  assert.strictEqual(result.nowcast.status, 'projected')
+
+  const rev = result.nowcast.projections[0]
+  assert.strictEqual(rev.metric, 'revenue')
+  assert.strictEqual(rev.current, 12400)         // launch point = the run's latest (fresh) value
+  assert.strictEqual(rev.pace, 2200)             // (12400 − 8000) ÷ 2 steps — the average step
+  assert.strictEqual(rev.projected, 14600)       // 12400 + 2200
+  assert.strictEqual(rev.projectedDelta, 2200)
+  assert.strictEqual(rev.improving, true)        // revenue up = good
+  assert.strictEqual(rev.clamped, false)
+  assert.ok(result.nowcast.headline.startsWith('At this pace, revenue reaches ~$14,600 next update'), result.nowcast.headline)
+
+  // the nowcast rides ALONGSIDE the trend and the normal narration, never instead of them.
+  assert.ok(result.trend.trends.find(t => t.metric === 'revenue'), 'trend still present beside the nowcast')
+  assert.ok(result.findings.find(f => f.metric === 'revenue'), 'fresh narration still present beside the nowcast')
+
+  // leak-safe: the live projection embeds no tenant identity — only the global channel axis.
+  const serialized = JSON.stringify(result.nowcast)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `nowcast leaked tenant identity: ${needle}`)
+  }
+})

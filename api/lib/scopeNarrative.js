@@ -24,6 +24,7 @@ const { CHANNEL_LABELS, metricKeyDeps, channelId } = require('../semantic/regist
 const { generateScopeInsight } = require('./scopeInsight')
 const { diffScopeInsights } = require('./scopeDelta')
 const { detectScopeTrends } = require('./scopeTrend')
+const { projectScopeTrend } = require('./scopeNowcast')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -212,6 +213,18 @@ async function runScopeInsight(input, query, scope) {
   // its OWN trend strip, never see another tenant's reads).
   if (Array.isArray(opts.history) && opts.history.length) {
     result.trend = detectScopeTrends([...opts.history, narration], opts)
+  }
+
+  // ADDITIVE (intel-v14 D3): once a metric is on a confirmed multi-read STREAK
+  // (result.trend.status === 'trending'), project where it is heading AT THE
+  // CURRENT PACE ("at this pace, revenue reaches ~$13,000 next update"). This
+  // rides strictly on top of D2: no streak ⇒ no `trend` ⇒ no `nowcast` key, so
+  // a pre-D3 caller's envelope is byte-identical. projectScopeTrend consumes the
+  // already-leak-safe trend payload (metric labels + the run's own bare values,
+  // no tenant identity) and is itself pure + fail-safe (junk degrades to status
+  // 'none', never throws), so this stays leak-safe and cannot break the response.
+  if (result.trend && result.trend.status === 'trending') {
+    result.nowcast = projectScopeTrend(result.trend, opts)
   }
 
   return result
