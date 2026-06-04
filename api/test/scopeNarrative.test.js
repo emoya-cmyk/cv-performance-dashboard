@@ -1135,3 +1135,132 @@ test('intel-v14 D9: the materiality payload embeds no tenant identity (renders i
     assert.ok(!serialized.includes(needle), `materiality leaked tenant identity: ${needle}`)
   }
 })
+
+// ── intel-v14 D10: run-curvature temper (nowcast.momentum) ──────────────────────────────────────────
+// D3 projects each trending metric forward at its run's AVERAGE step pace — an honest straight line, but
+// blind to CURVATURE. D8 read the projection basket's POLARITY and D9 its MAGNITUDE; D10 reads whether the
+// pace that JUSTIFIED the straight line is still being delivered. It re-reads each projection's own run
+// (`values` — the finite, gap-free, same-signed read sequence scopeTrend already validated), measures the
+// step magnitudes in drift-free integer cents, and compares an early-half pace to a late-half pace: steps
+// that keep GROWING ⇒ accelerating (the line is a FLOOR — it understates); steps that keep SHRINKING ⇒
+// decelerating (the line is a CEILING — it overstates); inside the ±20% band ⇒ steady (the line is
+// well-founded). Curvature needs only a single projection carrying a ≥3-read run (two steps to compare),
+// so — exactly like coherence and materiality — momentum rides on the projection vector ALONE, ahead of
+// the grade. The live read totals revenue to 12400, so each single-metric run below is [h0, h1, 12400];
+// these use OWN fixtures with clear margin from D9's +20% knife-edge so the shape is unambiguous.
+
+test('intel-v14 D10: a run whose steps keep GROWING ⇒ nowcast.momentum "accelerating" (the line is a floor)', async () => {
+  // revenue [10000,11000,→12400]: step magnitudes (cents) [100000,140000] ⇒ paceRatio 1.4, well past the
+  // 1.20 accelerating boundary. Revenue is favorable (up is good), so the honest framing is a compounding
+  // gain — NOT a warning. The 3-read buffer is too short to GRADE, so momentum attaches on the projection
+  // vector alone (no accuracy / band / voice), and a single metric has nothing to cohere with so D8 is silent.
+  const history = [
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 11000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // ungraded on the short buffer, single-metric ⇒ no accuracy / band / voice / coherence (momentum rides ahead)…
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.ok(result.nowcast.projections.every(p => !('band' in p)))
+  assert.strictEqual('voice' in result.nowcast, false)
+  assert.strictEqual('coherence' in result.nowcast, false)
+
+  // …yet D10 reads the curvature on the lone projection.
+  const m = result.nowcast.momentum
+  assert.ok(m, 'momentum attaches on a projected-but-ungraded single-metric nowcast')
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.shape, 'accelerating')
+  assert.strictEqual(m.assessedCount, 1)
+  assert.strictEqual(m.acceleratingCount, 1)
+  assert.strictEqual(m.deceleratingCount, 0)
+  assert.strictEqual(m.steadyCount, 0)
+  assert.strictEqual(m.decisive.metric, 'revenue')
+  assert.strictEqual(m.biggestMove.metric, 'revenue')
+  assert.strictEqual(m.meta.basis, 'run-curvature')
+  // revenue is favorable, so an accelerating gain reads as compounding momentum, not a risk.
+  assert.strictEqual(
+    m.note,
+    "Revenue's gain is accelerating — each update is larger than the last; the momentum is compounding.")
+})
+
+test('intel-v14 D10: a run whose steps keep SHRINKING ⇒ nowcast.momentum "decelerating" (the line is a ceiling)', async () => {
+  // revenue [8000,11400,→12400]: step magnitudes (cents) [340000,100000] ⇒ paceRatio ≈0.29, far under the
+  // 0.80 decelerating boundary. The climb is real but running out of steam, so the straight line OVERSTATES
+  // where the next read lands — the accuracy-protecting half of the lens. Revenue is favorable, so the note
+  // frames it as a flattening GAIN that the projection may overstate.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 11400 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const m = result.nowcast.momentum
+  assert.ok(m)
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.shape, 'decelerating')
+  assert.strictEqual(m.assessedCount, 1)
+  assert.strictEqual(m.acceleratingCount, 0)
+  assert.strictEqual(m.deceleratingCount, 1)
+  assert.strictEqual(m.steadyCount, 0)
+  assert.strictEqual(m.decisive.metric, 'revenue')
+  assert.strictEqual(m.meta.basis, 'run-curvature')
+  assert.strictEqual(
+    m.note,
+    "Revenue's gain is flattening — each update is smaller than the last, so the projection may overstate it.")
+})
+
+test('intel-v14 D10: a run holding its slope ⇒ nowcast.momentum "steady" (the straight line is well-founded)', async () => {
+  // revenue [8200,10300,→12400]: step magnitudes (cents) [210000,210000] ⇒ paceRatio exactly 1.0, dead
+  // center of the ±20% band. The pace that produced the projection is still in force, so D10 affirms the
+  // straight line rather than tempering it — the "do not cry wolf" case for curvature.
+  const history = [
+    [{ metric: 'revenue', current: 8200 }],
+    [{ metric: 'revenue', current: 10300 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const m = result.nowcast.momentum
+  assert.ok(m)
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.shape, 'steady')
+  assert.strictEqual(m.assessedCount, 1)
+  assert.strictEqual(m.acceleratingCount, 0)
+  assert.strictEqual(m.deceleratingCount, 0)
+  assert.strictEqual(m.steadyCount, 1)
+  assert.strictEqual(m.decisive.metric, 'revenue')
+  assert.strictEqual(m.meta.basis, 'run-curvature')
+  assert.strictEqual(m.note, "Revenue's pace is holding steady — the linear projection is well-founded.")
+})
+
+test('intel-v14 D10: no projected nowcast ⇒ NO momentum (additive, byte-identical envelope)', async () => {
+  // Omitting `history` ⇒ no trend ⇒ no nowcast at all, so there is nothing for D10 to read and the
+  // envelope is byte-identical to every pre-D10 caller.
+  const result = await runScopeInsight(INPUT, fakeQuery(NEXT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D10: the momentum payload embeds no tenant identity (renders identically on both surfaces)', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 11000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  const serialized = JSON.stringify(result.nowcast.momentum)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `momentum leaked tenant identity: ${needle}`)
+  }
+})

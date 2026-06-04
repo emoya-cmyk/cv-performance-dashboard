@@ -31,6 +31,7 @@ const { calibrateNowcastVoice } = require('./scopeNowcastVoice')
 const { corroborateNowcast } = require('./scopeNowcastCorroboration')
 const { assessNowcastCoherence } = require('./scopeNowcastCoherence')
 const { assessNowcastMateriality } = require('./scopeNowcastMateriality')
+const { assessNowcastMomentum } = require('./scopeNowcastMomentum')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -324,6 +325,36 @@ async function runScopeInsight(input, query, scope) {
       // break the response nor widen the blast radius.
       const materiality = assessNowcastMateriality(result.nowcast, opts)
       if (materiality && materiality.status === 'assessed') result.nowcast.materiality = materiality
+
+      // ADDITIVE (intel-v14 D10): D8 reads the basket's POLARITY, D9 reads its
+      // MAGNITUDE; D10 reads its CURVATURE. The nowcast number is a straight line drawn
+      // at each run's AVERAGE step pace — honest, but blind to whether that pace is still
+      // being delivered. assessNowcastMomentum re-reads each projection's own run
+      // (`values`, the finite gap-free read sequence scopeTrend already validated),
+      // measures the step magnitudes in drift-free integer cents, and compares an
+      // early-half pace to a late-half pace: a run whose steps keep GROWING (accelerating)
+      // means the straight line is a FLOOR — it understates where the next read lands; a
+      // run whose steps keep SHRINKING (decelerating) means it is a CEILING — it
+      // overstates. The decisive mover is the sharpest bend (where a linear projection is
+      // most at risk), and the note frames the accuracy implication honestly by polarity
+      // (an accelerating adverse move may be understated; a flattening gain may be
+      // overstated). Computed OUTSIDE the graded branch alongside D7+D8+D9, on purpose:
+      // curvature needs only ≥1 projection carrying a ≥3-read run (two steps to compare an
+      // early vs a late pace) — NOT a buffer long enough to grade — so a fresh streak gets
+      // the curvature temper too, riding the same ungraded buffer D9 does. With
+      // detectScopeTrends' default minRunSteps=2 every projection in a trending nowcast
+      // carries ≥3 reads, so this speaks whenever D3 projected. The `momentum` key appears
+      // ONLY when status 'assessed'; otherwise NO key is attached — byte-identical to a
+      // pre-D10 caller. It can only add an "accelerating"/"flattening"/"steady" qualifier
+      // beside the voice; it never mutates the headline, the voice, the coherence, the
+      // materiality, the corroboration, or any number, and never inflates confidence.
+      // assessNowcastMomentum is pure, deterministic, fail-safe (junk → status 'none',
+      // never throws) and leak-safe (it consumes the already-leak-safe projection runs and
+      // emits metric labels + direction words + shape words + derived pace ratios + small
+      // counts — no tenant identity), so it can neither break the response nor widen the
+      // blast radius.
+      const momentum = assessNowcastMomentum(result.nowcast, opts)
+      if (momentum && momentum.status === 'assessed') result.nowcast.momentum = momentum
 
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {
