@@ -29,6 +29,7 @@ const { gradeScopeNowcast } = require('./scopeNowcastAccuracy')
 const { calibrateNowcastBand } = require('./scopeNowcastBand')
 const { calibrateNowcastVoice } = require('./scopeNowcastVoice')
 const { corroborateNowcast } = require('./scopeNowcastCorroboration')
+const { assessNowcastCoherence } = require('./scopeNowcastCoherence')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -270,6 +271,34 @@ async function runScopeInsight(input, query, scope) {
       // wiring, exactly as the D4/D5/D6 composes below it.
       const corroboration = corroborateNowcast(result.nowcast, result.delta, opts)
       if (corroboration && corroboration.status === 'corroborated') result.nowcast.corroboration = corroboration
+
+      // ADDITIVE (intel-v14 D8): corroboration (D7) cross-checks the LEAD projection
+      // against an independent lens; this asks a different, orthogonal question — does
+      // the WHOLE projected basket tell ONE coherent story, or is the headline metric
+      // masking trouble underneath it? D1–D7 are every one lead-centric (they reason
+      // about the single most-salient projection), so none of them can see the classic
+      // vanity-metric trap: revenue projected up and triumphant while, in the same
+      // basket, cost per lead is projected up (worsening) and leads projected down. D8
+      // reads the FULL projections[] vector and classifies it by POLARITY (the
+      // `improving` flag the pace oracle already attached, so a rising cost reads as
+      // "worsening" not merely "up"): unified (all metrics improving — the headline is
+      // backed by the whole story), deteriorating (all worsening — the weakness is
+      // broad), or divergent (both present — name the tension so the headline is read
+      // with the cost it hides). Computed OUTSIDE the graded branch alongside D7, on
+      // purpose: coherence needs only ≥2 polarity-bearing projections, NOT a buffer long
+      // enough to grade, so a fresh multi-metric streak still gets the cross-metric
+      // check. The `coherence` key appears ONLY when status 'assessed' (≥2 metrics carry
+      // a clean improving boolean); a single-metric nowcast returns status 'none' and NO
+      // key is attached — byte-identical to a pre-D8 caller. It can only add a unified
+      // reassurance or a divergent/deteriorating caution beside the voice; it never
+      // mutates the headline, the voice, the corroboration, or any number, and never
+      // inflates confidence. assessNowcastCoherence is pure, deterministic, fail-safe
+      // (junk → status 'none', never throws) and leak-safe (it consumes the already-
+      // leak-safe projection set and emits metric labels + direction words + small
+      // counts — no tenant identity), so it can neither break the response nor widen the
+      // blast radius.
+      const coherence = assessNowcastCoherence(result.nowcast, opts)
+      if (coherence && coherence.status === 'assessed') result.nowcast.coherence = coherence
 
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {

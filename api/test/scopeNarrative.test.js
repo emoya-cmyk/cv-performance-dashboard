@@ -888,3 +888,110 @@ test('intel-v14 D7: the corroboration payload embeds no tenant identity (renders
     assert.ok(!serialized.includes(needle), `corroboration leaked tenant identity: ${needle}`)
   }
 })
+
+// ── intel-v14 D8: cross-metric story-check (nowcast.coherence) ───────────────────────────────────
+// D1–D7 are every one LEAD-CENTRIC — they reason about the single most-salient projection in
+// isolation, so none can see the vanity-metric trap: a headline metric projected UP while, in the
+// SAME basket, unit economics (cost per lead) are projected UP too — and a rising cost per lead is a
+// WORSENING move. D8 is the first lens that reads the FULL projections[] vector and classifies it by
+// POLARITY (the `improving` flag the pace oracle attaches), so it catches exactly that tension.
+
+test('intel-v14 D8: a divergent basket (revenue improving, cost per lead worsening) ⇒ nowcast.coherence "divergent"', async () => {
+  // revenue [8000,10000,→12400] trends UP (improving) while cpl [12,16,→20] trends UP too — but a
+  // RISING cost per lead is a WORSENING move (improving:false). No lead-centric lens (D1–D7) can see
+  // this tension; D8 reads the whole vector and names it. The 3-read buffer (2 history + the live
+  // read) is too short to GRADE, so coherence rides on the projection vector ALONE — the same
+  // independence-from-grading property that separates it from the D4–D6 self-backtest ladder.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'cpl', current: 12 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'cpl', current: 16 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // the nowcast projects but is UNGRADED on this short buffer — no accuracy / band / voice…
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.ok(result.nowcast.projections.every(p => !('band' in p)))
+  assert.strictEqual('voice' in result.nowcast, false)
+
+  // …yet the cross-metric coherence check IS present — it needs only ≥2 polarity-bearing projections.
+  const c = result.nowcast.coherence
+  assert.ok(c, 'coherence attaches on a projected-but-ungraded multi-metric nowcast')
+  assert.strictEqual(c.status, 'assessed')
+  assert.strictEqual(c.level, 'divergent')
+  assert.strictEqual(c.favorableCount, 1)
+  assert.strictEqual(c.unfavorableCount, 1)
+  assert.strictEqual(c.assessedCount, 2)
+  assert.strictEqual(c.leadFavorable.metric, 'revenue')
+  assert.strictEqual(c.leadUnfavorable.metric, 'cpl')
+  // the live cpl label flows from ask.js METRICS ('Cost per lead') → lowercased in the note.
+  assert.strictEqual(
+    c.note,
+    "Revenue is projected to improve, but cost per lead is projected to worsen — the gain isn't clean.")
+})
+
+test('intel-v14 D8: a unified basket (revenue and leads both improving) ⇒ nowcast.coherence "unified"', async () => {
+  // revenue [8000,10000,→12400] and leads [100,130,→150] both trend UP, and UP is the GOOD direction
+  // for each → every assessed metric is improving → the basket moves as one, the headline is backed.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'leads', current: 100 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'leads', current: 130 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const c = result.nowcast.coherence
+  assert.ok(c)
+  assert.strictEqual(c.status, 'assessed')
+  assert.strictEqual(c.level, 'unified')
+  assert.strictEqual(c.favorableCount, 2)
+  assert.strictEqual(c.unfavorableCount, 0)
+  assert.strictEqual(c.leadUnfavorable, null)
+  // salience orders the two improving metrics; the 2-metric phrasing tolerates either order.
+  assert.match(
+    c.note,
+    /^Both (revenue and leads|leads and revenue) are projected to improve — the basket is moving as one\.$/)
+})
+
+test('intel-v14 D8: a single-metric GRADED nowcast ⇒ NO coherence key (additive, byte-identical envelope)', async () => {
+  // A revenue-only history long enough to GRADE (3 history + the live read = a 4-read buffer) → the
+  // nowcast carries accuracy / band / voice, but there is only ONE polarity-bearing projection, so
+  // coherence has nothing to cohere WITH → status 'none' → no key. Crucially this holds even on a
+  // FULLY GRADED nowcast: a pre-D8 caller's envelope is byte-identical whether or not D8 ran.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // the nowcast IS graded (so the absence below is meaningful, not merely "too short to do anything")…
+  assert.strictEqual(result.nowcast.projections.length, 1)
+  assert.ok(result.nowcast.accuracy, 'a 4-read revenue buffer grades')
+  assert.ok(result.nowcast.voice, 'the D6 voice is present on the graded single-metric nowcast')
+  // …yet there is no second polarity-bearing metric, so D8 adds nothing.
+  assert.strictEqual('coherence' in result.nowcast, false)
+})
+
+test('intel-v14 D8: the coherence payload embeds no tenant identity (renders identically on both surfaces)', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'cpl', current: 12 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'cpl', current: 16 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  const serialized = JSON.stringify(result.nowcast.coherence)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `coherence leaked tenant identity: ${needle}`)
+  }
+})
