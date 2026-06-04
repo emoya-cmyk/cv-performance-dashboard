@@ -313,3 +313,70 @@ test('intel-v14 D1: a real cross-read move surfaces as a `delta` ("since you las
     assert.ok(!serialized.includes(needle), `delta leaked tenant identity: ${needle}`)
   }
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2c — intel-v14 D2: the optional cross-read `trend` block. Proves the
+// WIRING (runScopeInsight reads body.history, APPENDS this fresh narration as the
+// newest read, and attaches a trend computed over the stream); the run/streak
+// semantics themselves are owned by scopeTrend.test.js. Additive — absent / empty
+// `history`, the envelope is byte-identical to every pre-D2 caller.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D2: omitting `history` ⇒ NO trend key (additive, byte-identical envelope)', async () => {
+  const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('trend' in result, false)
+})
+
+test('intel-v14 D2: `history:[]` ⇒ NO trend key (an empty buffer is not a stream)', async () => {
+  const result = await runScopeInsight({ ...INPUT, history: [] }, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('trend' in result, false)
+})
+
+test('intel-v14 D2: one prior read ⇒ trend present but status "insufficient" (a run needs ≥3 reads)', async () => {
+  // history(1) + the appended fresh narration = 2 reads — below the default 3-read
+  // floor. The block still ATTACHES (presence keys on `history` being non-empty, not
+  // on a run existing), but there is no streak yet.
+  const result = await runScopeInsight(
+    { ...INPUT, history: [[{ metric: 'revenue', current: 9000 }]] },
+    fakeQuery(CURRENT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.ok(result.trend, 'trend attached when history is non-empty')
+  assert.strictEqual(result.trend.status, 'insufficient')
+  assert.deepStrictEqual(result.trend.trends, [])
+})
+
+test('intel-v14 D2: a multi-read streak surfaces as a `trend` ("climbed N straight updates")', async () => {
+  // Two PRIOR reads the FE buffered (oldest→newest), as the compact [{metric,current}]
+  // snapshots snapOf emits: revenue 8000 then 10000. The fresh read (NEXT_RAW) totals
+  // 12400 — appended server-side as the newest read ⇒ a 3-read revenue series climbing
+  // every step ⇒ a 2-step up-run from 8000 to the fresh narration's REAL 12400.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  assert.ok(result.trend, 'trend attached when history supplied')
+  assert.strictEqual(result.trend.status, 'trending')
+
+  const rev = result.trend.trends[0]
+  assert.strictEqual(rev.metric, 'revenue')
+  assert.strictEqual(rev.from, 8000)
+  assert.strictEqual(rev.to, 12400)              // the fresh narration is the run's endpoint
+  assert.strictEqual(rev.runSteps, 2)
+  assert.strictEqual(rev.direction, 'up')
+  assert.strictEqual(rev.improving, true)        // revenue up = good
+  assert.ok(result.trend.headline.startsWith('Revenue has climbed 2 straight updates'), result.trend.headline)
+
+  // the trend rides ALONGSIDE the normal narration, not instead of it.
+  assert.ok(result.findings.find(f => f.metric === 'revenue'), 'fresh narration still present beside the trend')
+
+  // leak-safe: the cross-read trend embeds no tenant identity — only the global channel axis.
+  const serialized = JSON.stringify(result.trend)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `trend leaked tenant identity: ${needle}`)
+  }
+})

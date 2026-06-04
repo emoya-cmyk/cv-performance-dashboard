@@ -153,12 +153,22 @@ export async function askExplain(spec, clientId) {
  * one. Purely ADDITIVE: omit `since` (the default) and the request + response are
  * byte-identical to before — no `since` key is sent, no `delta` key comes back. The
  * snapshot is leak-safe by construction (it is the panel's own already-scoped findings).
+ *
+ * intel-v14 D2: pass `history` — the ORDERED list (oldest→newest) of the PRIOR reads
+ * this session, each the same compact [{metric,current}] snapshot — to also get back a
+ * cross-read `result.trend` ("revenue has climbed 3 straight updates"). The server
+ * appends THIS fresh read as the newest entry, so a streak is a metric that moved the
+ * SAME way across several consecutive live updates — far stronger than any one delta.
+ * Purely ADDITIVE: omit `history` (or send []) and no `history` key is sent, no `trend`
+ * key comes back. Leak-safe by construction — every entry is the panel's own already
+ * scoped snapshot, and the trend payload carries metric labels + run shape only.
  */
-export async function askScopeInsight(body, clientId, since) {
+export async function askScopeInsight(body, clientId, since, history) {
   const token = getToken()
   const payload = { ...(body || {}) }
   if (clientId) payload.clientId = clientId
   if (since !== undefined) payload.since = since
+  if (Array.isArray(history) && history.length) payload.history = history
   const res = await fetch(`${BASE}/api/ai/ask/scope-insight`, {
     method:  'POST',
     headers: {

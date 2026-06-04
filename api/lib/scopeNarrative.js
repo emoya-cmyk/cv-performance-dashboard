@@ -23,6 +23,7 @@ const { runQuerySpec } = require('../semantic/compile')
 const { CHANNEL_LABELS, metricKeyDeps, channelId } = require('../semantic/registry')
 const { generateScopeInsight } = require('./scopeInsight')
 const { diffScopeInsights } = require('./scopeDelta')
+const { detectScopeTrends } = require('./scopeTrend')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -194,6 +195,23 @@ async function runScopeInsight(input, query, scope) {
   // degrades to status 'baseline'), so this never throws on a malformed body.
   if (opts.since !== undefined) {
     result.delta = diffScopeInsights(opts.since, narration)
+  }
+
+  // ADDITIVE (intel-v14 D2): when the caller sends a non-empty `history` — the
+  // PRIOR reads it has buffered this session (oldest→newest, each a compact
+  // [{metric,current}] snapshot, the same shape `since` uses) — we append THIS
+  // fresh narration as the newest read and look for a metric on a multi-read
+  // streak ("revenue has climbed 3 straight updates", "CPL has risen 3 straight
+  // updates — worth a look"). A single hop is a blip; a streak is the signal.
+  // Purely additive: omit `history` (or send an empty array) ⇒ no `trend` key ⇒
+  // byte-identical to every pre-D2 caller. detectScopeTrends is fail-safe (junk /
+  // too-short history degrades to status 'insufficient'/'flat', never throws) and
+  // leak-safe (emits metric labels + run shape only — no tenant identity; the
+  // history entries are the panel's own already-tenant-scoped snapshots and the
+  // fresh `narration` is tenancy-pinned upstream, so a client can at most shape
+  // its OWN trend strip, never see another tenant's reads).
+  if (Array.isArray(opts.history) && opts.history.length) {
+    result.trend = detectScopeTrends([...opts.history, narration], opts)
   }
 
   return result
