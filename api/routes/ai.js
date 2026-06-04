@@ -73,8 +73,20 @@ const { narrateEmphasisControlTuning } = require('../lib/briefEmphasisControlTun
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 const { runScopeInsight, runScopeFreshness } = require('../lib/scopeNarrative')
 const { scopeClientParam } = require('../middleware/authz')
+const { createAiBudget } = require('../middleware/aiBudget')
 
 const router = express.Router()
+
+// Per-caller AI cost cap. recap / brief / portfolio-brief / ask each can mint a
+// real Anthropic call; this one shared bucket (keyed by the authenticated user)
+// bounds how many a single caller can trigger per window — default 60/hour,
+// tunable via AI_RATE_MAX. Mounted FIRST on each LLM-minting route so a runaway
+// poller is shed before the authz check + clientExists DB query. The pure-DB AI
+// routes (ask/explain, suggestions, scope-insight, brief-health, lead-policy*,
+// brief-emphasis*, brief-impact/engagement, …) are deliberately NOT wrapped:
+// they cost a query, not a token. Inert under `node --test` unless a test opts
+// in with FORCE_RATE_LIMIT=1 (see middleware/rateLimit defaultSkip).
+const aiBudget = createAiBudget()
 
 // Normalise a caller-supplied week to its Monday. Returns:
 //   { week: 'YYYY-MM-DD' }  when a valid date was given,
@@ -175,7 +187,7 @@ function resolveConsumerScope(req) {
 
 // ── GET /api/ai/recap/:clientId ───────────────────────────────────────────────
 // Stored recap, generated-on-miss. Idempotent and cheap on repeat hits.
-router.get('/recap/:clientId', scopeClientParam('clientId'), async (req, res) => {
+router.get('/recap/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { week, error } = resolveWeek(req.query.week)
   if (error) return res.status(400).json({ error })
@@ -194,7 +206,7 @@ router.get('/recap/:clientId', scopeClientParam('clientId'), async (req, res) =>
 
 // ── POST /api/ai/recap/:clientId ──────────────────────────────────────────────
 // Force regenerate + overwrite. Accepts ?week=… or { week } in the body.
-router.post('/recap/:clientId', scopeClientParam('clientId'), async (req, res) => {
+router.post('/recap/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { week, error } = resolveWeek(req.query.week ?? req.body?.week)
   if (error) return res.status(400).json({ error })
@@ -216,7 +228,7 @@ router.post('/recap/:clientId', scopeClientParam('clientId'), async (req, res) =
 // (getOrGenerateClientBrief → the LLM is called at most once per client-day).
 // Idempotent and cheap on repeat hits. ?as_of=YYYY-MM-DD selects the day; absent
 // → today (UTC). This is what the in-app client brief card hits.
-router.get('/brief/:clientId', scopeClientParam('clientId'), async (req, res) => {
+router.get('/brief/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { asOf, error } = resolveAsOf(req.query.as_of)
   if (error) return res.status(400).json({ error })
@@ -236,7 +248,7 @@ router.get('/brief/:clientId', scopeClientParam('clientId'), async (req, res) =>
 // ── POST /api/ai/brief/:clientId ──────────────────────────────────────────────
 // Force a fresh client brief and overwrite the stored row — the "Regenerate"
 // button. Always re-narrates + re-verifies. Accepts ?as_of=… or { as_of } in body.
-router.post('/brief/:clientId', scopeClientParam('clientId'), async (req, res) => {
+router.post('/brief/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
   if (error) return res.status(400).json({ error })
@@ -257,7 +269,7 @@ router.post('/brief/:clientId', scopeClientParam('clientId'), async (req, res) =
 // The agency portfolio morning brief, generated-on-miss. AGENCY-ONLY: the prose
 // names other clients, so a client-scoped token is refused (resolvePortfolioScope).
 // ?as_of=YYYY-MM-DD selects the day; absent → today (UTC).
-router.get('/brief', async (req, res) => {
+router.get('/brief', aiBudget, async (req, res) => {
   const scope = resolvePortfolioScope(req)
   if (scope.error) return res.status(scope.status).json({ error: scope.error })
   const { asOf, error } = resolveAsOf(req.query.as_of)
@@ -275,7 +287,7 @@ router.get('/brief', async (req, res) => {
 // ── POST /api/ai/brief ────────────────────────────────────────────────────────
 // Force-regenerate the agency portfolio brief and overwrite the stored row.
 // AGENCY-ONLY. Accepts ?as_of=… or { as_of } in the body.
-router.post('/brief', async (req, res) => {
+router.post('/brief', aiBudget, async (req, res) => {
   const scope = resolvePortfolioScope(req)
   if (scope.error) return res.status(scope.status).json({ error: scope.error })
   const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
@@ -761,7 +773,7 @@ router.get('/brief-emphasis-control-tuning', async (req, res) => {
 //   PARSE_TRANSPORT→ 502  (the language model was unreachable)
 const ASK_STATUS = { NO_AI: 503, EMPTY: 400, UNPARSEABLE: 422, PARSE_TRANSPORT: 502 }
 
-router.post('/ask', async (req, res) => {
+router.post('/ask', aiBudget, async (req, res) => {
   const question = req.body?.question
   if (typeof question !== 'string' || !question.trim()) {
     return res.status(400).json({ error: 'question is required' })
