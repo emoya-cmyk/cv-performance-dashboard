@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -33,6 +33,13 @@ import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
  * no `since` — there's nothing comparable to diff — so the strip is strictly session-relative,
  * never period-over-period. Same payload, same surface on agency and client (tone is cosmetic).
  *
+ * intel-v14 D2 — "cross-read trend": D1 narrates a single hop; this panel also buffers the last
+ * few same-scope reads (historyRef) and hands them back as `history`. The server appends the
+ * fresh read and, when a metric has moved the SAME direction across ≥3 consecutive reads,
+ * returns a leak-safe `trend` we render as a violet streak strip above the delta — "revenue has
+ * climbed 3 straight updates", "CPL has risen 3 straight updates — worth a look", with a tiny
+ * sparkline of the run. The buffer clears on any scope change, so a streak never straddles scopes.
+ *
  * Props:
  *   input       — { metrics?, dateRange:{start,end}, filters?, compareTo? } live scope.
  *   clientId    — optional; honoured ONLY for an agency token (see above).
@@ -51,6 +58,11 @@ const snapOf = (d) =>
   (d && Array.isArray(d.findings) ? d.findings : [])
     .map((f) => ({ metric: f && f.metric, current: f && f.evidence ? f.evidence.current : null }))
     .filter((s) => s.metric && Number.isFinite(Number(s.current)))
+
+// intel-v14 D2 — how many PRIOR reads we keep in the rolling trend buffer. Matches the
+// server's detectScopeTrends maxReads default; the server also clamps, so this is just a
+// memory bound on a long session, never a correctness lever.
+const MAX_HISTORY = 12
 
 function deltaChip(improved) {
   if (improved === true)  return 'text-emerald-700 bg-emerald-50 border-emerald-200'
@@ -183,6 +195,85 @@ function DeltaStrip({ delta }) {
   )
 }
 
+// intel-v14 D2 — a tiny leak-safe sparkline of one metric's own run values (bare numbers,
+// no tenant identity). Inherits the surrounding chip's text color via currentColor, so it
+// reads emerald on an improving streak and rose on an adverse one without extra wiring.
+function Sparkline({ values }) {
+  const nums = Array.isArray(values) ? values.map(Number).filter(Number.isFinite) : []
+  if (nums.length < 2) return null
+  const w = 38, h = 12, pad = 1.5
+  const min = Math.min(...nums)
+  const max = Math.max(...nums)
+  const span = max - min || 1
+  const stepX = (w - pad * 2) / (nums.length - 1)
+  const pts = nums
+    .map((v, i) => `${trim1(pad + i * stepX)},${trim1(pad + (h - pad * 2) * (1 - (v - min) / span))}`)
+    .join(' ')
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="opacity-80" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+// intel-v14 D2 — the cross-read MICRO-TREND strip. D1's DeltaStrip narrates ONE hop; this
+// surfaces the stronger signal: a metric on a same-direction streak across several consecutive
+// live reads ("Revenue has climbed 3 straight updates", "CPL has risen 3 straight updates —
+// worth a look"). Every field is from the server's already-leak-safe `trend` (metric labels +
+// bare run values + the global channel axis only; no tenant identity), so it renders identically
+// on the agency and client surfaces. Shown only on a real streak (status 'trending'); a single
+// hop or a reversal leaves it absent. Placed above the delta because a streak outranks a hop.
+function TrendStrip({ trend, tone }) {
+  const trends = Array.isArray(trend.trends) ? trend.trends : []
+  if (!trends.length) return null
+  const accelerating = trends.some((t) => t && t.accelerating)
+
+  return (
+    <div className="mt-3 rounded-xl border border-violet-200/70 border-l-4 border-l-violet-500 bg-violet-50/50 px-3.5 py-2.5">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 shrink-0 text-violet-500"><TrendingUp size={15} strokeWidth={2.25} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-600">
+              {tone === 'client' ? 'Recent trend' : 'Cross-read trend'}
+            </span>
+            {accelerating && (
+              <span className="rounded border border-violet-200 bg-white px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-500">
+                accelerating
+              </span>
+            )}
+          </div>
+          {trend.headline && (
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">{trend.headline}</p>
+          )}
+
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {trends.map((t) => {
+              const Dir = directionIcon(t.direction)
+              const pc  = t.pct
+              const pctTxt = pc != null && Number.isFinite(Number(pc))
+                ? `${Number(pc) > 0 ? '+' : ''}${trim1(pc)}%`
+                : null
+              return (
+                <span
+                  key={t.metric}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${deltaChip(t.improving)}`}
+                >
+                  <Dir size={11} strokeWidth={2.5} />
+                  <span className="font-medium">{t.metric_label}</span>
+                  <Sparkline values={t.values} />
+                  <span className="text-[10px] font-normal opacity-60">{t.runReads}×</span>
+                  {pctTxt && <span>{pctTxt}</span>}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ScopeNarrative({
   input,
   clientId = null,
@@ -198,6 +289,13 @@ export default function ScopeNarrative({
   // looking at. Cleared on any scope change so a delta never straddles two scopes.
   const lastKeyRef  = useRef(null)
   const snapshotRef = useRef(null)
+  // intel-v14 D2 — the rolling buffer of PRIOR same-scope reads (oldest→newest), each a
+  // compact snapOf() snapshot. snapshotRef is the single newest read (D1's one-hop baseline);
+  // historyRef is the stream the server walks for a multi-read streak. We send PRIOR reads
+  // only — the server appends the just-computed read as the newest before detecting — so a
+  // read is never double-counted. Cleared on any scope change so a trend never straddles
+  // scopes; capped at MAX_HISTORY (the server also clamps) as a long-session memory bound.
+  const historyRef  = useRef([])
   const [state, setState] = useState({ status: 'idle', data: null, error: null })
 
   const dr        = input && input.dateRange
@@ -237,18 +335,26 @@ export default function ScopeNarrative({
     // Clearing the baseline on any scope change makes a cross-scope delta impossible
     // (fail-safe: no baseline ⇒ the server omits `delta` entirely).
     const sameScope = lastKeyRef.current === inputKey
-    if (!sameScope) snapshotRef.current = null
+    if (!sameScope) { snapshotRef.current = null; historyRef.current = [] }
     const since = sameScope && snapshotRef.current && snapshotRef.current.length
       ? snapshotRef.current
       : undefined
+    // intel-v14 D2 — hand back the PRIOR same-scope reads as the trend stream (the server
+    // appends the fresh read itself). Empty on a new scope ⇒ omitted ⇒ server attaches no trend.
+    const history = sameScope && historyRef.current.length ? historyRef.current : undefined
     lastKeyRef.current = inputKey
     setState((s) => ({ status: 'loading', data: s.data, error: null }))   // keep prior cards visible while refreshing
     const ms = Number.isFinite(debounceMs) ? debounceMs : 400
     const t = setTimeout(async () => {
       try {
-        const data = await api.askScopeInsight(input, clientId, since)
+        const data = await api.askScopeInsight(input, clientId, since, history)
         if (myId !== seqRef.current) return                                // a newer scope superseded this one
-        snapshotRef.current = snapOf(data)                                 // this read becomes the next baseline
+        const snap = snapOf(data)
+        snapshotRef.current = snap                                         // this read becomes the next D1 baseline
+        // intel-v14 D2 — append every read (even an empty snap) so the buffer mirrors the
+        // true consecutive-read cadence; a gap correctly severs a streak server-side. Keep
+        // only the last MAX_HISTORY prior reads as a memory bound (the server clamps too).
+        historyRef.current = [...historyRef.current, snap].slice(-MAX_HISTORY)
         setState({ status: 'ready', data, error: null })
       } catch (err) {
         if (myId !== seqRef.current) return
@@ -343,6 +449,7 @@ export default function ScopeNarrative({
             <p className="mt-3 text-[13px] leading-relaxed text-slate-600">{data.headline}</p>
           )}
 
+          {data.trend && data.trend.status === 'trending' && <TrendStrip trend={data.trend} tone={tone} />}
           {data.delta && data.delta.status === 'changed' && <DeltaStrip delta={data.delta} />}
 
           {findings.length > 0 && (
