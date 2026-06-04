@@ -10,8 +10,9 @@
 const cron           = require('node-cron')
 const { query }      = require('./db')
 const { runSync }    = require('./routes/sync')
-const { sendDigest, sendBriefDeliveryAlert } = require('./lib/emailDigest')
-const { getOrGenerateRecap } = require('./lib/recap')
+const { sendDigest, sendBriefDeliveryAlert, sendImpactWinsAlert } = require('./lib/emailDigest')
+const { getOrGenerateRecap, getRecap } = require('./lib/recap')
+const { detectImpactMilestone } = require('./lib/impactPush')
 const { runInsightsForAll }  = require('./lib/insights')
 const { listRecentBriefs }      = require('./lib/brief')
 const { summarizeBriefQuality } = require('./lib/briefQuality')
@@ -113,9 +114,10 @@ function startScheduler() {
           // per client-week. Never blocks the send: on any failure we fall back to
           // the manual client_updates note inside buildHtml.
           let recapText = null
+          let recapObj  = null
           try {
-            const recap = await getOrGenerateRecap(client.id)
-            recapText = recap?.recap_text || null
+            recapObj  = await getOrGenerateRecap(client.id)
+            recapText = recapObj?.recap_text || null
           } catch (err) {
             console.error(`[digest] recap failed for ${client.name}: ${err.message}`)
           }
@@ -130,6 +132,35 @@ function startScheduler() {
           })
           console.log(`[digest] ✓ ${client.name} → ${client.digest_email}`)
           sent++
+
+          // ── Client wins milestone (intel-v12 B4) ─────────────────────────────
+          // Event-driven, autonomous, leak-proof. The week a client's intelligence
+          // track record first crosses into PROVEN (detectImpactMilestone fires a
+          // false→true crossing), send ONE celebratory client note carrying only the
+          // figure-free {note}. Reads the impact snapshot off the recap we just built
+          // and compares it to the prior week's STORED recap (getRecap never generates,
+          // so an absent prior is treated as not-proven → a first-ever proven week is
+          // itself the milestone). In its OWN try so it never disturbs the digest
+          // accounting above — a missed celebration costs nothing, a broken digest does.
+          try {
+            const currImpact = recapObj?.evidence_pack?.intelligence?.impact || null
+            const currWeek   = recapObj?.week_start || null
+            if (currImpact && currWeek) {
+              const d = new Date(`${currWeek}T00:00:00Z`)
+              d.setUTCDate(d.getUTCDate() - 7)
+              const priorWeek  = d.toISOString().slice(0, 10)
+              const prevRecap  = await getRecap(client.id, priorWeek)
+              const prevImpact = prevRecap?.evidence_pack?.intelligence?.impact || null
+              const push = detectImpactMilestone(prevImpact, currImpact)
+              if (push.reached && push.note) {
+                const r = await sendImpactWinsAlert({ client, push })
+                console.log(`[wins] ${client.name} crossed to proven` +
+                  (r.sent ? ` → ${r.to}` : ` (${r.reason})`))
+              }
+            }
+          } catch (err) {
+            console.error(`[wins] ${client.name}: ${err.message}`)
+          }
         } catch (err) {
           console.error(`[digest] ✗ ${client.name}: ${err.message}`)
           errors++

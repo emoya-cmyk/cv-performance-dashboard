@@ -625,6 +625,15 @@ function WeeklyRecap({ recap }) {
   if (!text) return null
   const period  = recap?.evidence_pack?.period?.label || recap?.week_start || ''
   const posture = recapPosture(recap.evidence_pack)
+  // Client-safe "your wins" line — the influence ledger's proven, figure-free note
+  // (intel-v12 B4). evidence.intelligenceDigest already strips impact to {proven, note}
+  // (narrateImpactLedger's 'client' branch), so we surface the note ONLY once the track
+  // record is genuinely PROVEN — a building record stays silent. No dollars, counts,
+  // peer names or machinery can reach here; only the one vague, earned sentence. This is
+  // the in-app twin of the milestone email (lib/impactPush + sendImpactWinsAlert): the
+  // email fires once on the crossing, this reassures every week the record stays proven.
+  const impact    = recap?.evidence_pack?.intelligence?.impact
+  const impactWin = impact?.proven && typeof impact.note === 'string' ? impact.note.trim() : ''
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.065s' }}>
       <div className="flex items-center justify-between mb-1">
@@ -639,6 +648,12 @@ function WeeklyRecap({ recap }) {
         </div>
       )}
       <p className="text-sm text-slate-600 leading-relaxed font-medium whitespace-pre-line">{text}</p>
+      {impactWin && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-px" />
+          <p className="text-[11px] font-semibold text-emerald-800 leading-relaxed">{impactWin}</p>
+        </div>
+      )}
       {posture && <RecapPostureCoda p={posture} />}
       <p className="text-[10px] text-slate-400 mt-4 pt-3 border-t border-slate-50 leading-relaxed">
         The same recap that opens your Monday email — written by your account&rsquo;s AI analyst from your

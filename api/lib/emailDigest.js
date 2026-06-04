@@ -316,4 +316,95 @@ async function sendBriefDeliveryAlert({ signal, narrative, asOf } = {}) {
   return { sent: true, to, severity: signal.severity, data }
 }
 
-module.exports = { sendDigest, buildHtml, sendBriefDeliveryAlert, buildBriefAlertHtml }
+// ── Client-facing wins milestone push (intel-v12 B4) ──────────────────────────
+// The CLIENT twin of sendBriefDeliveryAlert: an autonomous, event-driven note that
+// fires at most ONCE — the week a client's intelligence track record first crosses
+// into PROVEN (detectImpactMilestone, false→true). Where the brief alert is agency-
+// internal and names model fallbacks, this is client-facing, so it is leak-proof by
+// construction: the ONLY dynamic copy is push.note — the deliberately vague, figure-
+// free client line from narrateImpactLedger(…,{audience:'client'}), already double-
+// stripped by lib/impactPush — plus the client's OWN name. No dollars, no counts, no
+// peer, no machinery. A celebratory emerald card, not an alarm.
+function buildImpactWinsHtml({ client, note, unsubToken }) {
+  const accent   = '#059669'                       // emerald-600 — matches the in-app wins box
+  const dashUrl  = `${BASE_URL}/my-dashboard`
+  const unsubUrl = `${BASE_URL}/api/unsubscribe/${unsubToken}`
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A milestone worth celebrating</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+        <tr><td style="background:#fff;border-radius:16px;padding:26px;border:1px solid #e2e8f0;border-top:4px solid ${accent};">
+          <p style="margin:0 0 4px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.14em;color:${accent};">
+            Proven results · a milestone
+          </p>
+          <h1 style="margin:0 0 14px;font-size:22px;font-weight:900;color:#0f172a;line-height:1.2;">
+            ${esc(client.name)} — your results are holding up
+          </h1>
+          <p style="margin:0 0 18px;font-size:15px;color:#334155;line-height:1.6;">${esc(note)}</p>
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;"><tr><td align="center">
+            <a href="${dashUrl}"
+               style="display:inline-block;background:${accent};color:#fff;font-size:14px;font-weight:800;
+                      text-decoration:none;padding:13px 30px;border-radius:12px;letter-spacing:.02em;">
+              See your dashboard →
+            </a>
+          </td></tr></table>
+          <p style="margin:20px 0 0;font-size:11px;color:#94a3b8;text-align:center;line-height:1.6;border-top:1px solid #f1f5f9;padding-top:14px;">
+            Powered by 10X Marketing Dashboard
+          </p>
+        </td></tr>
+        <!-- Footer -->
+        <tr><td style="padding:20px 0;text-align:center;">
+          <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.6;">
+            You're receiving this because your agency set up this dashboard.<br>
+            <a href="${unsubUrl}" style="color:#94a3b8;">Unsubscribe</a>
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`
+}
+
+// Fire-and-forget, leak-proof, autonomous. Returns a {sent}/{skipped,reason} verdict
+// and NEVER throws on a config gap (so the scheduler's per-client loop is never put at
+// risk by a milestone), throwing only if a genuinely-configured Resend send fails. Gates
+// — in order — on the event (push.reached), a clean note (push.note), a recipient
+// (client.digest_email, a CLIENT inbox, never BRIEF_ALERT_TO), and the Resend key; a gap
+// in any downgrades to a loud server-log line so a crossed milestone is never silently lost.
+async function sendImpactWinsAlert({ client, push } = {}) {
+  // Caller already gates on push.reached; this double-guard keeps the function safe to
+  // call unconditionally and idempotent across a re-run (a non-crossing week never fires).
+  if (!push || !push.reached) return { skipped: true, reason: 'no-milestone' }
+  const note = (push.note && String(push.note).trim()) || ''
+  if (!note) return { skipped: true, reason: 'no-note' }   // proven but no clean line → say nothing
+
+  if (!client || !client.digest_email) {
+    console.warn(`[wins] ${client?.name || 'client'} crossed to proven but no digest_email — ${note}`)
+    return { skipped: true, reason: 'no-recipient' }
+  }
+  if (!resend) {
+    console.warn(`[wins] ${client.name} crossed to proven but RESEND_API_KEY unset — ${note}`)
+    return { skipped: true, reason: 'no-resend' }
+  }
+
+  const { data, error } = await resend.emails.send({
+    from:    FROM,
+    to:      client.digest_email,
+    subject: `${client.name} — a milestone worth celebrating`,
+    html:    buildImpactWinsHtml({ client, note, unsubToken: client.unsubscribe_token || 'none' }),
+  })
+
+  if (error) throw new Error(error.message || JSON.stringify(error))
+  return { sent: true, to: client.digest_email, data }
+}
+
+module.exports = { sendDigest, buildHtml, sendBriefDeliveryAlert, buildBriefAlertHtml, sendImpactWinsAlert, buildImpactWinsHtml }
