@@ -208,6 +208,20 @@ export async function scopeFreshness(body, clientId) {
   return data
 }
 
+// ── FE twin of the backend version comparator (api/lib/scopeFreshness.js) ──
+// The FE treats `version` as an OPAQUE token: it never parses it, only asks "did it
+// move for THIS scope?". A token is any 'sfN:' string the endpoint emits (including
+// 'sf1:empty'); undefined / a soft-degraded {} is treated as no-token. Attached to the
+// same function object so callers reach it as api.scopeFreshness.shouldRefresh.
+scopeFreshness.isValidToken = (t) => typeof t === 'string' && /^sf\d+:/.test(t)
+// shouldRefresh(prev, next) → true ONLY when both are real tokens AND they differ:
+//   next not a token             → false (nothing to compare against)
+//   prev not a token (1st probe)  → false (adopt the baseline silently)
+//   prev === next                → false (steady; includes EMPTY≡EMPTY)
+//   both valid & differ           → true  (this scope's data moved → re-narrate)
+scopeFreshness.shouldRefresh = (prev, next) =>
+  scopeFreshness.isValidToken(next) && scopeFreshness.isValidToken(prev) && prev !== next
+
 export const api = {
   clients:       ()               => get('/api/clients'),
   createClient:  (body)           => post('/api/clients', body),

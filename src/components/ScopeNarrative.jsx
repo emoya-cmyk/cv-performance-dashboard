@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Sparkles, RefreshCw, AlertCircle, Route } from 'lucide-react'
 import { api } from '@/lib/api'
+import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
 
 /**
@@ -116,6 +117,21 @@ export default function ScopeNarrative({
     [input, clientId],
   )
 
+  // intel-v13 C4 — live auto-refresh, the PUSH twin of C3's PULL. The effect below
+  // already re-narrates when the user changes a filter/date. C4 adds: when new data
+  // LANDS for the scope we're already sitting on, re-narrate on its own. The live SSE
+  // `tick` is a GLOBAL broadcast with no tenant id (a tick = SOME tenant pushed), so we
+  // never trust it alone. On each tick we run the CHEAP per-scope freshness probe and
+  // compare its opaque version token against the last one seen FOR THIS EXACT SCOPE;
+  // only a real move bumps `refreshNonce`, a dependency of the C3 effect, firing its
+  // established debounced + race-guarded re-fetch. Another tenant's tick costs one cheap
+  // probe and changes nothing. Leak-safe: the token carries no tenant identity and is
+  // only ever compared within one fixed scope.
+  const { tick } = useLiveStream({ enabled: active })
+  const verRef   = useRef(null)   // last version token seen for the scope in scopeRef
+  const scopeRef = useRef(null)   // the inputKey that verRef's baseline belongs to
+  const [refreshNonce, setRefreshNonce] = useState(0)
+
   useEffect(() => {
     if (!active) {
       setState((s) => (s.status === 'idle' && !s.data ? s : { status: 'idle', data: null, error: null }))
@@ -136,7 +152,35 @@ export default function ScopeNarrative({
     }, ms)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputKey, active, debounceMs])
+  }, [inputKey, active, debounceMs, refreshNonce])   // refreshNonce: C4 live-push re-narration
+
+  // intel-v13 C4 — the per-scope freshness probe that gates the push refresh above.
+  // Fires on every live tick (debounced): probe → compare to the scope's last token →
+  // bump refreshNonce only on a genuine move. Resets the baseline whenever the scope
+  // changes, so a new scope's first probe adopts its baseline silently (prev=null).
+  useEffect(() => {
+    if (scopeRef.current !== inputKey) {   // scope changed → drop the stale baseline
+      scopeRef.current = inputKey
+      verRef.current = null
+    }
+    if (!active || !tick) return undefined  // no probe until a real event has arrived
+    let cancelled = false
+    const ms = Number.isFinite(debounceMs) ? debounceMs : 400
+    const timer = setTimeout(async () => {
+      try {
+        const res  = await api.scopeFreshness(input, clientId)
+        if (cancelled || scopeRef.current !== inputKey) return   // superseded by a scope change
+        const ver  = res && res.version
+        const prev = verRef.current
+        verRef.current = ver                                     // always adopt the latest as baseline
+        if (api.scopeFreshness.shouldRefresh(prev, ver)) setRefreshNonce((n) => n + 1)
+      } catch {
+        /* a freshness probe failure is non-fatal — skip this tick, keep the baseline */
+      }
+    }, ms)
+    return () => { cancelled = true; clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick, inputKey, active, debounceMs])
 
   if (!active) return null
 
