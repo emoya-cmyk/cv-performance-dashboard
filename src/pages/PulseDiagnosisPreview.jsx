@@ -3577,6 +3577,136 @@ function ReallocationEfficacyPanelPreview({ data }) {
   )
 }
 
+/* ── Calibration stability (Layer 26 watchdog, agency-only) — preview twin ───
+   Mirrors ReallocationEfficacyHealthPanel on Intelligence.jsx. The meta-monitor ABOVE the tuner:
+   watches the confidence factor as a time series for HUNTING (thrashing → self-healed to ×1.00)
+   and PINNED (stuck at a rail → advisory). The fixture below is the vivid case — a hunting tuner
+   the watchdog has benched: it proposed ×1.18, the watchdog holds the next bet at neutral ×1.00. */
+const REALLOC_HEALTH_META_PV = {
+  unstable:    { label: 'Hunting',           chip: 'bg-rose-50 text-rose-700 border-rose-200',         text: 'text-rose-600',    dot: 'bg-rose-500',    ring: 'bg-rose-50/40',    Icon: AlertOctagon },
+  constrained: { label: 'Pinned at a limit', chip: 'bg-amber-50 text-amber-700 border-amber-200',      text: 'text-amber-600',   dot: 'bg-amber-500',   ring: 'bg-amber-50/40',   Icon: ShieldAlert },
+  starved:     { label: 'Awaiting evidence', chip: 'bg-slate-100 text-slate-600 border-slate-200',     text: 'text-slate-500',   dot: 'bg-slate-400',   ring: 'bg-slate-50/60',   Icon: Clock },
+  stable:      { label: 'Settled',           chip: 'bg-emerald-50 text-emerald-700 border-emerald-200', text: 'text-emerald-600', dot: 'bg-emerald-500', ring: 'bg-emerald-50/40', Icon: ShieldCheck },
+  settling:    { label: 'Settling',          chip: 'bg-indigo-50 text-indigo-700 border-indigo-200',   text: 'text-indigo-600',  dot: 'bg-indigo-500',  ring: 'bg-indigo-50/40',  Icon: Activity },
+}
+const reallocHealthMetaPv = (s) => REALLOC_HEALTH_META_PV[s] || { label: 'Quiet', chip: 'bg-slate-100 text-slate-500 border-slate-200', text: 'text-slate-400', dot: 'bg-slate-300', ring: 'bg-slate-50/60', Icon: Activity }
+const REALLOC_HEALTH_ACTION_PV = {
+  distrust:       'Tuning benched — a neutral ×1.00 is applied until the swing settles.',
+  review_bounds:  'The tuner is pinned against its limit — the clamp may be worth revisiting.',
+  await_evidence: 'Too few resolved budget bets to tune on yet — holding neutral.',
+  trust:          'The tuning has settled into a steady setting.',
+  hold:           'Still moving — letting the tuning settle before trusting it.',
+  none:           '',
+}
+const reallocHealthBarHPv = (factor, bounds) => {
+  const lo = Number(bounds?.min), hi = Number(bounds?.max), f = Number(factor)
+  if (![lo, hi, f].every(Number.isFinite) || hi <= lo) return 50
+  return Math.max(8, Math.min(100, Math.round(((f - lo) / (hi - lo)) * 100)))
+}
+const reallocHealthDirColorPv = (dir) => (dir === 'embolden' ? 'bg-emerald-400' : dir === 'damp' ? 'bg-amber-400' : 'bg-slate-300')
+
+// A hunting tuner mid-self-heal: the factor has flipped direction every week for six weeks without
+// settling, so the watchdog distrusts it and benches it (raw ×1.18 proposed → applied ×1.00).
+const REALLOC_EFFICACY_HEALTH = {
+  status: 'unstable', recommended_action: 'distrust', verdict_reason: 'calibration_hunting',
+  as_of: '2026-06-01', window_used: 6, history_len: 8, decision_weeks: 22,
+  bounds: { min: 0.5, max: 1.5, neutral: 1.0 },
+  stability_score: 0.27, raw_factor: 1.18, applied_factor: 1.00, distrust: true,
+  narration: 'The reallocation confidence tuner has swung direction five times in six runs without ever settling — textbook hunting. It has been benched to a neutral ×1.00 so a thrashing knob can never move real budget; it will re-engage on its own once the swing calms.',
+  calibration: {
+    flips: 5, high_run: 0, low_run: 0, settled_run: 0, engaged: true, mean_credibility: 0.54,
+    last_factor: 1.18, last_direction: 'embolden',
+    series: [
+      { as_of: '2026-04-27', factor: 0.80, dir: 'damp',     credibility: 0.50 },
+      { as_of: '2026-05-04', factor: 1.22, dir: 'embolden', credibility: 0.52 },
+      { as_of: '2026-05-11', factor: 0.76, dir: 'damp',     credibility: 0.55 },
+      { as_of: '2026-05-18', factor: 1.19, dir: 'embolden', credibility: 0.54 },
+      { as_of: '2026-05-25', factor: 0.81, dir: 'damp',     credibility: 0.57 },
+      { as_of: '2026-06-01', factor: 1.18, dir: 'embolden', credibility: 0.58 },
+    ],
+  },
+}
+
+function ReallocationEfficacyHealthPanelPreview({ data }) {
+  if (!data || typeof data !== 'object') return null
+  const status = String(data.status || '')
+  if (!status || status === 'abstained') return null
+  const cal     = data.calibration || {}
+  const meta    = reallocHealthMetaPv(status)
+  const Icon    = meta.Icon
+  const applied = Number.isFinite(Number(data.applied_factor)) ? Number(data.applied_factor) : Number(cal.last_factor)
+  const raw     = Number.isFinite(Number(data.raw_factor)) ? Number(data.raw_factor) : null
+  const benched = !!data.distrust
+  const appliedTxt = fmtCalFactorPv(applied) || '×1.00'
+  const rawTxt     = fmtCalFactorPv(raw)
+  const stab    = Number(data.stability_score)
+  const stabPct = Number.isFinite(stab) ? Math.round(stab * 100) : null
+  const credPct = fmtReallocPctPv(cal.mean_credibility)
+  const action  = REALLOC_HEALTH_ACTION_PV[String(data.recommended_action || '')] || ''
+  const narration = typeof data.narration === 'string' && data.narration.trim() ? data.narration.trim() : ''
+  const series  = Array.isArray(cal.series) ? cal.series : []
+  const flips   = Number(cal.flips) || 0
+  const highRun = Number(cal.high_run) || 0
+  const lowRun  = Number(cal.low_run) || 0
+  const settled = Number(cal.settled_run) || 0
+  const railRun = Math.max(highRun, lowRun)
+  const window  = Number(data.window_used) || series.length || 0
+  const decided = Array.isArray(data.decision_weeks) ? data.decision_weeks.length : (Number(data.decision_weeks) || 0)
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-slate-50 flex items-center justify-center shrink-0"><Activity className="w-4 h-4 text-slate-500" /></span>
+        <h2 className="text-sm font-black text-slate-900">Calibration stability</h2>
+        <span className="text-[11px] font-semibold text-slate-400">watchdog over the reallocation tuner{window ? ` · last ${window} run${window === 1 ? '' : 's'}` : ''}</span>
+        <span className={`ml-auto inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 border ${meta.chip}`}><Icon className="w-3 h-3" />{meta.label}</span>
+      </div>
+      <div className={`px-4 py-4 border-b border-slate-50 ${meta.ring}`}>
+        <div className="flex items-start gap-4">
+          <div className="shrink-0">
+            <div className={`text-3xl font-black tabular-nums leading-none ${meta.text}`}>{appliedTxt}</div>
+            <span className="block mt-1 text-[10px] font-semibold text-slate-400">applied to next bet</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            {benched && rawTxt ? (
+              <p className="text-xs font-bold text-slate-700 leading-snug inline-flex items-center gap-1.5 flex-wrap">Tuner proposed <span className="text-slate-400 line-through tabular-nums">{rawTxt}</span><ArrowRight className="w-3 h-3 text-rose-400" /><span className={`tabular-nums ${meta.text}`}>{appliedTxt}</span><span className="text-rose-600">— held at neutral</span></p>
+            ) : (
+              <p className="text-xs font-bold text-slate-700 leading-snug">The confidence tuner is <span className={meta.text}>{meta.label.toLowerCase()}</span>{rawTxt ? <> at a proposed <span className="text-slate-500 tabular-nums">{rawTxt}</span></> : null}.</p>
+            )}
+            {action && <p className="mt-1 text-[11px] font-medium text-slate-400 leading-relaxed">{action}</p>}
+            {stabPct != null && (
+              <div className="mt-2.5 max-w-sm"><div className="flex items-center gap-2"><span className="w-16 text-[10px] font-semibold text-slate-400 shrink-0">stability</span><div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full rounded-full ${meta.dot}`} style={{ width: `${stabPct}%` }} /></div><span className={`w-9 text-right text-[10px] font-bold tabular-nums ${meta.text}`}>{stabPct}%</span></div></div>
+            )}
+            <div className="mt-2 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+              <span className="inline-flex items-center gap-1"><ArrowLeftRight className="w-3 h-3 text-slate-400" />{flips} swing{flips === 1 ? '' : 's'}</span>
+              {railRun > 0 && <span className="inline-flex items-center gap-1"><ShieldAlert className="w-3 h-3 text-amber-400" />{railRun} at limit</span>}
+              {settled > 0 && <span className="inline-flex items-center gap-1"><Check className="w-3 h-3 text-emerald-500" />{settled} settled</span>}
+              {credPct && <span>evidence {credPct}</span>}
+              {decided > 0 && <span>{decided} graded</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+      {series.length > 1 && (
+        <div className="px-4 py-3 border-b border-slate-50">
+          <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">Last {series.length} settings</p>
+          <div className="flex items-end gap-1 h-12">
+            {series.map((s, i) => { const h = reallocHealthBarHPv(s.factor, data.bounds); const last = i === series.length - 1; return (
+              <div key={s.as_of || i} className="flex-1 flex flex-col items-center justify-end gap-1" title={`${s.as_of || ''} ${fmtCalFactorPv(s.factor) || ''}`.trim()}><div className={`w-full rounded-sm ${reallocHealthDirColorPv(s.dir)} ${last ? 'ring-2 ring-slate-300 ring-offset-1' : 'opacity-70'}`} style={{ height: `${h}%` }} /></div>
+            )})}
+          </div>
+        </div>
+      )}
+      {narration && (
+        <div className="px-4 py-3 border-b border-slate-50"><p className="text-[11px] font-medium text-slate-500 leading-relaxed inline-flex items-start gap-1.5"><Stethoscope className="w-3.5 h-3.5 text-slate-400 mt-px shrink-0" /><span>{narration}</span></p></div>
+      )}
+      <div className="px-4 py-2.5 bg-slate-50/50 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">This watches the budget-shift <span className="font-bold text-slate-600">confidence tuner</span> across time for the two failures a single setting can&rsquo;t show: <span className="font-bold text-rose-500">hunting</span> (the setting thrashing without settling — automatically <span className="font-bold text-slate-600">held at neutral</span> until it calms) and a setting <span className="font-bold text-amber-600">pinned</span> at its limit (chronically mis-calibrated — surfaced, never auto-touched). The safeguard that lets the tuner self-correct without ever running away. Agency-only — an internal instrument.</p>
+      </div>
+    </div>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3981,6 +4111,18 @@ export default function PulseDiagnosisPreview() {
           <ReallocationEfficacyPanelPreview data={REALLOC_EFFICACY} />
           <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
             The rung above <span className="font-bold text-indigo-600">proposes</span> budget moves; this one closes the loop by checking whether they <span className="font-bold text-slate-600">were right</span>. Each past test is re-graded against what the <span className="font-bold text-slate-600">cost-per-outcome gap actually did</span> over the weeks that followed — the bet <span className="font-bold text-emerald-600">held</span> if the cheaper channel stayed cheaper, <span className="font-bold text-rose-500">faded</span> if the edge evaporated — and the pooled record becomes a single <span className="font-bold text-indigo-600">calibration factor</span> the proposer consumes: under <span className="font-bold text-amber-600">×1.00</span> it <span className="font-bold text-amber-600">tempers</span> the next bet&rsquo;s confidence, over it <span className="font-bold text-emerald-600">emboldens</span>, and it sits neutral until the evidence earns a move. Here the proposer ran a touch hot — a <span className="font-bold text-slate-600">55%</span> realized hit rate against <span className="font-bold text-slate-600">71%</span> promised confidence, so the knob settles at <span className="font-bold text-amber-600">×0.84</span> — yet the breakdown earns its keep: <span className="font-bold text-emerald-600">strong-signal</span> bets genuinely held <span className="font-bold text-slate-600">70%</span> of the time while <span className="font-bold text-slate-500">tentative</span> ones rarely did. The engine grading its own money moves and self-tuning the next one — <span className="font-bold text-slate-600">no operator in the loop</span>. <span className="font-bold text-slate-600">Agency-only by construction</span> — an internal media-buying instrument a client never sees.
+          </p>
+        </div>
+
+        {/* ── Layer 26 — the watchdog ABOVE the reallocation tuner. The rung above grades and
+            self-tunes; this one watches that tuner as a time series and steps in when it misbehaves.
+            The fixture is the vivid self-heal: a hunting factor (flips every week) the watchdog has
+            benched — proposed ×1.18, applied a neutral ×1.00 — so a thrashing knob can't move money. */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Calibration stability · the watchdog benching a hunting money-tuner</p>
+          <ReallocationEfficacyHealthPanelPreview data={REALLOC_EFFICACY_HEALTH} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            The rung above tunes a single <span className="font-bold text-indigo-600">confidence factor</span> from its own grades; this one watches that factor <span className="font-bold text-slate-600">across time</span> for the two failures one snapshot can&rsquo;t show. <span className="font-bold text-rose-500">Hunting</span> — the factor swinging direction run after run without ever settling — means the tuner is chasing noise, so the watchdog <span className="font-bold text-slate-600">benches it to a neutral ×1.00</span> until the swing calms; a factor <span className="font-bold text-amber-600">pinned</span> at its clamp for weeks means it&rsquo;s chronically mis-calibrated, surfaced for a human but never auto-touched. Here the factor has flipped <span className="font-bold text-slate-600">five times in six runs</span> — textbook hunting — so its proposed <span className="font-bold text-slate-500 line-through">×1.18</span> is <span className="font-bold text-rose-500">held at ×1.00</span> and no real budget moves on a thrashing knob. The safeguard that lets the tuner <span className="font-bold text-emerald-600">self-correct without ever running away</span>, and re-engage on its own once it settles — <span className="font-bold text-slate-600">no operator in the loop</span>. <span className="font-bold text-slate-600">Agency-only by construction</span> — a client never sees it.
           </p>
         </div>
 
