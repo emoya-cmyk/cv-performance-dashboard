@@ -26,6 +26,7 @@ const { diffScopeInsights } = require('./scopeDelta')
 const { detectScopeTrends } = require('./scopeTrend')
 const { projectScopeTrend } = require('./scopeNowcast')
 const { gradeScopeNowcast } = require('./scopeNowcastAccuracy')
+const { calibrateNowcastBand } = require('./scopeNowcastBand')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -243,6 +244,30 @@ async function runScopeInsight(input, query, scope) {
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {
         result.nowcast.accuracy = accuracy
+
+        // ADDITIVE (intel-v14 D5): now that the projection has a MEASURED accuracy,
+        // size a calibrated band around each projected value from that metric's OWN
+        // sMAPE (pooled-overall fallback) and pin it onto the matching projection as
+        // `.band`, so the surface can read "≈ $13,000, likely $12,810–$13,856 (±4%)"
+        // instead of implying a precision the backtest never earned. This rides
+        // strictly on top of D4: the band is computed only INSIDE the graded branch,
+        // so a streak whose buffer is too short to grade (no `accuracy`) carries no
+        // `band` either — byte-identical to a pre-D5 caller. calibrateNowcastBand is
+        // pure, deterministic, fail-safe (junk → status 'none', never throws) and
+        // leak-safe (it consumes the already-leak-safe projection values + accuracy
+        // grade and emits metric labels + bare numeric bounds — no tenant identity),
+        // so attaching its per-metric output cannot break the response nor leak across
+        // tenants. The module stays pure: the projection↔band join lives here in the
+        // wiring, exactly as the D4 accuracy attach composed above it.
+        const band = calibrateNowcastBand(result.nowcast, accuracy, opts)
+        if (band && band.status === 'calibrated' && Array.isArray(band.bands)) {
+          const bandByMetric = new Map(band.bands.map(b => [String(b.metric), b]))
+          for (const p of result.nowcast.projections) {
+            if (!p || p.metric == null) continue
+            const b = bandByMetric.get(String(p.metric))
+            if (b) p.band = b
+          }
+        }
       }
     }
   }

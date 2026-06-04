@@ -509,3 +509,84 @@ test('intel-v14 D4: a fresh streak on a SHORT buffer ⇒ nowcast but NO accuracy
   assert.strictEqual(result.nowcast.status, 'projected')
   assert.strictEqual('accuracy' in result.nowcast, false)
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2e — intel-v14 D5: the optional per-projection `band` (a calibrated
+// interval). Proves the WIRING (runScopeInsight sizes each projection's band
+// from the metric's OWN measured sMAPE and pins it onto projections[i].band);
+// the band math itself is owned by scopeNowcastBand.test.js. The band rides
+// strictly on top of D4 — it is computed only INSIDE the graded-accuracy branch,
+// so a projection with no `accuracy` carries no `band` either, byte-identical to
+// a pre-D5 caller.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D5: a graded streak ⇒ each projection carries a calibrated `band` sized by its own sMAPE', async () => {
+  // The D4 grading fixture exactly: prior reads 8000, 10000, 12000 + the fresh read
+  // (NEXT_RAW totals 12400) = a 4-read buffer that grades the interior projection at
+  // sMAPE 12.12%. D5 then draws the LIVE projection's band at ±12.12% about its own
+  // projected value — honest precision lifted straight from the backtest.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // it rides on top of the D4 accuracy, which rides on the D3 nowcast — none replaced.
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.ok(result.nowcast.accuracy, 'accuracy still present')
+  assert.strictEqual(result.nowcast.accuracy.status, 'graded')
+
+  const proj = result.nowcast.projections[0]
+  assert.strictEqual(proj.metric, 'revenue')
+  assert.ok(proj.band, 'a calibrated band is pinned onto the projection')
+
+  const b = proj.band
+  assert.strictEqual(b.metric, 'revenue')
+  assert.strictEqual(b.metric_label, 'Revenue')
+  assert.strictEqual(b.basis, 'metric')                         // revenue was graded individually
+  // the half-width IS the measured sMAPE — the band is drawn from the record, not invented.
+  assert.strictEqual(b.halfPct, result.nowcast.accuracy.metrics[0].smape)
+  assert.strictEqual(b.halfPct, 12.12)
+  assert.strictEqual(b.drawnHalfPct, 12.12)                     // <200 → drawn in full
+  assert.strictEqual(b.samples, 1)
+  assert.strictEqual(b.floored, false)
+  // the band straddles the SAME projected value the nowcast headline speaks — rounded to
+  // cents for the payload (the live projection itself keeps full precision).
+  assert.strictEqual(b.projected, Math.round(proj.projected * 100) / 100)
+  assert.ok(b.lo < b.projected && b.projected < b.hi, 'a real interval around the projection')
+  assert.ok(Number.isInteger(b.loCents) && Number.isInteger(b.hiCents))
+  // rendered through the shared currency oracle — reads in the projection's own voice.
+  assert.match(b.rangeLabel, /^\$[\d,]+–\$[\d,]+$/)
+  assert.strictEqual(b.rangeLabel, `${b.loLabel}–${b.hiLabel}`)
+
+  // leak-safe: the calibrated band embeds no tenant identity — metric labels + bare bounds only.
+  const serialized = JSON.stringify(proj.band)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `band leaked tenant identity: ${needle}`)
+  }
+})
+
+test('intel-v14 D5: a streak on a SHORT buffer ⇒ nowcast but NO band on any projection (byte-identical to D4)', async () => {
+  // The D3/D4 short-buffer setup: two prior reads + the fresh read = a 3-read buffer, below
+  // the grading floor. No accuracy ⇒ no band — the projection is unchanged from pre-D5.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.ok(result.nowcast.projections.every(p => !('band' in p)), 'no band without a measured accuracy')
+})
+
+test('intel-v14 D5: omitting `history` ⇒ no nowcast ⇒ no band (additive, byte-identical envelope)', async () => {
+  const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
