@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
@@ -19,6 +19,7 @@ import TeamUpdate from '@/components/TeamUpdate'
 import CampaignList from '@/components/CampaignList'
 import MonthlyTrend from '@/components/MonthlyTrend'
 import AskBox from '@/components/AskBox'
+import ScopeNarrative from '@/components/ScopeNarrative'
 import DriverBreakdown from '@/components/DriverBreakdown'
 import StreamStatus from '@/components/StreamStatus'
 import { useLiveStream } from '@/lib/useLiveStream'
@@ -30,6 +31,24 @@ const PERIOD_OPTS = [
   { value: 'last_8w',   label: 'Last 60 Days' },
   { value: 'all_time',  label: 'All Time' },
 ]
+
+// Local-calendar YYYY-MM-DD (mirrors Explore.jsx) so the scope window we hand the
+// live-narrative endpoint lines up with the period selector the client is looking at.
+function isoLocal(d) {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+  return z.toISOString().slice(0, 10)
+}
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return isoLocal(d) }
+function periodToRange(period) {
+  const end = isoLocal(new Date())
+  switch (period) {
+    case 'this_week': return { start: daysAgo(6),   end }   // Last 7 Days
+    case 'last_8w':   return { start: daysAgo(59),  end }   // Last 60 Days
+    case 'all_time':  return { start: daysAgo(729), end }   // ~2 years — effectively all data
+    case 'last_4w':
+    default:          return { start: daysAgo(29),  end }   // Last 30 Days
+  }
+}
 
 // ── Verdict logic (shared with ExecView) ─────────────────────────────────────
 function verdictFor({ revenue, revDelta, roas, leads, jobs }) {
@@ -1428,6 +1447,15 @@ export default function ClientView({ store }) {
   const clientName  = clientObj?.name || 'Your Business'
   const periodLabel = PERIOD_OPTS.find(p => p.value === selectedPeriod)?.label || ''
 
+  // Live scope for <ScopeNarrative>: the same window the period selector is showing,
+  // expressed as {start,end} so the narrative endpoint re-reads exactly this range and
+  // re-narrates whenever the client switches periods. Consumer-focused metric set.
+  const scopeWindow = useMemo(() => periodToRange(selectedPeriod), [selectedPeriod])
+  const scopeInsightBody = useMemo(() => ({
+    metrics: ['revenue', 'leads', 'roas', 'close_rate'],
+    dateRange: scopeWindow,
+  }), [scopeWindow])
+
   useEffect(() => { const t = setTimeout(() => setMounted(true), 60); return () => clearTimeout(t) }, [])
 
   // Fetch goals, updates, connection status, and the autonomous-analyst synthesis for
@@ -1738,6 +1766,27 @@ export default function ClientView({ store }) {
               running ahead. Own numbers only (server-computed client_message, names no peer);
               self-hides when nothing's out of band. Same activity gate as the cards above. */}
           {(revenue > 0 || leads > 0 || spend > 0) && <ClientPulse pulse={pulse} />}
+
+          {/* ── What's happening right now — the live narrated read of THIS scope ──
+              intel-v13 C3: the SAME <ScopeNarrative> the agency Explore view uses, here
+              pinned to this account and voiced for the consumer. It owns one debounced call
+              to POST /ask/scope-insight for the exact window the period selector is showing
+              (scopeInsightBody.dateRange = periodToRange(selectedPeriod)), so when the client
+              flips Last 7 / 30 / 60 Days the *words* regenerate in lock-step with the numbers,
+              not just the cards. Leak-proof by construction: the endpoint hard-pins tenancy
+              from the client token (clientObj.id is honoured only for an agency token) and only
+              ever attributes drivers by CHANNEL — never a peer — so this shared component prints
+              no other account's data; tone="client" re-voices copy only. USE_API-gated (live
+              server call) and held to the same activity gate as the cards above. */}
+          {USE_API && clientObj?.id && (revenue > 0 || leads > 0 || spend > 0) && (
+            <div className="mb-4 fade-up" style={{ animationDelay: '.065s' }}>
+              <ScopeNarrative
+                input={scopeInsightBody}
+                clientId={clientObj.id}
+                tone="client"
+              />
+            </div>
+          )}
 
           {/* ── Ask about your results — the grounded "ask your data" box, client-scoped ──
               The same plain-English query surface the agency gets on its dashboard, but
