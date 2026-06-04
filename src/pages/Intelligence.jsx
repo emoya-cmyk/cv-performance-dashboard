@@ -16,6 +16,7 @@ import {
   healthBandMeta, recoveryMeta, timeAgo, recapPosture,
 } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'
+import ImpactBanner from '@/components/ImpactBanner'
 
 /**
  * Intelligence — the agency-wide window into the autonomous analyst.
@@ -168,6 +169,16 @@ export default function Intelligence() {
   return (
     <div className="space-y-4">
       <Hero running={running} onRun={runSweep} />
+
+      {/* influence hero (intel-v12 B3) — the honest, weighted tally of what the autonomous
+          analyst actually MOVED: leads recovered, jobs protected, dollars defended (risk-
+          adjusted), with the named clients behind it and the agency narration. It makes the
+          whole intelligence layer's value legible at a glance, and earns the slot right under
+          the run control. Self-fetching the PORTFOLIO ledger, USE_API-gated, and SILENT until
+          there's a real, non-empty headline — never a "$0 delivered" hero on a fresh portfolio.
+          Agency-only by construction (dollars + per-client attribution); the client's vaguer
+          "your wins" line is the separate leak-proof B4 seam. */}
+      {USE_API && <ImpactBanner />}
 
       {/* pipeline health — the foundation everything else stands on (intel-v11 A3). Every
           panel below is only as true as the feeds behind it, so this watchdog sits at the TOP:

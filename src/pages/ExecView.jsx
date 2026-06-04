@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtX, delta, weekLabel } from '@/lib/utils'
 import { useCountUp } from '@/lib/useCountUp'
+import ImpactBanner from '@/components/ImpactBanner'
 
 const PERIOD_OPTS = [
   { value: 'this_week', label: 'This Week' },
@@ -369,6 +370,13 @@ export default function ExecView({ store }) {
           <p className="text-white/90 text-xl font-semibold leading-relaxed mb-5 max-w-2xl">
             {buildStrategicHeadline({ clientName, revenue, jobs, roas, spend, leads, revDelta: revDelta ?? 0, stats })}
           </p>
+
+          {/* Influence hero (intel-v12 B3) — the honest, weighted tally of what the autonomous
+              analyst MOVED, sitting between the strategic headline and the health verdict so the
+              exec view leads with delivered value. The shared ImpactBanner brings its own brand-
+              gradient background (theme-independent), self-fetches the portfolio ledger, and stays
+              silent until there's a real headline — so on a fresh portfolio this column is unchanged. */}
+          <ImpactBanner className="mb-10" />
 
           {/* ── Health verdict ── */}
           {verdict && (
