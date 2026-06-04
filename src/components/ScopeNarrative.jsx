@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split, Activity, Minus } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -387,6 +387,41 @@ function CoherenceChip({ coherence, tone }) {
   )
 }
 
+// intel-v14 D9 — the MAGNITUDE temper on D8's polarity verdict. D8 says whether the basket agrees;
+// D9 says whether the move that matters is big enough to act on. The server reads each polarity-bearing
+// projection's |pct| and attaches `nowcast.materiality` (status 'assessed') whenever ≥1 carries a finite
+// magnitude — even on a single-metric session D8 stays silent on, and even on a short session too young
+// to grade (it needs only the projection vector, like coherence). It NEVER inflates confidence: it adds
+// a "material" amplifier (the decisive move clears the threshold — a real gain, slide, or divergence) or
+// a "marginal" temper (the side that counts is a hairline, so a D8 caution should be read as small, not
+// an alarm — the anti-crying-wolf guard). Every field is from the already-leak-safe `materiality`
+// (metric labels + direction words + integer percents + small counts; no tenant identity), so it renders
+// identically on agency and client — `tone` re-voices only the pill label, never the honest note line.
+const MATERIALITY = {
+  material: { Icon: Activity, chip: 'text-violet-700 bg-violet-50 border-violet-200', note: 'text-violet-600', agency: 'Material', client: 'Significant' },
+  marginal: { Icon: Minus,    chip: 'text-slate-600 bg-slate-50 border-slate-200',    note: 'text-slate-500',  agency: 'Marginal', client: 'Minor' },
+}
+
+// The at-a-glance materiality pill for the nowcast header, sitting beside the coherence chip. Level-
+// colored (material=violet, marginal=slate) with the matching icon; agency reads "Material"/"Marginal",
+// client the plainer "Significant"/"Minor". Hover reveals the full honest note on either surface. Renders
+// nothing unless the server sized ≥1 polarity-bearing projection (status 'assessed').
+function MaterialityChip({ materiality, tone }) {
+  if (!materiality || materiality.status !== 'assessed') return null
+  const m = MATERIALITY[materiality.level]
+  if (!m) return null
+  const Icon = m.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${m.chip}`}
+      title={materiality.note || undefined}
+    >
+      <Icon size={10} strokeWidth={2.5} />
+      {tone === 'client' ? m.client : m.agency}
+    </span>
+  )
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -468,6 +503,15 @@ function NowcastStrip({ nowcast, tone }) {
     nowcast.coherence && nowcast.coherence.status === 'assessed' ? nowcast.coherence : null
   const ch = coherence ? COHERENCE[coherence.level] || null : null
   const CohIcon = ch ? ch.Icon : null
+  // intel-v14 D9 — the magnitude temper on D8, present only when the server sized ≥1 polarity-bearing
+  // projection (status 'assessed'). Absent ⇒ chip + note simply omitted, byte-identical to a pre-D9 strip.
+  // Like D7/D8 it attaches independently of the accuracy ladder, AND independently of coherence — so it
+  // speaks on the single-metric session D8 omits, and tempers a divergent verdict when the move is a
+  // hairline. The level is 'material' or 'marginal'; only 'assessed' reaches here.
+  const materiality =
+    nowcast.materiality && nowcast.materiality.status === 'assessed' ? nowcast.materiality : null
+  const mt = materiality ? MATERIALITY[materiality.level] || null : null
+  const MatIcon = mt ? mt.Icon : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -491,6 +535,7 @@ function NowcastStrip({ nowcast, tone }) {
             {accuracy && <AccuracyChip accuracy={accuracy} tone={tone} />}
             {corroboration && <CorroborationChip corroboration={corroboration} tone={tone} />}
             {coherence && <CoherenceChip coherence={coherence} tone={tone} />}
+            {materiality && <MaterialityChip materiality={materiality} tone={tone} />}
           </div>
           {voice ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
@@ -518,6 +563,12 @@ function NowcastStrip({ nowcast, tone }) {
             <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${ch.note}`}>
               {CohIcon && <CohIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
               <span>{coherence.note}</span>
+            </p>
+          )}
+          {materiality && materiality.note && mt && (
+            <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${mt.note}`}>
+              {MatIcon && <MatIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
+              <span>{materiality.note}</span>
             </p>
           )}
 
