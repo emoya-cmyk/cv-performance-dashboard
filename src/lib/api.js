@@ -442,6 +442,13 @@ export const api = {
   // hit/miss verdicts, so (like getSystemic/getTrajectory/getPacing/getPulse) it NEVER rides
   // getClientInsights(): nothing folds into the per-client payload. No params (trailing decision+horizon span).
   getReallocationEfficacy: ()    => get('/api/insights/reallocation-efficacy'),
+  // getReallocationEfficacyHealth() → the STABILITY watchdog over getReallocationEfficacy (intel-v10 Layer
+  // 26). One calibration per as-of becomes a SERIES over time, and a series can misbehave — flip
+  // damp<->embolden every episode (hunting), pin at a clamp rail, or run on too few trials. This reports
+  // whether the live budget engine should TRUST the latest calibration or self-heal to neutral 1.0, plus the
+  // gated factor it actually applies. AGENCY-ONLY control machinery — like getReallocationEfficacy it NEVER
+  // rides getClientInsights(); the client narration is unconditionally silent. No params (M stepped samples).
+  getReallocationEfficacyHealth: () => get('/api/insights/reallocation-efficacy-health'),
   // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
   // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
   // flags every client × flow metric whose trailing week has slid out of that client's OWN recent

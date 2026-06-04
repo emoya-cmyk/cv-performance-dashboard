@@ -233,6 +233,21 @@ const {
 // record is an internal media-buying instrument, never a client scoreboard line (Layer 25d proves it).
 const { reallocationEfficacyTable, reallocationEfficacyNote } = require('./reallocationEfficacy')
 
+// intel-v10 Layer 26 (reallocationEfficacyHealth): the STABILITY monitor that rides ON TOP of Layer 25.
+// Layer 25 emits one confidence calibration per as-of; sampled over successive as-of points it becomes a
+// SERIES, and a series can misbehave — flip damp<->embolden every episode (hunting), get pinned at a clamp
+// rail, or run on too few trials to trust. This watchdog reads that series and decides whether the live
+// engine should TRUST the latest calibration or fall back to neutral 1.0 (the load-bearing self-heal). PURE
+// (history in -> verdict + gated factor out; never throws). AGENCY-ONLY — a calibration-stability readout is
+// pure media-buying control machinery, never a client scoreboard line (Layer 26d proves it).
+const {
+  assessReallocationEfficacyHealth,
+  narrateReallocationEfficacyHealth,
+  shouldDistrustCalibration,
+  gatedFactor: gateReallocCalFactor,
+  NEUTRAL: REALLOC_CAL_NEUTRAL,
+} = require('./reallocationEfficacyHealth')
+
 // Action→recovery efficacy (PURE): the recommendation layer (recommendedAction) proposes a
 // PLAY for every adverse finding; the recovery classifier (lib/outcomes) later proves whether
 // that finding's problem RECOVERED or merely LAPSED. Those two organs were never connected —
@@ -2388,6 +2403,10 @@ const REALLOC_EFFICACY_HORIZON_WEEKS        = 4                      // realized
 const REALLOC_EFFICACY_BOUNDARIES           = 6                      // past week-boundaries reconstructed & graded
 const REALLOC_EFFICACY_DECISION_WEEKS       = REALLOC_LOOKBACK_WEEKS // decision window == the live Layer-24 lookback (26)
 const REALLOC_EFFICACY_REALIZED_MIN_WINDOWS = 2                      // realized cpo is a blended ratio, not a trend slope
+// intel-v10 Layer 26 (reallocationEfficacyHealth) sampling geometry. We re-derive the Layer-25 calibration
+// at M successive as-of points stepped by H weeks (one episode-boundary per step) to form a stability SERIES:
+const REALLOC_EFFICACY_HEALTH_SNAPSHOTS     = 8                      // calibration samples in the series (> module window 6 -> headroom)
+const REALLOC_EFFICACY_HEALTH_STEP_WEEKS    = REALLOC_EFFICACY_HORIZON_WEEKS // step one realized-horizon per sample (rolls exactly one boundary)
 
 // Fold a flat list of summed (channel, date, metric_key, total) fact rows for ONE client into the
 // per-channel WEEKLY window shape channelEfficiency reasons over: [{ channel, points: [{spend, outcomes}] }],
@@ -2749,6 +2768,70 @@ async function getPortfolioReallocationEfficacy({ asOf, horizonWeeks, boundaries
     as_of: day, scope: 'portfolio', clients: byClient.length, trials: allTrials.length,
     horizon_weeks: H, boundaries: B, decision_weeks: W, by_client: byClient,
   })
+}
+
+// intel-v10 Layer 26: the STABILITY READOUT that rides on top of Layer 25. Re-derives the POOLED portfolio
+// calibration at M successive as-of points (stepped by H weeks, so each step rolls exactly one episode
+// boundary), forms the oldest->newest {as_of, calibration} SERIES the watchdog consumes, and returns its
+// verdict PLUS the factor the live engine should ACTUALLY apply — the gated factor collapses to neutral 1.0
+// whenever the series is judged untrustworthy (the load-bearing self-heal: a hunting calibration never gets
+// to lurch the budget engine). ONE bulk read spanning the EARLIEST as-of's full episode window, re-sliced per
+// as-of in memory (no per-sample DB round-trip). NEVER rides a client payload — a calibration-stability
+// readout is internal media-buying control machinery, never a client scoreboard line (Layer 26d enforces it).
+async function getReallocationEfficacyHealth({ asOf, horizonWeeks, boundaries, decisionWeeks, snapshots, stepWeeks } = {}) {
+  const day  = String(asOf || new Date().toISOString().slice(0, 10)).slice(0, 10)
+  const H    = reallocPosInt(horizonWeeks,  REALLOC_EFFICACY_HORIZON_WEEKS)
+  const B    = reallocPosInt(boundaries,    REALLOC_EFFICACY_BOUNDARIES)
+  const W    = reallocPosInt(decisionWeeks, REALLOC_EFFICACY_DECISION_WEEKS)
+  const M    = reallocPosInt(snapshots,     REALLOC_EFFICACY_HEALTH_SNAPSHOTS)
+  const step = reallocPosInt(stepWeeks,     REALLOC_EFFICACY_HEALTH_STEP_WEEKS)
+  const dayMs = reallocDayMs(day)
+  // The oldest as-of we sample reaches back (M-1) steps; its decision window reaches a full episode further.
+  // ONE read from there to "now" feeds every sample.
+  const earliestAsOfMs = dayMs - (M - 1) * step * 7 * 86400000
+  const start = reallocIso(earliestAsOfMs - (W + B * H) * 7 * 86400000)
+  const rows = await loadReallocationFactRows({ clientId: null, start, end: day })
+  const rowsByClient = new Map()
+  for (const r of rows) {
+    const cid = String(r.client_id)
+    let bucket = rowsByClient.get(cid)
+    if (!bucket) { bucket = []; rowsByClient.set(cid, bucket) }
+    bucket.push(r)
+  }
+  // Walk oldest -> newest. At each as-of, pool every client's reconstructed trials and snapshot the pooled
+  // calibration; {as_of, calibration} is exactly the wrapper the module's normCalibration accepts. An as-of
+  // with no decided trials yields a clean neutral 1.0 snapshot (credibility 0) — the watchdog reads that as
+  // STARVED, not as instability.
+  const history = []
+  for (let j = 0; j < M; j++) {
+    const d = reallocIso(dayMs - (M - 1 - j) * step * 7 * 86400000)
+    const allTrials = []
+    for (const crows of rowsByClient.values()) {
+      const trials = buildReallocationTrials(crows, { asOf: d, horizonWeeks: H, boundaries: B, decisionWeeks: W })
+      if (trials.length) allTrials.push(...trials)
+    }
+    const cal = reallocationEfficacyTable(allTrials).calibration
+    history.push({ as_of: d, calibration: cal, trials: allTrials.length })
+  }
+  const verdict = assessReallocationEfficacyHealth(history)
+  // rawFactor = the exact normalized factor the watchdog judged last; neutral 1.0 when the series is empty.
+  const rawFactor = verdict.calibration && Number.isFinite(verdict.calibration.last_factor)
+    ? verdict.calibration.last_factor
+    : REALLOC_CAL_NEUTRAL
+  const gated     = gateReallocCalFactor(verdict, rawFactor)
+  const narration = narrateReallocationEfficacyHealth(verdict, { audience: 'agency' })
+  return {
+    ...verdict,
+    scope: 'portfolio',
+    as_of: day,
+    snapshots: M, step_weeks: step,
+    horizon_weeks: H, boundaries: B, decision_weeks: W,
+    raw_factor: rawFactor,
+    gated_factor: gated,
+    applied_factor: gated,                 // what the engine multiplies through (1.0 when distrusted)
+    distrust: shouldDistrustCalibration(verdict),
+    narration: narration || null,
+  }
 }
 
 // ============================================================================
@@ -3249,6 +3332,11 @@ module.exports = {
   // loadReallocationFactRows / serializeReallocationEfficacy exported for the route + wiring tests.
   getPortfolioReallocationEfficacy, getClientReallocationEfficacy, buildReallocationTrials,
   loadReallocationFactRows, serializeReallocationEfficacy,
+  // reallocationEfficacyHealth (intel-v10 Layer 26): agency-only STABILITY monitor over a SERIES of Layer-25
+  // calibrations — decides whether the live engine should TRUST the latest calibration or self-heal to neutral
+  // 1.0 (hunting/pinned/starved series). getReallocationEfficacyHealth mounts behind requireAuth (NEVER a
+  // client payload); it returns both the watchdog verdict and the gated factor the budget engine applies.
+  getReallocationEfficacyHealth,
   // intra-week PULSE (intel-v7): early-warning over the ATOMIC DAILY grain - a daily-updated watch
   // on each client's trailing-week LEVEL, computed on read (no migration). Agency roster (names
   // clients) + a client's OWN pulse (no peers -> folds into GET /:clientId). loader exported for tests.

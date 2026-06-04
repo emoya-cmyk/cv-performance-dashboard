@@ -80,7 +80,7 @@ const {
   getPortfolioEfficacy, getEfficacyTable, attachEfficacyNotes, attachEscalations,
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
-  getPortfolioReallocation, getPortfolioReallocationEfficacy,
+  getPortfolioReallocation, getPortfolioReallocationEfficacy, getReallocationEfficacyHealth,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -368,6 +368,28 @@ router.get('/reallocation-efficacy', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET reallocation-efficacy error', err.message)
     res.status(500).json({ error: 'Failed to load reallocation-efficacy calibration' })
+  }
+})
+
+// ── GET /api/insights/reallocation-efficacy-health ──────────────────────────────
+// The STABILITY watchdog that rides on top of the feedback loop (intel-v10 Layer 26): /reallocation-efficacy
+// emits ONE confidence calibration per as-of; sampled over successive as-of points it becomes a SERIES, and a
+// series can misbehave — flip damp<->embolden every episode (hunting), get pinned at a clamp rail, or run on
+// too few trials to trust. This endpoint re-derives the pooled calibration at M stepped as-of points, reads the
+// resulting series, and reports whether the live budget engine should TRUST the latest calibration or self-heal
+// to neutral 1.0 — plus the gated factor it actually applies. It surfaces a calibration-stability verdict and a
+// names-free pooled readout, so — like /reallocation · /reallocation-efficacy · /systemic · /trajectory ·
+// /pacing · /pulse — it lives here behind requireAuth and NEVER rides the per-client GET /:clientId (or
+// shared-link) payload; the client narration is unconditionally silent (Layer 26d proves it). Declared before
+// the :clientId route so the literal "reallocation-efficacy-health" can never be captured as a client id. No
+// params: the span is M samples stepped one realized-horizon apart back from "now".
+router.get('/reallocation-efficacy-health', async (_req, res) => {
+  try {
+    const out = await getReallocationEfficacyHealth()
+    res.json(out)
+  } catch (err) {
+    console.error('[insights] GET reallocation-efficacy-health error', err.message)
+    res.status(500).json({ error: 'Failed to load reallocation-efficacy-health verdict' })
   }
 })
 
