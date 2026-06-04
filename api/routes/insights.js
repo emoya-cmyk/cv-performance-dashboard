@@ -81,6 +81,7 @@ const {
   getPortfolioTrajectory,
   getPortfolioPacing, getClientPacing,
   getPortfolioReallocation, getPortfolioReallocationEfficacy, getReallocationEfficacyHealth,
+  getConnectionHealth,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -390,6 +391,28 @@ router.get('/reallocation-efficacy-health', async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET reallocation-efficacy-health error', err.message)
     res.status(500).json({ error: 'Failed to load reallocation-efficacy-health verdict' })
+  }
+})
+
+// ── GET /api/insights/connection-health ─────────────────────────────────────────
+// The self-healing pipeline's agency READ (intel-v11). Returns every connection's state
+// worst-first (HEALTHY / STALE / ERRORING / AUTH_EXPIRED / NEVER_SYNCED / DISABLED), the
+// portfolio rollup (counts, needs_attention, operator_required, next_wake_at), and a
+// one-line operator instruction for the worst actionable item. The cron watchdog
+// auto-recovers everything except auth; this is what the Pipeline-health UI + Reconnect
+// CTA read. AGENCY-ONLY: it names channels and carries reconnect steps + redacted error
+// excerpts, so — like /systemic · /reallocation* — it mounts behind requireAuth and NEVER
+// rides a per-client payload (the client-safe degraded note is A4's separate job).
+// Optional ?clientId scopes to one client (drill-down); absent = the whole portfolio.
+// Declared before the :clientId route so the literal can't be captured as a client id.
+router.get('/connection-health', async (req, res) => {
+  try {
+    const clientId = req.query.clientId ? String(req.query.clientId) : null
+    const out = await getConnectionHealth({ clientId })
+    res.json(out)
+  } catch (err) {
+    console.error('[insights] GET connection-health error', err.message)
+    res.status(500).json({ error: 'Failed to load connection-health verdict' })
   }
 })
 

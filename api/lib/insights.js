@@ -83,6 +83,14 @@ const { benchmarkPortfolio, clientStanding } = require('./benchmark')
 // (no operator except to connect accounts) made literal. Pure; [] on no history.
 const { detectCoverageGaps } = require('./coverage')
 
+// intel-v11 self-healing pipeline. coverage (above) watches DATA freshness; this watches
+// the CONNECTION/sync layer — the real upstream cause of a dark channel. The brain
+// (connectionHealth) classifies + prescribes; the hand (connectionWatchdog) loads live
+// state, assesses, and auto-recovers everything EXCEPT auth (the Class-C hard stop).
+// getConnectionHealth (below) is the agency-only READ surface over both.
+const { loadConnectionStates, assessConnectionStates } = require('./connectionWatchdog')
+const { narrateConnectionHealth } = require('./connectionHealth')
+
 // Intra-week early-warning (PURE): the weekly engine is blind BETWEEN Mondays — a client can
 // crater on a Tuesday and nothing is said until the week closes. dayPulse watches the trailing-
 // week LEVEL on the atomic daily grain (recomputed daily, judged against prior non-overlapping
@@ -2834,6 +2842,38 @@ async function getReallocationEfficacyHealth({ asOf, horizonWeeks, boundaries, d
   }
 }
 
+// ── connection-health (intel-v11): the self-healing pipeline's agency READ ──────────
+// The brain (lib/connectionHealth) classifies each connection's sync state and prescribes
+// one recovery; the hand (lib/connectionWatchdog) loads live state, assesses worst-first,
+// and (via the cron) auto-recovers everything except auth. This getter is the READ the
+// agency Pipeline-health UI and the watchdog endpoint consume in one shot: it loads every
+// connection's state (or one client's, for drill-down), rolls up the portfolio summary,
+// narrates the single worst actionable item for an operator, and attaches a per-record
+// agency narration (reconnect step / retry note). AGENCY-ONLY by construction — records
+// name channels and carry reconnect instructions + redacted error excerpts, so this NEVER
+// rides a per-client payload (the client-safe degraded note is A4's separate, leak-proof
+// job). Computed on READ — no migration, no orchestrator change; the durable state already
+// lives on client_connections + sync_runs.
+async function getConnectionHealth({ clientId = null, asOf } = {}) {
+  const when = asOf ? String(asOf) : new Date().toISOString()
+  const states = await loadConnectionStates(query, { clientId })
+  const { records, summary } = assessConnectionStates(states, when, {})
+  const connections = records.map((r) => ({
+    ...r,
+    narration: narrateConnectionHealth(r, { audience: 'agency' }) || null,
+  }))
+  // The single worst actionable instruction, for a one-line banner (records are worst-first,
+  // so the first narratable record is the most urgent).
+  const lead = connections.find((c) => c.narration)
+  return {
+    scope: clientId != null ? 'client' : 'portfolio',
+    as_of: when,
+    summary,
+    connections,
+    narration: lead ? lead.narration : null,
+  }
+}
+
 // ============================================================================
 // INTRA-WEEK PULSE (intel-v7) — the early-warning organ over the ATOMIC DAILY grain.
 //
@@ -3302,6 +3342,7 @@ module.exports = {
   markRecoveries, buildRecoveryProbes, probeFor,
   // connection-health watchdog (per-channel coverage gaps off the atomic fact grain)
   loadChannelCoverage,
+  getConnectionHealth,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,

@@ -16,10 +16,12 @@ const { runInsightsForAll }  = require('./lib/insights')
 const { listRecentBriefs }      = require('./lib/brief')
 const { summarizeBriefQuality } = require('./lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelivery')
+const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
 const INSIGHTS_SCHEDULE = process.env.INSIGHTS_CRON || '0 7 * * *'    // daily 7am UTC
+const WATCHDOG_SCHEDULE = process.env.WATCHDOG_CRON || '*/15 * * * *' // every 15 minutes
 
 // Minimal stats builder for digest (mirrors deriveStats in metrics.js)
 function digestStats(row) {
@@ -187,6 +189,42 @@ function startScheduler() {
   })
 
   console.log(`[scheduler] insights on schedule: ${INSIGHTS_SCHEDULE}`)
+
+  // ── Self-healing pipeline watchdog — every 15 minutes (intel-v11) ─────────────
+  // The 6-hour sync sweep above is the bulk heartbeat; this is the tight, SELECTIVE,
+  // backoff-gated recovery loop that keeps channels from going dark between sweeps. It
+  // reads every connection's recent sync history, lets the brain (connectionHealth) judge
+  // each one, and re-syncs ONLY the connections whose deterministic exponential backoff
+  // has come due — never hammering, always plateauing, never giving up on a transient
+  // fault. The Class-C invariant is absolute: AUTH failures (operator_required) are never
+  // in the due set, so a revoked credential is surfaced for a human reconnect and NEVER
+  // auto-retried. runConnectionWatchdog isolates each connection's failure, so one bad
+  // re-sync can't sink the sweep. An in-flight guard skips a tick if the previous sweep
+  // is still running (a long recovery batch must never stack on itself).
+  if (!cron.validate(WATCHDOG_SCHEDULE)) {
+    console.warn('[watchdog] invalid WATCHDOG_CRON, using default */15 * * * *')
+  }
+  let watchdogRunning = false
+  cron.schedule(WATCHDOG_SCHEDULE, async () => {
+    if (watchdogRunning) {
+      console.log('[watchdog] previous sweep still running — skipping this tick')
+      return
+    }
+    watchdogRunning = true
+    try {
+      const r = await runConnectionWatchdog({ query, runSync, logger: console })
+      console.log(
+        `[watchdog] swept ${r.scanned} — ${r.healed} re-synced, ${r.failed} failed, ` +
+        `${r.operator_required} need reconnect`
+      )
+    } catch (err) {
+      console.error('[watchdog] fatal', err.message)
+    } finally {
+      watchdogRunning = false
+    }
+  })
+
+  console.log(`[scheduler] watchdog on schedule: ${WATCHDOG_SCHEDULE}`)
 }
 
 module.exports = { startScheduler }
