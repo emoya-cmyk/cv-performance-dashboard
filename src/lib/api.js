@@ -459,6 +459,18 @@ export const api = {
   // client and the narration is agency-voiced, so (like getReallocation*/getPulse) it NEVER rides
   // getClientInsights() — the client's own degraded note is leak-proof and lives elsewhere. No params.
   getConnectionHealth: ()        => get('/api/insights/connection-health'),
+  // getImpactLedger(clientId?) → the INFLUENCE LEDGER (intel-v12 B2): the honest, weighted
+  // tally of what the intelligence layer has actually DELIVERED — recovered findings plus, at
+  // portfolio scope ONLY, the agency reallocation wins — distilled into {scope, as_of, count,
+  // client_count, proven, headline, confidence, categories, units, ledger, narration}. Honesty
+  // by construction: weighted_value = value × confidence, units NEVER sum across each other, and
+  // `proven` is EARNED (≥3 events, confidence ≥ 0.6), never inflated by volume — a pile of COUNT
+  // wins headlines at value N but stays unproven at 0.5 confidence. No arg → PORTFOLIO scope (the
+  // full agency hero: dollar/COUNT headline + named by_client attribution + agency narration). A
+  // clientId NARROWS to one client's own wins — and the construction guard withholds the pooled,
+  // agency-only reallocation source from any client-scoped read, so a per-client ledger can never
+  // carry another client's win, dollar, or name. The agency hero banner calls it with no arg.
+  getImpactLedger:    (clientId) => get(`/api/insights/impact${clientId ? `?clientId=${encodeURIComponent(clientId)}` : ''}`),
   // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
   // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
   // flags every client × flow metric whose trailing week has slid out of that client's OWN recent
