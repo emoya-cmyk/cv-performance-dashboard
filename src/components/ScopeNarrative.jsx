@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -25,6 +25,15 @@ import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
  *     its own clientObj.id freely — the server hard-pins a client token regardless.
  *
  * Props:
+ * intel-v14 D1 — "since you last looked": when C4 silently swaps the cards because fresh
+ * data landed for the scope you're sitting on, a same-scope refresh now hands the server a
+ * compact snapshot of what's ON SCREEN (as `since`); the server diffs the fresh read against
+ * it and returns a leak-safe `delta`, which this panel renders as a one-glance strip above
+ * the cards (what moved, good/bad, driver flips, cards in/out of view). A scope CHANGE sends
+ * no `since` — there's nothing comparable to diff — so the strip is strictly session-relative,
+ * never period-over-period. Same payload, same surface on agency and client (tone is cosmetic).
+ *
+ * Props:
  *   input       — { metrics?, dateRange:{start,end}, filters?, compareTo? } live scope.
  *   clientId    — optional; honoured ONLY for an agency token (see above).
  *   enabled     — default true; when false (or no window yet) the panel renders nothing.
@@ -33,6 +42,15 @@ import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
  *   className   — merged onto the section wrapper.
  */
 const trim1 = (n) => String(Math.round(Number(n) * 10) / 10)
+// "Since you last looked: revenue +$2,400." → "revenue +$2,400." (the eyebrow says the rest)
+const stripSincePrefix = (h) => String(h || '').replace(/^since you last looked:\s*/i, '')
+// Compact, leak-safe snapshot of what's ON SCREEN now: [{metric, current}] keyed to the
+// ABSOLUTE scope total per metric (evidence.current — the exact axis scopeDelta diffs, NOT
+// the period-over-period compare). This is what we hand back as `since` on a live refresh.
+const snapOf = (d) =>
+  (d && Array.isArray(d.findings) ? d.findings : [])
+    .map((f) => ({ metric: f && f.metric, current: f && f.evidence ? f.evidence.current : null }))
+    .filter((s) => s.metric && Number.isFinite(Number(s.current)))
 
 function deltaChip(improved) {
   if (improved === true)  return 'text-emerald-700 bg-emerald-50 border-emerald-200'
@@ -95,6 +113,76 @@ function FindingCard({ f }) {
   )
 }
 
+// intel-v14 D1 — the "since you last looked" strip. Turns C4's silent card-swap into a
+// sentence: which metrics moved (and was it good/bad), whether the channel driver behind
+// one flipped, which cards came into / settled out of view. Every field comes from the
+// server's already-leak-safe `delta` (metric names + the global channel axis only; no
+// tenant identity), so it renders identically on the agency and client surfaces. Shown
+// only when there is a real cross-read change (status 'changed').
+function DeltaStrip({ delta }) {
+  const changes  = Array.isArray(delta.changes)  ? delta.changes  : []
+  const appeared = Array.isArray(delta.appeared) ? delta.appeared : []
+  const resolved = Array.isArray(delta.resolved) ? delta.resolved : []
+  const shift    = changes.find((c) => c && c.driverShift) || null
+
+  return (
+    <div className="mt-3 rounded-xl border border-indigo-200/70 border-l-4 border-l-indigo-500 bg-indigo-50/50 px-3.5 py-2.5">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 shrink-0 text-indigo-500"><History size={15} strokeWidth={2.25} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-indigo-600">Since you last looked</div>
+          {delta.headline && (
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">{stripSincePrefix(delta.headline)}</p>
+          )}
+
+          {changes.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {changes.map((c) => {
+                const Dir = directionIcon(c.direction)
+                const pc  = c.pct
+                const pctTxt = pc != null && Number.isFinite(Number(pc))
+                  ? `${Number(pc) > 0 ? '+' : ''}${trim1(pc)}%`
+                  : null
+                return (
+                  <span
+                    key={c.metric}
+                    className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${deltaChip(c.improved)}`}
+                  >
+                    <Dir size={11} strokeWidth={2.5} />
+                    <span className="font-medium">{c.metric_label}</span>
+                    {pctTxt && <span>{pctTxt}</span>}
+                  </span>
+                )
+              })}
+            </div>
+          )}
+
+          {shift && (
+            <div className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-slate-500">
+              <Route size={11} className="text-slate-400" />
+              <span>Now led by</span>
+              <span className="font-medium text-slate-600">{shift.driverShift.to || '—'}</span>
+              {shift.driverShift.from && <span className="text-slate-400">(was {shift.driverShift.from})</span>}
+            </div>
+          )}
+
+          {(appeared.length > 0 || resolved.length > 0) && (
+            <div className="mt-1.5 text-[11px] text-slate-400">
+              {appeared.length > 0 && (
+                <span>{appeared.length} new {appeared.length === 1 ? 'mover' : 'movers'} in view</span>
+              )}
+              {appeared.length > 0 && resolved.length > 0 && <span className="text-slate-300"> · </span>}
+              {resolved.length > 0 && (
+                <span>{resolved.length} {resolved.length === 1 ? 'mover' : 'movers'} settled</span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ScopeNarrative({
   input,
   clientId = null,
@@ -104,6 +192,12 @@ export default function ScopeNarrative({
   className = '',
 }) {
   const seqRef = useRef(0)
+  // intel-v14 D1 — "since you last looked": the snapshot of the read currently on screen
+  // and the scope it belongs to. On a SAME-SCOPE live refresh (a C4 push) we hand snapshotRef
+  // back to the server as `since` so it can diff the fresh read against what the user was
+  // looking at. Cleared on any scope change so a delta never straddles two scopes.
+  const lastKeyRef  = useRef(null)
+  const snapshotRef = useRef(null)
   const [state, setState] = useState({ status: 'idle', data: null, error: null })
 
   const dr        = input && input.dateRange
@@ -138,12 +232,23 @@ export default function ScopeNarrative({
       return
     }
     const myId = ++seqRef.current
+    // intel-v14 D1 — same scope as the last fetch (a live-data refresh) ⇒ diff the fresh
+    // read against what's on screen; a NEW scope ⇒ nothing comparable, send no baseline.
+    // Clearing the baseline on any scope change makes a cross-scope delta impossible
+    // (fail-safe: no baseline ⇒ the server omits `delta` entirely).
+    const sameScope = lastKeyRef.current === inputKey
+    if (!sameScope) snapshotRef.current = null
+    const since = sameScope && snapshotRef.current && snapshotRef.current.length
+      ? snapshotRef.current
+      : undefined
+    lastKeyRef.current = inputKey
     setState((s) => ({ status: 'loading', data: s.data, error: null }))   // keep prior cards visible while refreshing
     const ms = Number.isFinite(debounceMs) ? debounceMs : 400
     const t = setTimeout(async () => {
       try {
-        const data = await api.askScopeInsight(input, clientId)
+        const data = await api.askScopeInsight(input, clientId, since)
         if (myId !== seqRef.current) return                                // a newer scope superseded this one
+        snapshotRef.current = snapOf(data)                                 // this read becomes the next baseline
         setState({ status: 'ready', data, error: null })
       } catch (err) {
         if (myId !== seqRef.current) return
@@ -237,6 +342,8 @@ export default function ScopeNarrative({
           {data.headline && (
             <p className="mt-3 text-[13px] leading-relaxed text-slate-600">{data.headline}</p>
           )}
+
+          {data.delta && data.delta.status === 'changed' && <DeltaStrip delta={data.delta} />}
 
           {findings.length > 0 && (
             <div className="mt-3 space-y-2">
