@@ -20,8 +20,9 @@
 // ============================================================
 
 const { runQuerySpec } = require('../semantic/compile')
-const { CHANNEL_LABELS } = require('../semantic/registry')
+const { CHANNEL_LABELS, metricKeyDeps, channelId } = require('../semantic/registry')
 const { generateScopeInsight } = require('./scopeInsight')
+const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
 // vocabulary (labels/units/polarity) and the semantic registry (queryable).
@@ -176,8 +177,112 @@ async function runScopeInsight(input, query, scope) {
   }
 }
 
+// ── intel-v13 C4 (step b): the CHEAP per-scope data-version probe ────────────
+// runScopeInsight does two grouped reads and a narration; this does ONE tiny
+// aggregate over the SAME scoped rows (GROUP BY metric_key → a handful of
+// partials) and folds them into an opaque token via lib/scopeFreshness. The FE
+// polls this on a live tick, compares the token to its baseline, and only fires
+// the expensive re-narration when it MOVED — so a global SSE broadcast (which
+// carries no tenant id) costs one cheap query here, not a full re-narrate, for
+// the tenants whose data did not actually change.
+//
+// It mirrors the compiler's WHERE exactly so the token tracks PRECISELY the rows
+// the insight would read: same tenancy pin (scope.scopeClientId only, never a
+// body param), same current window, same channel-filter INTERSECT semantics, and
+// the same metric_key restriction (the union of metricKeyDeps over the picked
+// metrics — close_rate → closed_won+raw_leads, roas → revenue+spend, …).
+//
+// LEAK-SAFE: the response is ONLY { version, freshAt }. The token embeds no
+// tenant identity and no peer data (it is a content fingerprint of the caller's
+// already-tenant-scoped rows), and is only ever compared against an earlier
+// probe of the SAME scope.
+const SCOPE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function badScopeRequest(message) {
+  const err = new Error(message)
+  err.status = 400
+  return err
+}
+
+// Resolve the body's channel filters to a concrete, INTERSECTED set of integer
+// channel_ids — exactly as the semantic compiler does (sequential intersect; an
+// unknown channel key is a 400, never a silent empty result). Returns null when
+// no channel filter was supplied (→ no channel_id predicate, i.e. all channels).
+function resolveChannelIds(channelFilters) {
+  let ids = null
+  for (const f of channelFilters) {
+    const these = f.values.map(v => channelId(v))
+    if (these.some(x => x == null)) throw badScopeRequest('filter on channel contains an unknown channel key')
+    ids = ids ? ids.filter(x => these.includes(x)) : these
+  }
+  return ids
+}
+
+async function runScopeFreshness(input, query, scope) {
+  const opts = input && typeof input === 'object' ? input : {}
+  const sc = scope && typeof scope === 'object' ? scope : {}
+
+  // The window is always concrete on this path (the FE only probes once it has a
+  // start+end). Validate strictly — a malformed window is a 400, never a silent
+  // full-table scan.
+  const dr = opts.dateRange
+  const start = dr && dr.start
+  const end = dr && dr.end
+  if (!SCOPE_DATE_RE.test(String(start)) || !SCOPE_DATE_RE.test(String(end))) {
+    throw badScopeRequest('dateRange.start and dateRange.end must be YYYY-MM-DD')
+  }
+  if (start > end) throw badScopeRequest('dateRange.start must be on or before dateRange.end')
+
+  const metrics = pickMetrics(opts.metrics)
+  const clients = clientsForScope(sc.scopeClientId)
+  const channelIds = resolveChannelIds(channelFiltersFrom(opts.filters))
+
+  // The base metric_keys behind the picked metrics — the SAME union the compiler
+  // fetches. pickMetrics never returns empty and every scope metric has deps, so
+  // metricKeys is always non-empty (no degenerate `IN ()`).
+  const metricKeys = [...new Set(metrics.flatMap(metricKeyDeps))]
+
+  // Build the cheap aggregate with the compiler's positional-param helper, in the
+  // compiler's WHERE order: clients → window → channels → metric_keys.
+  const params = []
+  const P = (v) => { params.push(v); return '$' + params.length }
+  const where = []
+  if (clients !== 'all') {
+    where.push(`client_id IN (${clients.map(c => P(c)).join(', ')})`)
+  }
+  where.push(`date >= ${P(start)}`)
+  where.push(`date <= ${P(end)}`)
+  if (channelIds && channelIds.length) {
+    where.push(`channel_id IN (${channelIds.map(id => P(id)).join(', ')})`)
+  }
+  where.push(`metric_key IN (${metricKeys.map(k => P(k)).join(', ')})`)
+
+  // CAST(MAX(date) AS TEXT): fact_metric.date is DATE in Postgres (node-pg hands
+  // back a JS Date) but TEXT in SQLite — the cast yields a portable bare
+  // 'YYYY-MM-DD' in BOTH drivers, which is what scopeFreshness.normDate expects.
+  // COUNT/SUM may arrive as strings under pg; the fold coerces them.
+  const sql =
+    `SELECT metric_key,
+            COUNT(*) AS rows,
+            CAST(MAX(date) AS TEXT) AS max_date,
+            SUM(metric_value) AS sum_value
+       FROM fact_metric
+      WHERE ${where.join('\n        AND ')}
+      GROUP BY metric_key`
+
+  const result = await query(sql, params)
+  const rows = (result && result.rows) || []
+
+  return {
+    version: scopeFreshness.versionFromAggregate(rows),
+    freshAt: new Date().toISOString(),
+  }
+}
+
 module.exports = {
   runScopeInsight,
+  runScopeFreshness,
+  resolveChannelIds,
   SCOPE_METRICS,
   MAX_CHANNELS,
   pickMetrics,

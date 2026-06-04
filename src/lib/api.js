@@ -168,6 +168,46 @@ export async function askScopeInsight(body, clientId) {
   return data
 }
 
+/**
+ * scopeFreshness (intel-v13 C4): the CHEAP per-scope "did MY data change?" probe
+ * that gates the expensive scope-insight re-narration. The live pipe (useLiveStream)
+ * is a single global SSE broadcast with no tenant id — a tick says "SOME tenant
+ * pushed", not "yours did". Re-running the two-query scope-insight on every global
+ * tick would be wasteful and usually meaningless. So on a tick we call THIS instead:
+ * it runs one cheap GROUP BY metric_key aggregate over the SAME tenant-scoped,
+ * date/channel-filtered rows the insight reads and folds it into an opaque
+ * { version, freshAt } token. The caller compares two versions across ticks and
+ * only re-narrates when they differ (scopeFreshness.shouldRefresh on the FE).
+ *
+ * Same scope posture as askScopeInsight(): a client token is pinned server-side to
+ * its own rows; an agency token may pass a clientId to probe one client (or omit it
+ * for the whole book). The token embeds NO tenant identity and carries no peer data
+ * — it is only ever compared within one fixed scope — so it is leak-safe on a
+ * shared/per-client surface. Pass the SAME { metrics?, dateRange, filters? } the
+ * panel is showing; dateRange.start/.end are required (YYYY-MM-DD). Mirrors
+ * askScopeInsight()'s error contract (preserves the server's `.code`/`.status`).
+ */
+export async function scopeFreshness(body, clientId) {
+  const token = getToken()
+  const res = await fetch(`${BASE}/api/ai/ask/scope-freshness`, {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(clientId ? { ...(body || {}), clientId } : (body || {})),
+  })
+  if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err  = new Error(data.error || `API /api/ai/ask/scope-freshness → ${res.status}`)
+    err.status = res.status
+    err.code   = data.code || null
+    throw err
+  }
+  return data
+}
+
 export const api = {
   clients:       ()               => get('/api/clients'),
   createClient:  (body)           => post('/api/clients', body),
@@ -231,6 +271,15 @@ export const api = {
   // it's cheap to call (debounced) on every filter/date change. Same scope posture as
   // ask(); leak-safe on client/shared surfaces (drivers always by channel).
   askScopeInsight,
+  // scopeFreshness (intel-v13 C4): the cheap data-version probe behind live auto-
+  // refresh. On each global live tick a panel calls this with the SAME scope it's
+  // showing; it returns an opaque { version, freshAt } token derived from a one-shot
+  // GROUP BY metric_key aggregate of the tenant-scoped rows. Compare versions across
+  // ticks (scopeFreshness.shouldRefresh) and only re-run askScopeInsight when they
+  // move — so the expensive re-narration fires only when THIS scope's data actually
+  // landed, not on every other tenant's tick. Same scope/leak posture as
+  // askScopeInsight; the token embeds no tenant identity.
+  scopeFreshness,
   // askSuggestions (intel-v6): dynamic opening chips for the Ask box — the biggest
   // period-over-period movers for whatever the caller is allowed to see, each a
   // click-to-run question. Same scope rules as ask(): a client token only ever gets

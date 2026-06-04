@@ -71,7 +71,7 @@ const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEm
 const { narrateEmphasisControlHealth } = require('../lib/briefEmphasisControlHealth')
 const { narrateEmphasisControlTuning } = require('../lib/briefEmphasisControlTuning')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
-const { runScopeInsight } = require('../lib/scopeNarrative')
+const { runScopeInsight, runScopeFreshness } = require('../lib/scopeNarrative')
 
 const router = express.Router()
 
@@ -864,6 +864,34 @@ router.post('/ask/scope-insight', async (req, res) => {
     if (err && err.status === 400) return res.status(400).json({ error: err.message })
     console.error('[ai] POST ask/scope-insight error', err.message)
     res.status(500).json({ error: 'Failed to regenerate scoped insight' })
+  }
+})
+
+// POST /api/ai/ask/scope-freshness — the CHEAP live-refresh gate for C4. The UI
+// posts the SAME live scope it shows (dateRange, optional metrics subset, optional
+// channel filters); this runs ONE tiny aggregate over fact_metric and returns an
+// opaque per-scope data-version token { version, freshAt } — NOT a narration. The
+// FE polls this on a global live tick, compares the token to its baseline, and
+// only re-fires the (expensive) scope-insight regen when the token MOVED, so an
+// SSE broadcast that carries no tenant id costs one cheap query per sitting
+// dashboard, not a full re-narrate. Tenancy is pinned by resolveAskScope exactly
+// as scope-insight (client token → own client_id; agency → one clientId or whole
+// book; the body can never widen scope), and the token embeds no tenant identity
+// or peer data. A missing/invalid dateRange or unknown channel key surfaces as 400.
+router.post('/ask/scope-freshness', async (req, res) => {
+  try {
+    const scope = await resolveAskScope(req)
+    if (scope.error) return res.status(scope.status).json({ error: scope.error })
+
+    const result = await runScopeFreshness(req.body || {}, query, {
+      scopeClientId: scope.scopeClientId,
+      role: req.user?.role || null,
+    })
+    res.json(result)
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ error: err.message })
+    console.error('[ai] POST ask/scope-freshness error', err.message)
+    res.status(500).json({ error: 'Failed to probe scope freshness' })
   }
 })
 
