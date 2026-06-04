@@ -1,17 +1,43 @@
 import { useState, useEffect, useRef } from 'react'
-import { Zap, RefreshCw, CheckCircle, AlertCircle, Wifi } from 'lucide-react'
-import { subscribeRealtime, USE_API } from '@/lib/api'
-import { fmtN } from '@/lib/utils'
+import { RefreshCw, AlertCircle, Wifi } from 'lucide-react'
+import { USE_API } from '@/lib/api'
+import { useLiveStream, LIVE_EVENTS } from '@/lib/useLiveStream'
 
 const MAX_EVENTS = 12
 
-// Mock events shown when no API is connected
+// ============================================================================
+// components/ActivityFeed.jsx — the live ticker of sync activity (intel-v13 C2).
+//
+// PRIOR BUG (now fixed): this fed off api.subscribeRealtime, which listened for a
+// `refresh` event the backend NEVER emits — so in API mode the feed was always
+// empty. Worse, its handler read payload.clientId / payload.channel off the wire;
+// the SSE stream is a single broadcast, so that payload could carry ANOTHER
+// tenant's id — a peer-id leak visible on an agency screen.
+//
+// FIX: subscribe via useLiveStream (intel-v13 C1), which surfaces ONLY the event
+// TYPE name + the browser-clock instant it arrived — never ev.data. Each real event
+// (ghl_event / supermetrics_sync / hubspot_event) becomes a generic source-level
+// row ("GHL CRM · activity synced") with NO client identity at all. So the feed is
+// leak-proof BY CONSTRUCTION: there is simply no tenant data in scope to render.
+// ============================================================================
+
+// Map each broadcast event TYPE → a human, identity-free row descriptor. Keyed by
+// the same LIVE_EVENTS names the hook binds, so a renamed event can't silently go
+// unlabeled. No per-client lookup exists here anymore — the hook hands us no id.
+const EVENT_META = {
+  ghl_event:         { label: 'GHL CRM',      detail: 'New CRM activity synced',  dot: 'bg-purple-500' },
+  supermetrics_sync: { label: 'Ad platforms', detail: 'Fresh ad metrics synced',  dot: 'bg-blue-500'   },
+  hubspot_event:     { label: 'HubSpot',      detail: 'New CRM activity synced',  dot: 'bg-orange-500' },
+}
+const FALLBACK_META = { label: 'Data source', detail: 'Activity synced', dot: 'bg-slate-300' }
+
+// Mock events shown when no API is connected — static demo data, no live wire.
 const MOCK_EVENTS = [
-  { id: 1, type: 'sync_ok',   channel: 'google_ads', client: 'Generation Floors', detail: '34 leads imported',    ts: new Date(Date.now() - 3   * 60000) },
-  { id: 2, type: 'sync_ok',   channel: 'gbp',        client: 'Generation Floors', detail: '1.2K views synced',   ts: new Date(Date.now() - 11  * 60000) },
-  { id: 3, type: 'sync_ok',   channel: 'ghl',        client: 'Generation Floors', detail: '7 opportunities',     ts: new Date(Date.now() - 28  * 60000) },
-  { id: 4, type: 'sync_ok',   channel: 'meta',       client: 'All Clients',       detail: '52 leads imported',   ts: new Date(Date.now() - 64  * 60000) },
-  { id: 5, type: 'live',      channel: '',            client: '',                  detail: 'Dashboard connected', ts: new Date(Date.now() - 120 * 60000) },
+  { id: 1, type: 'sync_ok', label: 'Google Ads',  detail: '34 leads imported',   dot: 'bg-blue-500',    ts: new Date(Date.now() - 3   * 60000) },
+  { id: 2, type: 'sync_ok', label: 'Google Business', detail: '1.2K views synced', dot: 'bg-emerald-500', ts: new Date(Date.now() - 11  * 60000) },
+  { id: 3, type: 'sync_ok', label: 'GHL CRM',     detail: '7 opportunities',     dot: 'bg-purple-500',  ts: new Date(Date.now() - 28  * 60000) },
+  { id: 4, type: 'sync_ok', label: 'Meta Ads',    detail: '52 leads imported',   dot: 'bg-indigo-500',  ts: new Date(Date.now() - 64  * 60000) },
+  { id: 5, type: 'live',    label: '',            detail: 'Dashboard connected', dot: '',               ts: new Date(Date.now() - 120 * 60000) },
 ]
 
 function timeAgo(ts) {
@@ -19,22 +45,6 @@ function timeAgo(ts) {
   if (s < 60)   return `${s}s ago`
   if (s < 3600) return `${Math.round(s / 60)}m ago`
   return `${Math.round(s / 3600)}h ago`
-}
-
-const CHANNEL_LABELS = {
-  google_ads: 'Google Ads',
-  meta:       'Meta Ads',
-  ghl:        'GHL CRM',
-  gbp:        'Google Business',
-  lsa:        'LSA',
-}
-
-const CHANNEL_DOTS = {
-  google_ads: 'bg-blue-500',
-  meta:       'bg-indigo-500',
-  ghl:        'bg-purple-500',
-  gbp:        'bg-emerald-500',
-  lsa:        'bg-amber-500',
 }
 
 function EventRow({ ev }) {
@@ -45,19 +55,19 @@ function EventRow({ ev }) {
     <div className="flex items-start gap-3 py-2.5 border-b border-slate-50 last:border-0 animate-fade-in">
       {/* Icon */}
       <div className="mt-0.5 shrink-0">
-        {isError  && <AlertCircle  className="w-3.5 h-3.5 text-rose-400" />}
-        {isLive   && <Wifi         className="w-3.5 h-3.5 text-emerald-400" />}
+        {isError  && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
+        {isLive   && <Wifi        className="w-3.5 h-3.5 text-emerald-400" />}
         {!isError && !isLive && (
-          <span className={`w-2 h-2 rounded-full block mt-0.5 ${CHANNEL_DOTS[ev.channel] || 'bg-slate-300'}`} />
+          <span className={`w-2 h-2 rounded-full block mt-0.5 ${ev.dot || 'bg-slate-300'}`} />
         )}
       </div>
 
-      {/* Content */}
+      {/* Content — a source-level label (never a client name) + a neutral detail line */}
       <div className="flex-1 min-w-0">
         <p className="text-xs font-semibold text-slate-700 leading-snug">
-          {ev.client && <span className="text-slate-900">{ev.client}</span>}
-          {ev.channel && <span className="text-slate-400"> · {CHANNEL_LABELS[ev.channel] || ev.channel}</span>}
-          {isLive && <span className="text-slate-600">Live dashboard connected</span>}
+          {isLive
+            ? <span className="text-slate-600">Live dashboard connected</span>
+            : <span className="text-slate-900">{ev.label}</span>}
         </p>
         <p className="text-[10px] text-slate-400 mt-0.5">{ev.detail}</p>
       </div>
@@ -71,47 +81,37 @@ function EventRow({ ev }) {
 }
 
 /**
- * ActivityFeed — live ticker of sync events and dashboard refreshes.
- * In API mode: captures SSE refresh events and re-renders with timestamps.
- * In mock mode: shows a set of representative events.
+ * ActivityFeed — live ticker of sync events.
+ * In API mode: subscribes to the SSE stream (useLiveStream) and prepends one
+ *   identity-free row per real event. NEVER reads the event payload, so no tenant
+ *   data can surface — safe on any screen.
+ * In mock mode: shows a set of representative demo events.
+ *
+ * Note: this component intentionally takes no client list anymore — the live feed
+ * carries no client identity, so there is nothing to resolve a name against.
  */
-export default function ActivityFeed({ clients = [] }) {
+export default function ActivityFeed() {
   const [events, setEvents] = useState(USE_API ? [] : MOCK_EVENTS)
   const [ticker, setTicker] = useState(0)
-  const idRef      = useRef(100)
-  const clientsRef = useRef(clients)
+  const idRef = useRef(100)
 
-  // Keep ref in sync so SSE handler always sees the latest client list
-  useEffect(() => { clientsRef.current = clients }, [clients])
-
-  // Tick every 15s to refresh "X ago" labels
+  // Tick every 15s to refresh the "X ago" labels.
   useEffect(() => {
     const id = setInterval(() => setTicker(t => t + 1), 15_000)
     return () => clearInterval(id)
   }, [])
 
-  // Subscribe to SSE and add an event each time data refreshes
-  useEffect(() => {
-    if (!USE_API) return
-    return subscribeRealtime((payload) => {
-      const channel   = payload?.channel || ''
-      const clientObj = payload?.clientId
-        ? clientsRef.current.find(c => c.id === payload.clientId)
-        : null
-      const client = clientObj?.name || (payload?.clientId ? `Client ${payload.clientId.slice(0, 6)}` : 'All Clients')
+  // Subscribe to the live stream — one row per real event, payload never read.
+  useLiveStream({
+    enabled: USE_API,
+    onActivity: ({ name, at }) => {
+      const meta = EVENT_META[name] || FALLBACK_META
       setEvents(prev => [
-        {
-          id:      ++idRef.current,
-          type:    'sync_ok',
-          channel,
-          client,
-          detail:  'Sync complete — dashboard updated',
-          ts:      new Date(),
-        },
+        { id: ++idRef.current, type: 'sync_ok', label: meta.label, detail: meta.detail, dot: meta.dot, ts: new Date(at) },
         ...prev,
       ].slice(0, MAX_EVENTS))
-    })
-  }, [])
+    },
+  })
 
   return (
     <div className="h-full flex flex-col">

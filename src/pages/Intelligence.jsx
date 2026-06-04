@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Brain, RefreshCw, Loader2, AlertTriangle, ShieldCheck, Check, Eye,
   Clock, CheckCircle2, Inbox, Plug, ChevronDown, ChevronUp, Target, SlidersHorizontal,
@@ -17,6 +17,8 @@ import {
 } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'
 import ImpactBanner from '@/components/ImpactBanner'
+import StreamStatus from '@/components/StreamStatus'
+import { useLiveStream } from '@/lib/useLiveStream'
 
 /**
  * Intelligence — the agency-wide window into the autonomous analyst.
@@ -94,6 +96,20 @@ export default function Intelligence() {
 
   useEffect(() => { if (USE_API) load() }, [load])
 
+  // Live stream (intel-v13 C2): the SSE pipe drives the header's StreamStatus badge
+  // and keeps the feed self-refreshing. We NEVER read the event payload (it can carry
+  // another tenant's id) — an event is only a "something changed" pulse. On activity we
+  // debounce one quiet reload so a burst of webhooks collapses into a single refresh; the
+  // nightly engine still owns the heavy sweeps. Gated on USE_API like every read here.
+  const refetchTimer = useRef(null)
+  const onLiveActivity = useCallback(() => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current)
+    refetchTimer.current = setTimeout(() => { load() }, 4000)
+  }, [load])
+  const { connected: liveConnected, lastEventAt: liveLastEventAt } =
+    useLiveStream({ enabled: USE_API, onActivity: onLiveActivity })
+  useEffect(() => () => { if (refetchTimer.current) clearTimeout(refetchTimer.current) }, [])
+
   async function runSweep() {
     setRunning(true); setError(null)
     try {
@@ -168,7 +184,7 @@ export default function Intelligence() {
 
   return (
     <div className="space-y-4">
-      <Hero running={running} onRun={runSweep} />
+      <Hero running={running} onRun={runSweep} connected={liveConnected} lastEventAt={liveLastEventAt} />
 
       {/* influence hero (intel-v12 B3) — the honest, weighted tally of what the autonomous
           analyst actually MOVED: leads recovered, jobs protected, dollars defended (risk-
@@ -515,7 +531,7 @@ export default function Intelligence() {
 }
 
 /* ── hero ───────────────────────────────────────────────────────────────────── */
-function Hero({ running, onRun, disabled }) {
+function Hero({ running, onRun, disabled, connected, lastEventAt }) {
   return (
     <div className="flex items-start gap-3">
       <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center shrink-0">
@@ -528,15 +544,19 @@ function Hero({ running, onRun, disabled }) {
         </p>
       </div>
       {!disabled && (
-        <button
-          onClick={onRun}
-          disabled={running}
-          className="shrink-0 inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-100 rounded-xl px-3 py-2 transition disabled:opacity-50"
-          title="Re-run the engine across every client right now"
-        >
-          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-          {running ? 'Sweeping…' : 'Run sweep'}
-        </button>
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Live-stream verdict (intel-v13 C2): transport + recency, age-only and leak-safe. */}
+          <StreamStatus connected={connected} lastEventAt={lastEventAt} />
+          <button
+            onClick={onRun}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-100 rounded-xl px-3 py-2 transition disabled:opacity-50"
+            title="Re-run the engine across every client right now"
+          >
+            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {running ? 'Sweeping…' : 'Run sweep'}
+          </button>
+        </div>
       )}
     </div>
   )

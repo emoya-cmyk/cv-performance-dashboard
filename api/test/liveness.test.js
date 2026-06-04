@@ -4,8 +4,8 @@
 // test/liveness.test.js — the badge state machine (intel-v13 C2, step a).
 //
 // lib/liveness.js folds useLiveStream's two signals (connected + lastEventAt)
-// into one presentational verdict the shared <LiveBadge> renders on both the
-// agency and client surfaces. It lives in the FE tree as ESM; node --test runs
+// into one presentational verdict the shared <StreamStatus> badge renders on both
+// the agency and client surfaces. It lives in the FE tree as ESM; node --test runs
 // from api/ in CommonJS, so we reach it (and the C1 freshness thresholds it
 // composes) via a dynamic import in a `before` hook — same one-source-of-truth
 // pattern as freshness.test.js.

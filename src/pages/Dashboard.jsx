@@ -452,7 +452,7 @@ export default function Dashboard() {
               <ChannelBreakdown stats={stats} />
             </div>
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm h-64 overflow-hidden">
-              <ActivityFeed clients={store.clients || []} />
+              <ActivityFeed />
             </div>
           </div>
 

@@ -496,13 +496,10 @@ export const api = {
   runInsights:        (clientId) => post(clientId ? `/api/insights/${clientId}/run` : '/api/insights/run', {}),
 }
 
-export function subscribeRealtime(onRefresh) {
-  const token = getToken()
-  const url   = `${BASE}/api/realtime${token ? `?token=${token}` : ''}`
-  const es    = new EventSource(url)
-  es.addEventListener('refresh', onRefresh)
-  es.onerror = () => {}
-  return () => es.close()
-}
+// NOTE: the old subscribeRealtime() export was removed in intel-v13 C2. It opened an
+// EventSource and listened for a `refresh` event the backend never emits (so it was
+// always dead), and its handler read ev.data off a single broadcast socket — a peer-id
+// leak risk. The live wire now flows through useLiveStream (C1), which surfaces only the
+// event TYPE + arrival instant, never the payload. See src/lib/useLiveStream.js.
 
 export const USE_API = Boolean(import.meta.env.VITE_API_URL)

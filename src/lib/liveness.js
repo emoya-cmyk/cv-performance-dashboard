@@ -7,7 +7,9 @@
 //
 // A badge needs ONE composed verdict. This pure function folds those two signals
 // (recency via classifyFreshness, C1) into a single presentational shape the
-// shared <LiveBadge> renders on BOTH the agency and client surfaces. Keeping it
+// shared <StreamStatus> badge renders on BOTH the agency and client surfaces (it
+// is a DIFFERENT component from the older fetch-refresh <LiveBadge> in TopBar).
+// Keeping it
 // pure means it unit-tests in isolation under the API gate (dynamic import from
 // api/test/) and imports natively into the FE — one source of truth, no drift.
 //

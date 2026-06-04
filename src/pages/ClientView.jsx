@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
 import {
@@ -20,6 +20,8 @@ import CampaignList from '@/components/CampaignList'
 import MonthlyTrend from '@/components/MonthlyTrend'
 import AskBox from '@/components/AskBox'
 import DriverBreakdown from '@/components/DriverBreakdown'
+import StreamStatus from '@/components/StreamStatus'
+import { useLiveStream } from '@/lib/useLiveStream'
 import { useAgency } from '@/lib/agencySettings'
 
 const PERIOD_OPTS = [
@@ -1428,8 +1430,12 @@ export default function ClientView({ store }) {
 
   useEffect(() => { const t = setTimeout(() => setMounted(true), 60); return () => clearTimeout(t) }, [])
 
-  // Fetch goals, updates, and connection status for this client (API mode only)
-  useEffect(() => {
+  // Fetch goals, updates, connection status, and the autonomous-analyst synthesis for
+  // this client (API mode only). Extracted into a callable load() — keyed on clientObj.id
+  // — so the live-stream nudge below can re-run it without duplicating the body. Every
+  // call here is tenant-scoped server-side (the client's JWT bounds it to its own id), so
+  // a refetch can never pull a peer's data; the whole load is leak-proof by construction.
+  const load = useCallback(() => {
     if (!USE_API || !clientObj?.id) return
     const thisMonth = new Date().toISOString().slice(0, 7)
     api.getGoal(clientObj.id, thisMonth)
@@ -1479,6 +1485,27 @@ export default function ClientView({ store }) {
       .then(b => setBrief(b || null))
       .catch(() => setBrief(null))
   }, [clientObj?.id])
+
+  // Initial fetch + refetch whenever the selected client changes.
+  useEffect(() => { load() }, [load])
+
+  // ── Live data pipe (intel-v13 C2) ─────────────────────────────────────────
+  // Subscribe to the SSE stream and refetch on real activity so this dashboard
+  // reflects new leads/jobs without a manual reload. The hook NEVER reads ev.data
+  // (only the event-type name + browser-clock instant), the socket is tenant-scoped
+  // server-side by the client's JWT, and the refetch above is itself leak-proof — so
+  // nothing here can surface a peer's data. A burst of webhooks is collapsed into a
+  // single quiet reload via a 4s trailing debounce.
+  const refetchTimer = useRef(null)
+  const onLiveActivity = useCallback(() => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current)
+    refetchTimer.current = setTimeout(() => { load() }, 4000)
+  }, [load])
+  const { connected: liveConnected, lastEventAt: liveLastEventAt } = useLiveStream({
+    enabled: USE_API,
+    onActivity: onLiveActivity,
+  })
+  useEffect(() => () => { if (refetchTimer.current) clearTimeout(refetchTimer.current) }, [])
 
   const revenue = stats.total_revenue || 0
   const jobs    = stats.total_closed  || 0
@@ -1582,6 +1609,9 @@ export default function ClientView({ store }) {
                   </Link>
                 </>
               )}
+              {/* Live-stream verdict (intel-v13 C2): SSE transport + data recency, age-only
+                  and leak-safe by construction. Hidden in demo mode (no API → no socket). */}
+              {USE_API && <StreamStatus connected={liveConnected} lastEventAt={liveLastEventAt} showDetail={false} />}
               <div className="relative">
                 <select
                   value={selectedPeriod}
