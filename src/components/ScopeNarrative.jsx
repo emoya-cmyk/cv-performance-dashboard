@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split, Activity, Minus } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split, Activity, Minus, Gauge, Hourglass, Equal } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -422,6 +422,46 @@ function MaterialityChip({ materiality, tone }) {
   )
 }
 
+// intel-v14 D10 — the CURVATURE temper. D8 read the projection basket's polarity and D9 its magnitude;
+// D10 reads whether the pace that JUSTIFIED the straight-line nowcast is still in force. The server
+// re-reads each projection's own run, measures the step magnitudes in drift-free cents, and compares an
+// early-half pace to a late-half pace, attaching `nowcast.momentum` (status 'assessed') whenever ≥1 run
+// carries ≥3 reads — even on a single-metric or too-young-to-grade session (it needs only the projection
+// vector, like coherence/materiality). It NEVER touches the number: 'accelerating' flags that the
+// straight line is a FLOOR (the move is gaining steam, so it may understate), 'decelerating' that it is a
+// CEILING (the move is flattening, so it may overstate), 'steady' that the pace held and the line is
+// well-founded. The three hues are deliberately non-alarming — curvature is a reliability qualifier, not
+// a good/bad verdict (a flattening GAIN and an easing ADVERSE move are both 'decelerating'). Every field
+// is from the already-leak-safe `momentum` (metric labels + direction/shape words + derived pace ratios +
+// small counts; no tenant identity), so it renders identically on agency and client — `tone` re-voices
+// only the pill label, never the honest note line.
+const MOMENTUM = {
+  accelerating: { Icon: Gauge,     chip: 'text-indigo-700 bg-indigo-50 border-indigo-200', note: 'text-indigo-600', agency: 'Accelerating', client: 'Speeding up' },
+  decelerating: { Icon: Hourglass, chip: 'text-cyan-700 bg-cyan-50 border-cyan-200',       note: 'text-cyan-600',   agency: 'Flattening',    client: 'Leveling off' },
+  steady:       { Icon: Equal,     chip: 'text-slate-600 bg-slate-50 border-slate-200',     note: 'text-slate-500',  agency: 'Steady',        client: 'Holding' },
+}
+
+// The at-a-glance momentum pill for the nowcast header, sitting beside the materiality chip. Shape-
+// colored (accelerating=indigo, decelerating=cyan, steady=slate) with the matching icon; agency reads
+// "Accelerating"/"Flattening"/"Steady", client the plainer "Speeding up"/"Leveling off"/"Holding". Hover
+// reveals the full honest note on either surface. Renders nothing unless the server measured ≥1
+// curvature-bearing run (status 'assessed'). Keys on `shape`, not a level.
+function MomentumChip({ momentum, tone }) {
+  if (!momentum || momentum.status !== 'assessed') return null
+  const m = MOMENTUM[momentum.shape]
+  if (!m) return null
+  const Icon = m.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${m.chip}`}
+      title={momentum.note || undefined}
+    >
+      <Icon size={10} strokeWidth={2.5} />
+      {tone === 'client' ? m.client : m.agency}
+    </span>
+  )
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -512,6 +552,16 @@ function NowcastStrip({ nowcast, tone }) {
     nowcast.materiality && nowcast.materiality.status === 'assessed' ? nowcast.materiality : null
   const mt = materiality ? MATERIALITY[materiality.level] || null : null
   const MatIcon = mt ? mt.Icon : null
+  // intel-v14 D10 — the run-curvature temper. Present only when the server could measure ≥1 projection's
+  // own run (status 'assessed' ⇒ ≥3 reads in that run). Absent ⇒ chip + note simply omitted, byte-identical
+  // to a pre-D10 strip. Like D7/D8/D9 it attaches independently of the accuracy ladder AND of coherence/
+  // materiality — so it speaks on the single-metric session, reading whether the pace that justified the
+  // straight-line nowcast is still in force (a floor when accelerating, a ceiling when flattening). Keys on
+  // `shape`, not a level; only 'assessed' reaches here.
+  const momentum =
+    nowcast.momentum && nowcast.momentum.status === 'assessed' ? nowcast.momentum : null
+  const mo = momentum ? MOMENTUM[momentum.shape] || null : null
+  const MoIcon = mo ? mo.Icon : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -536,6 +586,7 @@ function NowcastStrip({ nowcast, tone }) {
             {corroboration && <CorroborationChip corroboration={corroboration} tone={tone} />}
             {coherence && <CoherenceChip coherence={coherence} tone={tone} />}
             {materiality && <MaterialityChip materiality={materiality} tone={tone} />}
+            {momentum && <MomentumChip momentum={momentum} tone={tone} />}
           </div>
           {voice ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
@@ -569,6 +620,12 @@ function NowcastStrip({ nowcast, tone }) {
             <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${mt.note}`}>
               {MatIcon && <MatIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
               <span>{materiality.note}</span>
+            </p>
+          )}
+          {momentum && momentum.note && mo && (
+            <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${mo.note}`}>
+              {MoIcon && <MoIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
+              <span>{momentum.note}</span>
             </p>
           )}
 
