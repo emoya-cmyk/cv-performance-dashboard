@@ -3399,6 +3399,9 @@ module.exports = {
   titleFor, templateDetailFor, monthProjections,
   // narration + advice + persistence + orchestration
   narrateFinding, recommendedAction, isAdverse, loadWeeklySeries, persistBaselines,
+  // the pure advice PLAYS + urgency lane (reused by scopeInsight.js to compose a
+  // window-correct scoped recommendation without recommendedAction's "this week" voice)
+  leverFor, keepFor, urgencyFor,
   upsertInsight, expireStale, runInsightsForClient,
   // self-tuning loop (grade past projections → learn calibration)
   loadMonthTotals, snapshotForecast, gradeDueForecasts,
