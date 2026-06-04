@@ -15,6 +15,7 @@ const queryRouter        = require('./routes/query')
 const reportsRouter      = require('./routes/reports')
 const connectionsRouter  = require('./routes/connections')
 const { router: syncRouter } = require('./routes/sync')
+const { router: cronRouter } = require('./routes/cron')
 const { router: sharesRouter, publicSnapshot } = require('./routes/shares')
 const campaignsRouter    = require('./routes/campaigns')
 const agencyRouter       = require('./routes/agency')
@@ -155,6 +156,14 @@ app.get('/api/unsubscribe/:token', async (req, res) => {
 app.use('/api/webhooks/ghl',          ghlRouter)
 app.use('/api/webhooks/hubspot',      hubspotRouter)
 app.use('/api/webhooks/supermetrics', supermetricsRouter)
+
+// External-cron heartbeat — mounted OUTSIDE requireAuth (a cron service carries
+// no user JWT). It self-authenticates with its own constant-time CRON_SECRET
+// gate (routes/cron.js → cronAuth), exactly like the webhook receivers above
+// self-authenticate with HMAC. This is the always-on substitute that keeps the
+// scheduler's idempotent jobs (sync/watchdog/insights) firing when Render's free
+// tier has slept the in-process node-cron.
+app.use('/api/cron', cronRouter)
 
 // ── Static frontend (production build) ───────────────────────────────────────
 // Serve the Vite build so the API and UI are on the same origin in production.
