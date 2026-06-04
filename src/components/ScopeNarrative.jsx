@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split, Activity, Minus, Gauge, Hourglass, Equal } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split, Activity, Minus, Gauge, Hourglass, Equal, Spline, Waves, Zap } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -462,6 +462,45 @@ function MomentumChip({ momentum, tone }) {
   )
 }
 
+// intel-v14 D11 — the run-RHYTHM temper. D10 read whether the projection's pace is BENDING; D11 reads
+// whether its steps are EVENLY SIZED or LURCHING. The server measures each run's step-to-step dispersion
+// (coefficient of variation in drift-free cents) and attaches `nowcast.stability` (status 'assessed')
+// whenever ≥1 run carries ≥3 steps — even on a fresh, never-backtested session (it is intrinsic to the
+// current run, needing no track record, unlike the accuracy ladder). It NEVER touches the number: 'smooth'
+// says the steps are evenly sized so the single projected figure rests on firm footing, 'choppy' that they
+// lurch so the figure is a rough center not a precise target, 'variable' the in-between. Jitter is
+// direction-NEUTRAL — a smooth climb and a smooth decline are equally well-grounded — so unlike momentum
+// the three hues carry no good/bad charge: smooth=emerald (firm), variable=slate (neutral), choppy=amber
+// (read loosely). Every field is from the already-leak-safe `stability` (metric labels + level words +
+// derived dispersion + small counts; no tenant identity), so it renders identically on agency and client —
+// `tone` re-voices only the pill label, never the honest note line. Keys on `level`, like materiality.
+const STABILITY = {
+  smooth:   { Icon: Spline, chip: 'text-emerald-700 bg-emerald-50 border-emerald-200', note: 'text-emerald-600', agency: 'Smooth',   client: 'Steady' },
+  variable: { Icon: Waves,  chip: 'text-slate-600 bg-slate-50 border-slate-200',       note: 'text-slate-500',   agency: 'Variable', client: 'Uneven' },
+  choppy:   { Icon: Zap,    chip: 'text-amber-700 bg-amber-50 border-amber-200',       note: 'text-amber-600',   agency: 'Choppy',   client: 'Jumpy' },
+}
+
+// The at-a-glance stability pill for the nowcast header, sitting beside the momentum chip. Level-colored
+// (smooth=emerald, variable=slate, choppy=amber) with the matching icon; agency reads "Smooth"/"Variable"/
+// "Choppy", client the plainer "Steady"/"Uneven"/"Jumpy". Hover reveals the full honest note on either
+// surface. Renders nothing unless the server measured ≥1 dispersion-bearing run (status 'assessed'). Keys
+// on `level`, not a shape.
+function StabilityChip({ stability, tone }) {
+  if (!stability || stability.status !== 'assessed') return null
+  const s = STABILITY[stability.level]
+  if (!s) return null
+  const Icon = s.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${s.chip}`}
+      title={stability.note || undefined}
+    >
+      <Icon size={10} strokeWidth={2.5} />
+      {tone === 'client' ? s.client : s.agency}
+    </span>
+  )
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -562,6 +601,17 @@ function NowcastStrip({ nowcast, tone }) {
     nowcast.momentum && nowcast.momentum.status === 'assessed' ? nowcast.momentum : null
   const mo = momentum ? MOMENTUM[momentum.shape] || null : null
   const MoIcon = mo ? mo.Icon : null
+  // intel-v14 D11 — the run-rhythm temper. Present only when the server could measure ≥1 projection's
+  // step dispersion (status 'assessed' ⇒ ≥4 reads / ≥3 steps in that run). Absent ⇒ chip + note simply
+  // omitted, byte-identical to a pre-D11 strip. Like its D7–D10 siblings it attaches independently of the
+  // accuracy ladder — and uniquely needs NO track record (it is intrinsic to the current run), so it speaks
+  // on a brand-new session, reading whether the steps are evenly sized (the projected figure is on firm
+  // footing) or lurching (read it as a rough center). Keys on `level` — 'smooth'|'variable'|'choppy'; only
+  // 'assessed' reaches here.
+  const stability =
+    nowcast.stability && nowcast.stability.status === 'assessed' ? nowcast.stability : null
+  const st = stability ? STABILITY[stability.level] || null : null
+  const StIcon = st ? st.Icon : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -587,6 +637,7 @@ function NowcastStrip({ nowcast, tone }) {
             {coherence && <CoherenceChip coherence={coherence} tone={tone} />}
             {materiality && <MaterialityChip materiality={materiality} tone={tone} />}
             {momentum && <MomentumChip momentum={momentum} tone={tone} />}
+            {stability && <StabilityChip stability={stability} tone={tone} />}
           </div>
           {voice ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
@@ -626,6 +677,12 @@ function NowcastStrip({ nowcast, tone }) {
             <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${mo.note}`}>
               {MoIcon && <MoIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
               <span>{momentum.note}</span>
+            </p>
+          )}
+          {stability && stability.note && st && (
+            <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${st.note}`}>
+              {StIcon && <StIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
+              <span>{stability.note}</span>
             </p>
           )}
 
