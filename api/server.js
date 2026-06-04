@@ -26,6 +26,7 @@ const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
+const { createRateLimiter } = require('./middleware/rateLimit')
 const { startScheduler } = require('./scheduler')
 const { migrate, query } = require('./db')
 
@@ -36,6 +37,11 @@ const PORT = process.env.PORT || 3001
 // the only reliable way to strip it (Express sets it at send time, after any
 // removeHeader() in middleware would have run).
 app.disable('x-powered-by')
+
+// Behind Render's TLS proxy the real client IP is in X-Forwarded-For; trust the
+// single proxy hop so req.ip (used as the rate-limit key) is the caller, not the
+// load balancer. One hop only — never `true` (which would trust a spoofed XFF).
+app.set('trust proxy', 1)
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 // Security headers first so EVERY response (API JSON, SPA bundle, 404s) carries
@@ -68,6 +74,15 @@ app.use((req, res, next) => {
 app.get('/health', (_, res) => res.json({ ok: true, ts: new Date().toISOString() }))
 
 // Auth — public (no token needed)
+// Brute-force throttle on login: per (IP + email), 20 tries / 15 min by default
+// (override via LOGIN_RATE_MAX). CORS absorbs the preflight OPTIONS, so only the
+// real POST is counted. Mounted before the auth router so it guards the route.
+app.use('/api/auth/login', createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.LOGIN_RATE_MAX) || 20,
+  keyFn: (req) => `${req.ip}:${(req.body && req.body.email ? String(req.body.email) : '').toLowerCase()}`,
+  message: 'Too many login attempts. Please wait a few minutes and try again.',
+}))
 app.use('/api/auth', authRouter)
 
 // Google OAuth2 consent flow — public (browser redirect, no JWT)
