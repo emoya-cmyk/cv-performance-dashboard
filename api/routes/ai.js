@@ -71,6 +71,7 @@ const { applyEmphasisControl, narrateEmphasisControl } = require('../lib/briefEm
 const { narrateEmphasisControlHealth } = require('../lib/briefEmphasisControlHealth')
 const { narrateEmphasisControlTuning } = require('../lib/briefEmphasisControlTuning')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
+const { runScopeInsight } = require('../lib/scopeNarrative')
 
 const router = express.Router()
 
@@ -836,6 +837,33 @@ router.get('/ask/suggestions', async (req, res) => {
   } catch (err) {
     console.error('[ai] GET ask/suggestions error', err.message)
     res.json({ suggestions: [], window_label: 'vs the prior week' })  // soft-degrade, never 5xx
+  }
+})
+
+// POST /api/ai/ask/scope-insight — the debounced regen endpoint. The client UI
+// posts the live scope (dateRange, optional metrics subset, optional channel
+// filters, optional compareTo) whenever a filter or date changes; this returns a
+// freshly narrated insight (headline + findings + recommendations) for that exact
+// scope. Pure DB aggregation + the deterministic narrator, NO LLM, so it never
+// needs ANTHROPIC_API_KEY. Tenancy is pinned by resolveAskScope — a client token
+// is locked to its own client_id, an agency token may target one client via
+// clientId or default to the whole portfolio; the body can never widen scope. A
+// malformed spec (e.g. a missing/invalid dateRange) surfaces as 400 from the
+// compiler's QuerySpecError; the 403/404 scope boundary is honoured as elsewhere.
+router.post('/ask/scope-insight', async (req, res) => {
+  try {
+    const scope = await resolveAskScope(req)
+    if (scope.error) return res.status(scope.status).json({ error: scope.error })
+
+    const result = await runScopeInsight(req.body || {}, query, {
+      scopeClientId: scope.scopeClientId,
+      role: req.user?.role || null,
+    })
+    res.json(result)
+  } catch (err) {
+    if (err && err.status === 400) return res.status(400).json({ error: err.message })
+    console.error('[ai] POST ask/scope-insight error', err.message)
+    res.status(500).json({ error: 'Failed to regenerate scoped insight' })
   }
 })
 
