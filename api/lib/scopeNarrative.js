@@ -27,6 +27,7 @@ const { detectScopeTrends } = require('./scopeTrend')
 const { projectScopeTrend } = require('./scopeNowcast')
 const { gradeScopeNowcast } = require('./scopeNowcastAccuracy')
 const { calibrateNowcastBand } = require('./scopeNowcastBand')
+const { calibrateNowcastVoice } = require('./scopeNowcastVoice')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -268,6 +269,30 @@ async function runScopeInsight(input, query, scope) {
             if (b) p.band = b
           }
         }
+
+        // ADDITIVE (intel-v14 D6): the projection now carries a MEASURED band, so
+        // RE-VOICE the most-read line — the headline — at the lead metric's own
+        // measured confidence. D3 wrote one fixed, confident headline at projection
+        // time, before any backtest existed; D6 caps that confidence by the lead
+        // band's sMAPE (halfPct): state the number plainly when the record is tight
+        // (firm), keep the "~" and append the earned range when reliable (measured),
+        // soften to "roughly" with the ± it has been missing by when shaky
+        // (tentative), or name only the direction and refuse the figure when too
+        // volatile (withheld). The headline stops over-claiming — it speaks exactly
+        // as firmly as its backtest earns. This rides strictly on top of D5: the
+        // `voice` key appears ONLY when the lead metric earned a calibrated band
+        // (status 'voiced'); a graded streak whose band did not calibrate for the
+        // lead metric carries no `voice` — byte-identical to a pre-D6 caller. We do
+        // NOT mutate nowcast.headline; the re-voiced sentence rides alongside it as
+        // nowcast.voice.headline so the surface chooses, and a pre-D6 reader sees the
+        // exact D3 line. calibrateNowcastVoice is pure, deterministic, fail-safe
+        // (junk → status 'none', never throws) and leak-safe (it consumes the
+        // already-leak-safe projection, grade and band and emits a metric label +
+        // bare numbers + confidence phrasing — no tenant identity), so it can neither
+        // break the response nor widen the blast radius. The module stays pure: the
+        // attach lives here in the wiring, exactly as the D4/D5 composes above it.
+        const voice = calibrateNowcastVoice(result.nowcast, accuracy, band, opts)
+        if (voice && voice.status === 'voiced') result.nowcast.voice = voice
       }
     }
   }

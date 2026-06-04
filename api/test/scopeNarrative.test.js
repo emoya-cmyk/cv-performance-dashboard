@@ -590,3 +590,131 @@ test('intel-v14 D5: omitting `history` ⇒ no nowcast ⇒ no band (additive, byt
   const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
   assert.strictEqual('nowcast' in result, false)
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2f — intel-v14 D6: the optional `nowcast.voice` — the HEADLINE re-voiced
+// at its measured confidence. Proves the WIRING (runScopeInsight gates the lead
+// projection's headline by its OWN measured sMAPE — the lead band's halfPct —
+// and attaches `voice` only when status 'voiced'); the confidence-ladder copy is
+// owned by scopeNowcastVoice.test.js. The voice rides strictly on top of D5 — it
+// is computed only INSIDE the graded branch and only when the lead metric earned
+// a calibrated band, so a projection with no `band` carries no `voice` either,
+// byte-identical to a pre-D6 caller. Crucially it does NOT mutate nowcast.headline:
+// the D3 line still rides untouched as the fallback the surface can fall back to.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D6: a graded streak ⇒ nowcast.voice re-voices the headline at its MEASURED confidence', async () => {
+  // The D5 band fixture exactly: prior reads 8000, 10000, 12000 + the fresh read
+  // (NEXT_RAW totals 12400) grade the lead band at sMAPE 12.12%, which lands in the
+  // MEASURED tier (>firm 5, ≤measured 15) — reliable but not tight.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // it rides on top of the D5 band → D4 accuracy → D3 nowcast — none replaced.
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.ok(result.nowcast.accuracy, 'accuracy still present')
+  const proj = result.nowcast.projections[0]
+  assert.ok(proj.band, 'the calibrated band is still pinned on the projection')
+
+  // the re-voiced headline rides ALONGSIDE the D3 line as nowcast.voice.
+  const voice = result.nowcast.voice
+  assert.ok(voice, 'voice attached once the lead metric earned a calibrated band')
+  assert.strictEqual(voice.status, 'voiced')
+  assert.strictEqual(voice.leadMetric, 'revenue')
+  assert.strictEqual(voice.leadLabel, 'Revenue')
+  assert.strictEqual(voice.basis, 'metric')                  // revenue graded individually
+  assert.strictEqual(voice.confidence, 'measured')
+  assert.strictEqual(voice.speaksNumber, true)
+  // the half-width IS the lead band's measured sMAPE — voiced straight from the record.
+  assert.strictEqual(voice.halfPct, proj.band.halfPct)
+  assert.strictEqual(voice.halfPct, 12.12)
+  // measured keeps the soft "~" and appends the SAME range the band cites.
+  assert.match(voice.headline, /^At this pace, revenue reaches ~\$[\d,]+(?:\.\d+)? next update — likely \$[\d,]+(?:\.\d+)?–\$[\d,]+(?:\.\d+)?\.$/)
+  assert.ok(voice.headline.includes(proj.band.rangeLabel), 'voice cites the band range verbatim')
+  assert.strictEqual(voice.hedge, `likely ${proj.band.rangeLabel}`)
+
+  // it does NOT mutate the D3 headline — that rides untouched as the fallback.
+  assert.ok(result.nowcast.headline.startsWith('At this pace, revenue reaches ~'), result.nowcast.headline)
+  assert.strictEqual(voice.raw, result.nowcast.headline)
+
+  // leak-safe: a metric label + bare numbers + confidence phrasing — no tenant identity.
+  const serialized = JSON.stringify(voice)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `voice leaked tenant identity: ${needle}`)
+  }
+})
+
+test('intel-v14 D6: caller thresholds thread through ⇒ a tightened firmMax voices the band as FIRM', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  // firmMax 100 ⇒ the 12.12% lead band now clears the firm bar: state the number plainly.
+  const result = await runScopeInsight(
+    { ...INPUT, history, firmMax: 100 },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const voice = result.nowcast.voice
+  assert.ok(voice && voice.status === 'voiced')
+  assert.strictEqual(voice.confidence, 'firm')
+  assert.strictEqual(voice.speaksNumber, true)
+  assert.strictEqual(voice.hedge, '')                        // firm speaks plainly, no qualifier
+  // firm drops the soft "~" and leads with the figure + the signed magnitude.
+  assert.match(voice.headline, /^Revenue is on track to reach \$[\d,]+(?:\.\d+)? next update \(\+\$[\d,]+(?:\.\d+)?\)\.$/)
+  assert.ok(!voice.headline.includes('~'), 'firm states the number without a soft ~')
+  // the override threaded all the way through runScopeInsight → calibrateNowcastVoice.
+  assert.strictEqual(voice.meta.thresholds.firmMax, 100)
+})
+
+test('intel-v14 D6: a loosened ceiling ⇒ a too-volatile band WITHHOLDS the number, naming only direction', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  // pull both ceilings below the 12.12% band ⇒ it falls past 'tentative' to 'withheld'.
+  const result = await runScopeInsight(
+    { ...INPUT, history, measuredMax: 5, tentativeMax: 10 },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const voice = result.nowcast.voice
+  assert.ok(voice && voice.status === 'voiced')
+  assert.strictEqual(voice.confidence, 'withheld')
+  assert.strictEqual(voice.speaksNumber, false)
+  // names only the direction + why the figure is withheld — and speaks NO projected figure.
+  assert.match(voice.headline, /^Revenue is trending up, though recent estimates have been too volatile \(±\d+%\) to call a number yet\.$/)
+  assert.ok(!voice.headline.includes('$'), 'withheld speaks no dollar figure')
+  // the D3 headline (which DOES name a number) still rides untouched beneath it.
+  assert.ok(result.nowcast.headline.includes('$'), 'the raw D3 line still names its number')
+})
+
+test('intel-v14 D6: a streak on a SHORT buffer ⇒ nowcast but NO voice key (byte-identical to D5)', async () => {
+  // Two prior reads + the fresh read = a 3-read buffer, below the grading floor.
+  // No accuracy ⇒ no band ⇒ no voice — the nowcast is unchanged from pre-D6.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.strictEqual('voice' in result.nowcast, false)
+})
+
+test('intel-v14 D6: omitting `history` ⇒ no nowcast ⇒ no voice (additive, byte-identical envelope)', async () => {
+  const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
