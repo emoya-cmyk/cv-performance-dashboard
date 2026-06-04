@@ -6,7 +6,7 @@
 // calls on every global SSE tick. It runs ONE GROUP BY metric_key aggregate over
 // exactly the tenant-scoped, date/channel-filtered rows the scope-insight reads,
 // and folds it (via lib/scopeFreshness, step a) into an opaque { version, freshAt }
-// token. Two layers, no HTTP:
+// token. Three layers, no HTTP:
 //
 //   1. FAKE-QUERY — inject a fake `query` that captures the SQL + params, proving:
 //      the aggregate shape, the compiler's exact WHERE order, the metric_key
@@ -23,6 +23,17 @@
 //      NOT; another client's rows NEVER move SELF's token; the date window and the
 //      channel filter genuinely scope the reading; and the metric_key restriction
 //      makes a spend change invisible to a revenue-only probe.
+//
+//   3. ROUTE COMPOSE — drive the route's exact two stages, resolveAskScope →
+//      runScopeFreshness (the POST /ask/scope-freshness handler body minus only the
+//      Express/JSON transport), proving the CLIENT-surface leak-proof contract
+//      end-to-end: a client token's freshness reading is its OWN even when the body
+//      forges clientId AND a client-dim filter at a real peer (it equals a clean
+//      self-probe, never the peer's); that same forged clientId yields the PEER's
+//      token ONLY for an agency role (the pin is real and role-gated); an agency
+//      token with no clientId reads the whole book; a client token with no
+//      client_id is refused 403 and never probes the book; and the client payload
+//      is EXACTLY { version, freshAt } — no agency-only field rides it.
 //
 // Runs entirely on SQLite — no Postgres, no network. Run with:  node --test (from api/)
 // ============================================================
@@ -46,6 +57,7 @@ const facts          = require('../lib/facts')
 const { channelId }  = require('../semantic/registry')
 const { runScopeFreshness } = require('../lib/scopeNarrative')
 const scopeFreshness = require('../lib/scopeFreshness')
+const { resolveAskScope }   = require('../routes/ai')   // Layer 3: the route's tenancy gate (resolve→probe)
 
 after(() => {
   for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext) } catch {} }
@@ -317,4 +329,92 @@ test('db: the metric_key restriction makes a spend change invisible to a revenue
   assert.equal(tRev, await probe(c, { metrics: ['revenue'] }))
   // …but a spend probe does.
   assert.notEqual(tSpend, await probe(c, { metrics: ['spend'] }))
+})
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 3 — route compose: resolveAskScope → runScopeFreshness, the client
+// surface's leak-proof contract end-to-end (the route minus HTTP transport).
+// The POST /ask/scope-freshness handler is exactly: resolve tenancy from the
+// TOKEN, bail on its error status, else probe the resolved aggregate. We drive
+// those two stages with forged bodies and prove a client token can never read a
+// peer — not via body.clientId, not via a client-dim filter — while an agency
+// token's narrowing still works and is the ONLY way the same forged id resolves
+// to the peer. ai.askscope.test.js proves stage 1 in isolation and Layer 1/2
+// prove stage 2; this composes them as the live route does.
+// ──────────────────────────────────────────────────────────────────────────
+
+async function routeFreshness(req) {
+  const scope = await resolveAskScope(req)
+  if (scope.error) return { error: scope.error, status: scope.status }
+  return runScopeFreshness(req.body || {}, dbQuery, {
+    scopeClientId: scope.scopeClientId,
+    role: req.user?.role || null,
+  })
+}
+const asReq = (user, body = {}) => ({ user, body })
+
+test('route: a client token probes its OWN scope even when the body forges clientId at a real peer', async () => {
+  await ready()
+  const self  = await freshClient('L3 Self')
+  const other = await freshClient('L3 Other')
+  await insertAccountFacts(self,  [{ date: '2026-05-10', channel: 'google_ads', metric_key: 'revenue', value: 5000 }])
+  await insertAccountFacts(other, [{ date: '2026-05-10', channel: 'google_ads', metric_key: 'revenue', value: 9999 }])
+  const out = await routeFreshness(asReq({ role: 'client', client_id: self }, { dateRange: WIN, clientId: other }))
+  assert.equal(out.version, await probe(self))       // its OWN reading…
+  assert.notEqual(out.version, await probe(other))   // …never the peer's
+})
+
+test('route: a forged client-dim FILTER cannot cross tenants either (defence-in-depth compose)', async () => {
+  await ready()
+  const self  = await freshClient('L3 Self2')
+  const other = await freshClient('L3 Other2')
+  await insertAccountFacts(self,  [{ date: '2026-05-10', channel: 'google_ads', metric_key: 'revenue', value: 4200 }])
+  await insertAccountFacts(other, [{ date: '2026-05-10', channel: 'google_ads', metric_key: 'revenue', value: 8800 }])
+  const out = await routeFreshness(asReq(
+    { role: 'client', client_id: self },
+    { dateRange: WIN, clientId: other, filters: [{ dim: 'client', op: 'in', values: [other] }] },
+  ))
+  assert.equal(out.version, await probe(self))       // the route pins, the engine drops the filter — both gates hold
+})
+
+test('route: the SAME forged clientId yields the PEER token only for an AGENCY role (pin is real + role-gated)', async () => {
+  await ready()
+  const self  = await freshClient('L3 Self3')
+  const other = await freshClient('L3 Other3')
+  await insertAccountFacts(self,  [{ date: '2026-05-12', channel: 'meta', metric_key: 'revenue', value: 1234 }])
+  await insertAccountFacts(other, [{ date: '2026-05-12', channel: 'meta', metric_key: 'revenue', value: 7777 }])
+  const agencyNarrowed = await routeFreshness(asReq({ role: 'agency' }, { dateRange: WIN, clientId: other }))
+  assert.equal(agencyNarrowed.version, await probe(other))    // agency MAY narrow to the named peer…
+  const clientPinned = await routeFreshness(asReq({ role: 'client', client_id: self }, { dateRange: WIN, clientId: other }))
+  assert.equal(clientPinned.version, await probe(self))       // …a client token with the identical body cannot
+  assert.notEqual(agencyNarrowed.version, clientPinned.version)
+})
+
+test('route: an agency token with no clientId probes the WHOLE BOOK (≠ any one client, ≠ empty)', async () => {
+  await ready()
+  const a = await freshClient('L3 Book A')
+  const b = await freshClient('L3 Book B')
+  await insertAccountFacts(a, [{ date: '2026-05-05', channel: 'google_ads', metric_key: 'revenue', value: 3000 }])
+  await insertAccountFacts(b, [{ date: '2026-05-06', channel: 'meta',       metric_key: 'revenue', value: 6000 }])
+  const book = await routeFreshness(asReq({ role: 'agency' }, { dateRange: WIN }))
+  assert.equal(book.version, await probe(null))               // null scope = the whole book, same instant
+  assert.notEqual(book.version, await probe(a))               // strictly more than any single client
+  assert.notEqual(book.version, scopeFreshness.EMPTY_TOKEN)
+})
+
+test('route: a client token with NO client_id is refused 403 and never probes the book', async () => {
+  await ready()
+  const out = await routeFreshness(asReq({ role: 'client', client_id: null }, { dateRange: WIN }))
+  assert.equal(out.status, 403)
+  assert.ok(!('version' in out), 'a refused scope must return before any probe runs')
+})
+
+test('route: the client freshness payload is EXACTLY { version, freshAt } — no agency-only field rides it', async () => {
+  await ready()
+  const self = await freshClient('L3 Shape')
+  await insertAccountFacts(self, [{ date: '2026-05-10', channel: 'google_ads', metric_key: 'revenue', value: 5000 }])
+  const out = await routeFreshness(asReq({ role: 'client', client_id: self }, { dateRange: WIN, clientId: 'whatever' }))
+  assert.deepEqual(Object.keys(out).sort(), ['freshAt', 'version'])
+  assert.match(out.version, /^sf\d+:/)
+  assert.ok(!Number.isNaN(Date.parse(out.freshAt)))
 })
