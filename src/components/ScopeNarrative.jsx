@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -274,6 +274,72 @@ function TrendStrip({ trend, tone }) {
   )
 }
 
+// intel-v14 D3 — the live NOWCAST strip. D2's TrendStrip says a metric is on a streak; this
+// says where that streak is HEADING at its current pace ("At this pace, revenue reaches
+// ~$14,600 next update"). It only appears beneath a trending streak (the server attaches
+// `nowcast` solely when `trend.status === 'trending'`), so it reads as the natural continuation
+// of the violet trend above it. Every field is from the server's already-leak-safe `nowcast`
+// (metric labels + bare run/projection numbers + the global channel axis only; no tenant
+// identity), so it renders identically on the agency and client surfaces. The dashed frame, the
+// "~", and the "at this pace" voice mark it as an ESTIMATE, never a promise — and each chip's
+// sparkline is extended by the projected point so the line visibly leans toward where it's going.
+function NowcastStrip({ nowcast, tone }) {
+  const projections = Array.isArray(nowcast.projections) ? nowcast.projections : []
+  if (!projections.length) return null
+  const accelerating = projections.some((p) => p && p.accelerating)
+  const floored = projections.some((p) => p && p.clamped)
+
+  return (
+    <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 shrink-0 text-sky-500"><Telescope size={15} strokeWidth={2.25} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">
+              {tone === 'client' ? 'If this keeps up' : 'Nowcast · at this pace'}
+            </span>
+            {accelerating && (
+              <span className="rounded border border-sky-200 bg-white px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-sky-500">
+                accelerating
+              </span>
+            )}
+            {floored && (
+              <span className="rounded border border-slate-200 bg-white px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                at floor
+              </span>
+            )}
+          </div>
+          {nowcast.headline && (
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">{nowcast.headline}</p>
+          )}
+
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {projections.map((p) => {
+              const Dir = directionIcon(p.direction)
+              const pc  = p.pct
+              const pctTxt = pc != null && Number.isFinite(Number(pc))
+                ? `${Number(pc) > 0 ? '+' : ''}${trim1(pc)}%`
+                : null
+              const runValues = Array.isArray(p.values) ? p.values : []
+              return (
+                <span
+                  key={p.metric}
+                  className={`inline-flex items-center gap-1.5 rounded-md border border-dashed px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${deltaChip(p.improving)}`}
+                >
+                  <Dir size={11} strokeWidth={2.5} />
+                  <span className="font-medium">{p.metric_label}</span>
+                  <Sparkline values={[...runValues, p.projected]} />
+                  {pctTxt && <span>{pctTxt}</span>}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ScopeNarrative({
   input,
   clientId = null,
@@ -450,6 +516,7 @@ export default function ScopeNarrative({
           )}
 
           {data.trend && data.trend.status === 'trending' && <TrendStrip trend={data.trend} tone={tone} />}
+          {data.nowcast && data.nowcast.status === 'projected' && <NowcastStrip nowcast={data.nowcast} tone={tone} />}
           {data.delta && data.delta.status === 'changed' && <DeltaStrip delta={data.delta} />}
 
           {findings.length > 0 && (
