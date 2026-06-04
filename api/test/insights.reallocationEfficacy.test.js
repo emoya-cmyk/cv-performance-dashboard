@@ -567,3 +567,231 @@ test('25d — the efficacy guard is load-bearing: a smuggled cpo, vindication_ra
   assert.ok(!FORBIDDEN_REALLOC_EFF_TOKENS.test('from to gap hold cost confidence strength band lower factor basis mean median hit rate calibration vindicated refuted saturated demand easing growth lead leads channel budget Google Ads Facebook Meta cost per lead lower cost held its cost'),
     'the efficacy sweep is disjoint from the generic English the client surface actually uses')
 })
+
+// ============================================================
+// 26d — REALLOCATION-EFFICACY-HEALTH CONFINEMENT: layer 26 is the STABILITY WATCHDOG
+// that sits OVER layer 25's confidence tuner — it reads the tuner's own factor history,
+// detects HUNTING (the factor thrashing direction without ever settling) or PINNED (stuck on
+// a clamp rail), and on HUNTING BENCHES the tuner to a neutral ×1.00 so a thrashing knob can
+// never move real budget. It is PORTFOLIO-SCOPED and the strictest tier in the tower: there
+// is NO per-client variant, it rides NEITHER a client byte NOR any brief pack, existing ONLY
+// as the return of getReallocationEfficacyHealth({asOf}) on the agency-gated
+// /api/insights/reallocation-efficacy-health route, folded into NO pack at all. So 26d must
+// prove, on a client whose data DID reconstruct a graded reallocation history:
+//   (1) the agency watchdog verdict is DENSE with stability machinery — stability_score +
+//       calibration.mean_credibility + high_run/low_run/settled_run/last_factor/last_direction
+//       + the engine's raw_factor/gated_factor/applied_factor gate — so the client guard MUST
+//       trip on it (the cleanliness below is a real split, not a vacuous pass);
+//   (2) the client GET /api/insights/:clientId payload, the always-structured client brief
+//       pack + its persisted read-back, and even the portfolio pack carry NONE of it; and
+//   (3) the watchdog's narration organ returns '' UNCONDITIONALLY for audience:'client' — a
+//       client can never learn budget-shift confidence is auto-tuned, let alone that the tuner
+//       is itself policed.
+//
+// The forbidden set is the empirically-narrowed intersection of "what the watchdog emits" and
+// "what NO client-riding sibling speaks". grep across lib/ proves `stability_score` and
+// `mean_credibility` are reallocationEfficacyHealth-EXCLUSIVE; `raw_factor`/`gated_factor`/
+// `applied_factor` live ONLY in the layer-26 agency wiring in insights.js; and
+// `high_run`/`low_run`/`settled_run`/`last_factor`/`last_direction` are spoken only by
+// reallocationEfficacyHealth + its agency-only sibling stability monitors (briefLeadPolicyHealth,
+// briefEmphasisControlHealth) — never a client loader nor a brief client pack. DELIBERATELY
+// SPARED, exactly as 25d spared `hit_rate`/`calibration`: the BARE `factor` key (the client pulse
+// self-tuning calibration rides `{calibration:{factor}}`), the key `calibration` itself (the client
+// pulse surface speaks it), and the words `flips`/`distrust`/`verdict_reason` (generic English /
+// shared agency-monitor vocabulary). `flips` IS forbidden, but as an exact agency KEY only — NEVER
+// as a token (a client sentence may say a trend "flips"). Forbidding bare `factor`/`calibration` or
+// the word `flips` as a token would break the gate on a genuinely clean egress — the same trap the
+// 24d/25d empirical scans caught and avoided.
+// ============================================================
+
+// The single PORTFOLIO agency surface this block proves trips — there is no per-client variant; the
+// watchdog watches the portfolio-pooled tuner. The client read path + brief surfaces are already in
+// scope from the 25d block above (clientFacingPayload / CLIENT_PAYLOAD_KEYS / generateClientBrief /
+// getClientBrief / generatePortfolioBrief) — those are the egress surfaces that must NOT carry it.
+const { getReallocationEfficacyHealth } = require('../lib/insights')
+const { narrateReallocationEfficacyHealth } = require('../lib/reallocationEfficacyHealth')
+
+// Distinctive structural compounds emitted by reallocationEfficacyHealth + its insights.js gate. The
+// verdict carries stability_score + calibration.{mean_credibility,high_run,low_run,settled_run,
+// last_factor,last_direction}, and the engine gate adds raw_factor/gated_factor/applied_factor — so
+// guarding these by name is a COMPLETE structural guard: no watchdog verdict can ride a client surface
+// without tripping. DELIBERATELY NOT bare `factor` (the client pulse calibration rides
+// `{calibration:{factor}}`), NOT `calibration` (the client pulse surface speaks it), NOT bare
+// `flips`/`distrust`/`verdict_reason`/`engaged`/`series`/`dir`/`credibility`/`window_used`/`bounds`/
+// `min`/`max`/`neutral`/`run`/`stability`/`direction` — generic or shared client-safe facts. `flips`
+// IS forbidden, but as an exact agency KEY only — never as a token (a client sentence may say a trend
+// "flips"). Mirrors 25d forbidding `vindicated`/`refuted` as keys-only.
+const FORBIDDEN_REALLOC_EFF_HEALTH_KEYS = [
+  'reallocation_efficacy_health', 'reallocationEfficacyHealth',
+  'stability_score', 'mean_credibility',
+  'high_run', 'low_run', 'settled_run',
+  'last_factor', 'last_direction',
+  'raw_factor', 'gated_factor', 'applied_factor',
+  'flips',
+]
+// Distinctive watchdog tokens only — the EXCLUSIVE compounds plus the two wrapper names as strings.
+// Every entry is an underscore-joined or camelCase identifier that cannot appear in plain client
+// English. DELIBERATELY NOT bare `flips`/`distrust`/`factor`/`calibration`/`run`/`high`/`low`/`settled`/
+// `mean`/`credibility`/`stability`/`direction` — generic or shared client-safe words. Mirrors 24d/25d
+// sparing the bare/shared stems.
+const FORBIDDEN_REALLOC_EFF_HEALTH_TOKENS =
+  /stability_score|mean_credibility|high_run|low_run|settled_run|last_factor|last_direction|raw_factor|gated_factor|applied_factor|reallocation_efficacy_health|reallocationEfficacyHealth/
+
+function assertNoReallocEfficacyHealth(payload, where) {
+  ;(function walk(o, path) {
+    if (Array.isArray(o)) { o.forEach((v, i) => walk(v, `${path}[${i}]`)); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(
+          !FORBIDDEN_REALLOC_EFF_HEALTH_KEYS.includes(k),
+          `${where}: client egress must not carry reallocation-efficacy-health field "${k}" (at ${path})`
+        )
+        walk(o[k], `${path}.${k}`)
+      }
+    }
+  })(payload, 'payload')
+  assert.ok(
+    !FORBIDDEN_REALLOC_EFF_HEALTH_TOKENS.test(JSON.stringify(payload)),
+    `${where}: reallocation-efficacy-health vocabulary leaked into the serialized client egress`
+  )
+}
+
+test('26d — the portfolio calibration-stability watchdog trips the client guard, yet the client read path, the brief, and the watchdog narration carry none of its vocabulary: an agency endpoint-only split', async () => {
+  await ready()
+  const c = await seedReallocClient('realloc-eff-health confinement egress')
+
+  // THE AGENCY SURFACE: the portfolio watchdog verdict the /reallocation-efficacy-health route
+  // returns is dense with the stability machinery — stability_score + calibration.mean_credibility
+  // + the run counters + the engine's raw_factor/gated_factor/applied_factor gate — so the client
+  // guard MUST trip on it, on the SAME client whose payload is proven clean below. There is NO
+  // per-client variant; the watchdog is portfolio-scoped by construction.
+  const health = await getReallocationEfficacyHealth({ asOf: ASOF })
+  assert.equal(health.scope, 'portfolio', 'the watchdog is portfolio-scoped — no per-client variant exists')
+  // the proof is LIVE, not vacuous: the forbidden keys are really present on the returned verdict.
+  assert.ok(Number.isFinite(health.stability_score), 'the verdict carries a real stability_score')
+  assert.ok(health.calibration && Number.isFinite(health.calibration.mean_credibility),
+    'the verdict carries calibration.mean_credibility')
+  assert.ok(Number.isFinite(health.raw_factor) && Number.isFinite(health.applied_factor),
+    'the engine gate carries raw_factor + applied_factor')
+  assert.throws(
+    () => assertNoReallocEfficacyHealth(health, 'watchdog-verdict-probe'),
+    /reallocation-efficacy-health field|reallocation-efficacy-health vocabulary/,
+    'the portfolio watchdog verdict is dense with stability machinery — the client guard MUST trip on it')
+
+  // THE NARRATION ORGAN: even the one plain-English line the watchdog can speak is '' UNCONDITIONALLY
+  // for a client audience — a client can never learn the confidence tuner exists, let alone is policed.
+  assert.equal(narrateReallocationEfficacyHealth(health, { audience: 'client' }), '',
+    'the watchdog narration returns empty for a client audience, unconditionally')
+
+  // THE CLIENT SURFACE (A): the actual GET /api/insights/:clientId wire payload — reconstructed
+  // byte-faithful by the 25d helper — carries NONE of the watchdog machinery, and its key-set is
+  // EXACTLY the nine client-safe keys (layer 26 added nothing to the client wire), on the SAME client
+  // the watchdog just pooled into its verdict above.
+  const payload = await clientFacingPayload(c)
+  assertNoReallocEfficacyHealth(payload, 'clientFacingPayload')
+  assert.deepEqual(Object.keys(payload).sort(), [...CLIENT_PAYLOAD_KEYS].sort(),
+    'the per-client payload exposes exactly the nine client-safe keys — no watchdog surface among them')
+
+  // THE CLIENT SURFACE (B): layer 26 rides NO brief, but prove it belt-and-suspenders — the
+  // always-structured client brief pack (and its persisted read-back, the row the client fetches)
+  // carry none of the stability vocabulary.
+  const cli = await generateClientBrief(c, ASOF)
+  assert.equal(cli.grounded, true)
+  assertNoReallocEfficacyHealth(cli.pack, 'generateClientBrief')
+  const cliRow = await getClientBrief(c, ASOF)
+  assertNoReallocEfficacyHealth(cliRow.pack, 'getClientBrief read-back')
+
+  // THE PORTFOLIO PACK: the watchdog is endpoint-only — it rides neither the client nor the
+  // agency/portfolio brief pack (it exists only as the route's return). Prove the portfolio pack
+  // never carries the vocabulary either, by token sweep AND by name at any depth.
+  const port = await generatePortfolioBrief(ASOF)
+  assert.ok(!FORBIDDEN_REALLOC_EFF_HEALTH_TOKENS.test(JSON.stringify(port.pack)),
+    'the watchdog vocabulary must never ride the serialized portfolio pack — it is endpoint-only')
+  ;(function walk(o) {
+    if (Array.isArray(o)) { o.forEach(walk); return }
+    if (o && typeof o === 'object') {
+      for (const k of Object.keys(o)) {
+        assert.ok(!FORBIDDEN_REALLOC_EFF_HEALTH_KEYS.includes(k), `the portfolio pack must not carry the watchdog field "${k}"`)
+        walk(o[k])
+      }
+    }
+  })(port.pack)
+})
+
+test('26d — the watchdog guard is load-bearing: a smuggled stability_score, mean_credibility, high_run, or applied_factor trips it; legit client fields — incl the spared bare factor/calibration and flips/distrust prose — never do', () => {
+  // each distinctive structural compound is caught BY NAME, however deeply nested.
+  assert.throws(() => assertNoReallocEfficacyHealth({ row: { stability_score: 0.27 } }, 'sscore-probe'),
+    /reallocation-efficacy-health field/, 'a lone stability_score must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { mean_credibility: 0.54 } }, 'mcred-probe'),
+    /reallocation-efficacy-health field/, 'a lone mean_credibility must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { high_run: 3 } }, 'hrun-probe'),
+    /reallocation-efficacy-health field/, 'a lone high_run must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { low_run: 2 } }, 'lrun-probe'),
+    /reallocation-efficacy-health field/, 'a lone low_run must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { settled_run: 4 } }, 'srun-probe'),
+    /reallocation-efficacy-health field/, 'a lone settled_run must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { last_factor: 1.18 } }, 'lfac-probe'),
+    /reallocation-efficacy-health field/, 'a lone last_factor must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { last_direction: 'embolden' } }, 'ldir-probe'),
+    /reallocation-efficacy-health field/, 'a lone last_direction must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ gate: { raw_factor: 1.18 } }, 'rfac-probe'),
+    /reallocation-efficacy-health field/, 'a lone raw_factor must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ gate: { gated_factor: 1.0 } }, 'gfac-probe'),
+    /reallocation-efficacy-health field/, 'a lone gated_factor must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ gate: { applied_factor: 1.0 } }, 'afac-probe'),
+    /reallocation-efficacy-health field/, 'a lone applied_factor must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ cal: { flips: 5 } }, 'flips-key-probe'),
+    /reallocation-efficacy-health field/, 'a flips COUNT key must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ box: { reallocation_efficacy_health: {} } }, 'wrapper-snake-probe'),
+    /reallocation-efficacy-health field/, 'a reallocation_efficacy_health wrapper must be rejected by name')
+  assert.throws(() => assertNoReallocEfficacyHealth({ box: { reallocationEfficacyHealth: {} } }, 'wrapper-camel-probe'),
+    /reallocation-efficacy-health field/, 'a reallocationEfficacyHealth wrapper must be rejected by name')
+
+  // the EXCLUSIVE compounds, smuggled as plain strings, are caught by the token sweep.
+  assert.throws(() => assertNoReallocEfficacyHealth({ note: 'the stability_score collapsed this run' }, 'sscore-token-probe'),
+    /reallocation-efficacy-health vocabulary/, "'stability_score' leaked as a string must be rejected")
+  assert.throws(() => assertNoReallocEfficacyHealth({ note: 'mean_credibility never cleared the floor' }, 'mcred-token-probe'),
+    /reallocation-efficacy-health vocabulary/, "'mean_credibility' leaked as a string must be rejected")
+  assert.throws(() => assertNoReallocEfficacyHealth({ note: 'the applied_factor was held at neutral' }, 'afac-token-probe'),
+    /reallocation-efficacy-health vocabulary/, "'applied_factor' leaked as a string must be rejected")
+  // the whole watchdog verdict trips (stability machinery + gate all present).
+  assert.throws(() => assertNoReallocEfficacyHealth({ status: 'unstable', stability_score: 0.27, raw_factor: 1.18, gated_factor: 1.0, applied_factor: 1.0, calibration: { flips: 5, high_run: 0, low_run: 0, settled_run: 0, mean_credibility: 0.54, last_factor: 1.18, last_direction: 'embolden' } }, 'full-verdict-probe'),
+    /reallocation-efficacy-health field|reallocation-efficacy-health vocabulary/, 'a full watchdog verdict must be rejected')
+
+  // CRITICAL disjointness — the legit client vocabulary the guard must NEVER catch:
+  //   the client pulse self-tuning calibration rides a BARE `factor` inside a `calibration` object —
+  //   neither is a watchdog token, so it must pass clean (the EXACT shape 25d's spared-siblings probe used).
+  assert.doesNotThrow(
+    () => assertNoReallocEfficacyHealth({ pulse: { calibration: { factor: 1.1, note: 'sensor calibration eased' } } }, 'client-calibration-probe'),
+    'the client pulse calibration bare-factor must pass clean — only the compound *_factor names are forbidden')
+  //   a client focus carrying bare factor/direction/run/high/low/settled/stability/credibility/mean —
+  //   none forbidden (we forbid only the compound identifiers).
+  assert.doesNotThrow(
+    () => assertNoReallocEfficacyHealth({ focus: { factor: 1.0, direction: 'up', run: 3, high: 40, low: 28, settled: true, stability: 'steady', credibility: 0.8, mean: 30 } }, 'client-focus-probe'),
+    'bare factor/direction/run/high/low/settled/stability/credibility/mean are legit and must pass clean')
+  //   `flips`/`distrust` as string VALUES (not agency keys) — a client narration may say a trend "flips";
+  //   the editorial layer may speak of "distrust" — those must pass the token sweep clean (flips is
+  //   forbidden as a KEY only; distrust not at all).
+  assert.doesNotThrow(
+    () => assertNoReallocEfficacyHealth({ insights: [{ severity: 'info', message: 'When demand flips midweek we hold the call; nothing here warrants distrust of the trend.' }] }, 'prose-probe'),
+    "bare 'flips'/'distrust' narration prose must pass clean (flips forbidden as a key only, distrust not at all)")
+  //   THE EMPIRICAL TRAP this block avoids (carried from 24d/25d): hit_rate/calibration/vindicated/refuted/
+  //   saturated/easing are named by sibling layers that legitimately ride the client payload + the brief —
+  //   they MUST pass clean, or every clean client egress carrying a pulse calibration or efficacy hit-rate
+  //   would false-positive and break the gate.
+  assert.doesNotThrow(
+    () => assertNoReallocEfficacyHealth({ efficacy: { hit_rate: 0.62, note: 'a strong hit rate' }, pulse: [{ note: 'demand is saturated; growth is easing.', message: "last week's call was vindicated; the dip warning was refuted." }] }, 'spared-siblings-probe'),
+    "the sibling 'hit_rate'/'calibration'/'vindicated'/'refuted'/'saturated'/'easing' fields ride the client surface and must pass clean")
+  //   the consumer's own engagement vote — the only byte they send back.
+  assert.doesNotThrow(
+    () => assertNoReallocEfficacyHealth({ as_of: '2026-05-18', signal: 'helpful' }, 'own-vote-probe'),
+    'the consumer own-vote must pass clean')
+
+  // FINAL disjointness ledger: the distinctive watchdog tokens never appear in the generic English the
+  // client surface actually uses (this string deliberately includes bare `factor`, `flips`, `distrust`,
+  // `run`, `high`, `low`, `settled`, `stability`, `credibility`, `mean`, `direction`, `calibration`,
+  // `hit rate`, `vindicated`, `refuted`, `saturated`, `easing` — ALL legal) — so the sweep can never
+  // false-positive a legit client egress on a watchdog identifier (mirrors 24d/25d's closing ledger).
+  assert.ok(!FORBIDDEN_REALLOC_EFF_HEALTH_TOKENS.test('factor flips distrust run high low settled stability credibility mean median direction calibration hit rate vindicated refuted saturated easing demand growth lead leads channel budget steady held its setting trend'),
+    'the watchdog sweep is disjoint from the generic English the client surface actually uses')
+})
