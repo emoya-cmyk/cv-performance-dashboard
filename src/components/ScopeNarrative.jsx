@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope, Target, CheckCircle2 } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, TrendingDown, Telescope, Target, CheckCircle2, Layers, Split } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -346,6 +346,47 @@ function CorroborationChip({ corroboration, tone }) {
   )
 }
 
+// intel-v14 D8 — the cross-metric STORY CHECK. D4–D7 are every one LEAD-CENTRIC: they calibrate or
+// corroborate the single most-salient projection. But a scope moves on a BASKET of numbers, and a
+// headline metric projected up can hide unit economics projected down (revenue climbing while cost
+// per lead climbs with it — the gain bought with costlier leads). The server reads the WHOLE
+// projection vector and classifies it by POLARITY (the `improving` flag the pace oracle attached, not
+// the raw direction), attaching `nowcast.coherence` (status 'assessed') whenever ≥2 polarity-bearing
+// metrics are projected — even on a short session too young to grade, since coherence needs only the
+// vector, not a track record. It NEVER inflates confidence: it adds a "unified" reassurance (the whole
+// basket agrees), a "divergent" caution (the gain isn't clean), or a "deteriorating" caution (the
+// slide is broad, not isolated). This map gives that verdict a small at-a-glance pill beside the
+// corroboration chip plus a level-colored note line. Every field is from the already-leak-safe
+// `coherence` (metric labels + direction words + small counts; no tenant identity), so it renders
+// identically on agency and client — `tone` re-voices only the pill label, never the honest note
+// sentence (the server keeps that line surface-independent by design).
+const COHERENCE = {
+  unified:       { Icon: Layers,       chip: 'text-emerald-700 bg-emerald-50 border-emerald-200', note: 'text-emerald-600', agency: 'Coherent',    client: 'All improving' },
+  divergent:     { Icon: Split,        chip: 'text-amber-700 bg-amber-50 border-amber-200',       note: 'text-amber-600',   agency: 'Divergent',   client: 'Uneven' },
+  deteriorating: { Icon: TrendingDown, chip: 'text-rose-700 bg-rose-50 border-rose-200',          note: 'text-rose-600',    agency: 'Broad slide', client: 'All sliding' },
+}
+
+// The at-a-glance coherence pill for the nowcast header, sitting beside the corroboration chip.
+// Level-colored (unified=emerald, divergent=amber, deteriorating=rose) with the matching icon; agency
+// reads "Coherent"/"Divergent"/"Broad slide", client the plainer "All improving"/"Uneven"/"All
+// sliding". Hover reveals the full honest note on either surface. Renders nothing unless the server
+// assessed ≥2 polarity-bearing projections as one basket.
+function CoherenceChip({ coherence, tone }) {
+  if (!coherence || coherence.status !== 'assessed') return null
+  const c = COHERENCE[coherence.level]
+  if (!c) return null
+  const Icon = c.Icon
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${c.chip}`}
+      title={coherence.note || undefined}
+    >
+      <Icon size={10} strokeWidth={2.5} />
+      {tone === 'client' ? c.client : c.agency}
+    </span>
+  )
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -419,6 +460,14 @@ function NowcastStrip({ nowcast, tone }) {
     nowcast.corroboration && nowcast.corroboration.status === 'corroborated' ? nowcast.corroboration : null
   const cc = corroboration ? CORROBORATION[corroboration.level] || null : null
   const CueIcon = cc ? cc.Icon : null
+  // intel-v14 D8 — the cross-metric story-check, present only when the server read ≥2 polarity-bearing
+  // projections as one basket (status 'assessed'). Absent ⇒ chip + note simply omitted, byte-identical
+  // to a pre-D8 strip. Like D7 it attaches independently of the accuracy ladder, so it lands on a short
+  // multi-metric session that has no track record yet — exactly where the vanity-metric trap hides.
+  const coherence =
+    nowcast.coherence && nowcast.coherence.status === 'assessed' ? nowcast.coherence : null
+  const ch = coherence ? COHERENCE[coherence.level] || null : null
+  const CohIcon = ch ? ch.Icon : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -441,6 +490,7 @@ function NowcastStrip({ nowcast, tone }) {
             )}
             {accuracy && <AccuracyChip accuracy={accuracy} tone={tone} />}
             {corroboration && <CorroborationChip corroboration={corroboration} tone={tone} />}
+            {coherence && <CoherenceChip coherence={coherence} tone={tone} />}
           </div>
           {voice ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
@@ -462,6 +512,12 @@ function NowcastStrip({ nowcast, tone }) {
             <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${cc.note}`}>
               {CueIcon && <CueIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
               <span>{corroboration.note}</span>
+            </p>
+          )}
+          {coherence && coherence.note && ch && (
+            <p className={`mt-0.5 flex items-start gap-1 text-[11px] ${ch.note}`}>
+              {CohIcon && <CohIcon size={11} strokeWidth={2.5} className="mt-0.5 shrink-0" />}
+              <span>{coherence.note}</span>
             </p>
           )}
 
