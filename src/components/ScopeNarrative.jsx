@@ -386,6 +386,17 @@ function NowcastStrip({ nowcast, tone }) {
                 ? `${Number(pc) > 0 ? '+' : ''}${trim1(pc)}%`
                 : null
               const runValues = Array.isArray(p.values) ? p.values : []
+              // intel-v14 D5 — the calibrated band: present ONLY when this projection earned a
+              // MEASURED accuracy (D4, ≥4 buffered reads) AND a band was sized for this metric.
+              // It rides as a muted suffix so the chip stops implying one exact number and instead
+              // shows the honest interval its OWN recent track record supports — tightening as the
+              // nowcast gets more accurate, widening when it has been missing. Leak-safe (metric
+              // label + bare bounds, rendered server-side through the shared currency oracle; no
+              // tenant identity), so it prints identically on both surfaces — `tone` only re-voices
+              // it: agency reads the precise range + the ±error magnitude; client a softened "≈".
+              const band = p.band && Number.isFinite(Number(p.band.lo)) && Number.isFinite(Number(p.band.hi))
+                ? p.band : null
+              const bandOff = band ? fmtOff(band.halfPct) : null
               return (
                 <span
                   key={p.metric}
@@ -395,6 +406,15 @@ function NowcastStrip({ nowcast, tone }) {
                   <span className="font-medium">{p.metric_label}</span>
                   <Sparkline values={[...runValues, p.projected]} />
                   {pctTxt && <span>{pctTxt}</span>}
+                  {band && (
+                    <span
+                      className="font-normal opacity-65"
+                      title={tone !== 'client' && bandOff != null ? `Likely within ±${bandOff}% — sized by recent accuracy` : undefined}
+                    >
+                      {tone === 'client' ? `≈ ${band.rangeLabel}` : band.rangeLabel}
+                      {tone !== 'client' && bandOff != null && <span className="ml-1">±{bandOff}%</span>}
+                    </span>
+                  )}
                 </span>
               )
             })}
