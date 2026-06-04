@@ -290,6 +290,21 @@ const ACCURACY_GRADE = {
   loose: { chip: 'text-slate-600 bg-slate-50 border-slate-200',       agency: 'Loose', client: 'Rough' },
 }
 
+// intel-v14 D6 — the calibrated-VOICE confidence cue. D6 re-voices the nowcast HEADLINE so its
+// confidence is gated by the lead projection's OWN measured error (scopeNowcastVoice): firm states
+// the number plainly, measured keeps the "~" and the range it earned, tentative softens to
+// "roughly" + the ±miss, withheld refuses the figure and names only the direction. This map gives
+// that tier a small at-a-glance pill beside the re-voiced sentence — grade-colored like AccuracyChip
+// so a reader sees how firmly the headline is allowed to speak. Leak-safe (a confidence word + a
+// color only; no tenant identity), identical on both surfaces; `tone` only re-voices the label. The
+// pill is the quiet companion to the sentence, which already carries the same hedge in words.
+const VOICE_CONFIDENCE = {
+  firm:      { chip: 'text-emerald-700 bg-emerald-50 border-emerald-200', agency: 'Firm',      client: 'Confident' },
+  measured:  { chip: 'text-sky-700 bg-sky-50 border-sky-200',             agency: 'Measured',  client: 'Likely' },
+  tentative: { chip: 'text-amber-700 bg-amber-50 border-amber-200',       agency: 'Tentative', client: 'Rough' },
+  withheld:  { chip: 'text-slate-600 bg-slate-50 border-slate-200',       agency: 'Withheld',  client: 'Unsettled' },
+}
+
 // The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
 // the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
 const fmtOff = (smape) => {
@@ -349,6 +364,12 @@ function NowcastStrip({ nowcast, tone }) {
   // projection (a projected nowcast AND ≥4 buffered reads). Absent ⇒ chip + note simply omitted.
   const accuracy = nowcast.accuracy && nowcast.accuracy.status === 'graded' ? nowcast.accuracy : null
   const note = accuracy ? accuracyNote(accuracy, tone) : null
+  // intel-v14 D6 — the re-voiced headline. When the server could gate the lead projection's
+  // headline by its measured error it attaches `nowcast.voice` (status 'voiced'); we then prefer
+  // that calibrated sentence over the raw D3 line and tag it with its confidence tier. Absent ⇒ the
+  // original D3 headline rides untouched, byte-identical to a pre-D6 strip.
+  const voice = nowcast.voice && nowcast.voice.status === 'voiced' ? nowcast.voice : null
+  const vc = voice ? (VOICE_CONFIDENCE[voice.confidence] || VOICE_CONFIDENCE.measured) : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -371,9 +392,19 @@ function NowcastStrip({ nowcast, tone }) {
             )}
             {accuracy && <AccuracyChip accuracy={accuracy} tone={tone} />}
           </div>
-          {nowcast.headline && (
+          {voice ? (
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">
+              <span
+                className={`mr-1.5 inline-flex items-center rounded border px-1 py-px align-middle text-[9px] font-semibold uppercase tracking-wide ${vc.chip}`}
+                title={tone !== 'client' && voice.hedge ? voice.hedge : undefined}
+              >
+                {tone === 'client' ? vc.client : vc.agency}
+              </span>
+              {voice.headline}
+            </p>
+          ) : nowcast.headline ? (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">{nowcast.headline}</p>
-          )}
+          ) : null}
           {note && (
             <p className="mt-0.5 text-[11px] text-slate-400">{note}</p>
           )}
