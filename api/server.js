@@ -28,6 +28,7 @@ const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
 const { createRateLimiter } = require('./middleware/rateLimit')
+const { checkProductionSecret } = require('./lib/authSecurity')
 const { startScheduler } = require('./scheduler')
 const { migrate, query } = require('./db')
 
@@ -181,6 +182,15 @@ if (fs.existsSync(DIST)) {
 app.use((req, res) => res.status(404).json({ error: 'not found' }))
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// Fail-closed: in production, refuse to boot with a missing or public-fallback
+// JWT_SECRET (every issued token would be forgeable). We never generate or store
+// the secret here — that stays an operator gate; we only refuse to run insecurely.
+const secretCheck = checkProductionSecret(process.env)
+if (!secretCheck.ok) {
+  console.error(`[boot] FATAL: ${secretCheck.error}`)
+  process.exit(1)
+}
+
 migrate().catch(err => console.error('[db] migration error', err.message))
 
 app.listen(PORT, () => {

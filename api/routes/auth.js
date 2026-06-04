@@ -3,6 +3,7 @@ const bcrypt   = require('bcryptjs')
 const jwt      = require('jsonwebtoken')
 const { query } = require('../db')
 const { requireAuth } = require('../middleware/auth')
+const { validatePassword, DUMMY_HASH } = require('../lib/authSecurity')
 
 const router = express.Router()
 const SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production'
@@ -23,6 +24,9 @@ router.post('/setup', async (req, res) => {
   try {
     const { email, password } = req.body
     if (!email || !password) return res.status(400).json({ error: 'email + password required' })
+
+    const pw = validatePassword(password)
+    if (!pw.ok) return res.status(400).json({ error: pw.error })
 
     const { rows } = await query('SELECT COUNT(*) AS n FROM users')
     if (Number(rows[0].n) > 0) return res.status(403).json({ error: 'Setup already done — use /login' })
@@ -48,7 +52,13 @@ router.post('/login', async (req, res) => {
 
     const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()])
     const user = rows[0]
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' })
+    if (!user) {
+      // Equalize latency with the wrong-password path so response timing can't be
+      // used to enumerate which emails are registered (compare against a fixed
+      // dummy hash that never matches, costing ~the same as a real compare).
+      await bcrypt.compare(password, DUMMY_HASH)
+      return res.status(401).json({ error: 'Invalid credentials' })
+    }
 
     const valid = await bcrypt.compare(password, user.password_hash)
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' })
@@ -71,6 +81,9 @@ router.post('/users', requireAuth, async (req, res) => {
     if (req.user.role !== 'agency') return res.status(403).json({ error: 'Agency only' })
     const { email, password, client_id } = req.body
     if (!email || !password || !client_id) return res.status(400).json({ error: 'email, password, client_id required' })
+
+    const pw = validatePassword(password)
+    if (!pw.ok) return res.status(400).json({ error: pw.error })
 
     const hash = await bcrypt.hash(password, 10)
     const { rows: created } = await query(
