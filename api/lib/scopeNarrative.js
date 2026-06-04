@@ -32,6 +32,7 @@ const { corroborateNowcast } = require('./scopeNowcastCorroboration')
 const { assessNowcastCoherence } = require('./scopeNowcastCoherence')
 const { assessNowcastMateriality } = require('./scopeNowcastMateriality')
 const { assessNowcastMomentum } = require('./scopeNowcastMomentum')
+const { assessNowcastStability } = require('./scopeNowcastStability')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -355,6 +356,38 @@ async function runScopeInsight(input, query, scope) {
       // blast radius.
       const momentum = assessNowcastMomentum(result.nowcast, opts)
       if (momentum && momentum.status === 'assessed') result.nowcast.momentum = momentum
+
+      // ADDITIVE (intel-v14 D11): D10 reads the SYSTEMATIC bend in a run's pace (is it
+      // accelerating or decelerating); D11 reads the NON-systematic SCATTER that survives
+      // after pace (D3) and curvature (D10) are accounted for. A run can hold a flat
+      // average pace AND a flat early-vs-late curvature while still lurching read-to-read —
+      // +1, +9, +1, +9 has the identical early-half and late-half mean (D10 calls it
+      // "steady") yet no single next read is predictable from it. assessNowcastStability
+      // re-reads each projection's own run (`values`), measures the step magnitudes in
+      // drift-free integer cents, and takes their coefficient of variation (stdev/mean):
+      // evenly-sized steps (low CV) mean the straight-line single number rests on firm
+      // footing (smooth); steps that lurch around (high CV) mean read the projection as a
+      // rough center, not a precise target (choppy); in between is variable. It is the ONE
+      // reliability lens that needs NO track record — D4/D5 need ≥4 buffered backtests,
+      // D7 needs an independent `since`, but jitter is intrinsic to the CURRENT run's own
+      // steps, so it speaks on a fresh, never-backtested session. To stay genuinely
+      // ORTHOGONAL to D10 it requires ≥3 steps (≥4 reads): on a 2-step run CV is a monotone
+      // function of D10's pace ratio, so the ≥3-step floor makes D11 silent exactly where it
+      // would otherwise merely re-state D10. With detectScopeTrends' default minRunSteps=2 a
+      // typical run carries exactly 2 steps, so D11 speaks only on LONGER unbroken runs — by
+      // design. Jitter is direction-NEUTRAL (a smooth climb and a smooth decline are equally
+      // well-grounded), so unlike D10 the note does not branch on polarity; it speaks to
+      // RELIABILITY, not good/bad. The `stability` key appears ONLY when status 'assessed';
+      // otherwise NO key is attached — byte-identical to a pre-D11 caller. It can only add a
+      // "smooth"/"variable"/"choppy" qualifier beside the voice; it never mutates the
+      // headline, the voice, the coherence, the materiality, the momentum, the corroboration,
+      // or any number, and never inflates confidence. assessNowcastStability is pure,
+      // deterministic, fail-safe (junk → status 'none', never throws) and leak-safe (it
+      // consumes the already-leak-safe projection runs and emits metric labels + direction
+      // words + level words + derived dispersion ratios + small counts — no tenant identity),
+      // so it can neither break the response nor widen the blast radius.
+      const stability = assessNowcastStability(result.nowcast, opts)
+      if (stability && stability.status === 'assessed') result.nowcast.stability = stability
 
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {

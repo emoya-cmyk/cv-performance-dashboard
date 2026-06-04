@@ -1264,3 +1264,149 @@ test('intel-v14 D10: the momentum payload embeds no tenant identity (renders ide
     assert.ok(!serialized.includes(needle), `momentum leaked tenant identity: ${needle}`)
   }
 })
+
+// ── intel-v14 D11: run-jitter temper (nowcast.stability) ──────────────────────────────────────────
+// D10 read the SYSTEMATIC bend in a run's pace (accelerating / decelerating / steady); D11 reads the
+// NON-systematic SCATTER that survives after pace (D3) and curvature (D10) are accounted for. A run can
+// hold a flat average pace AND a flat early-vs-late curvature while still lurching read-to-read, so D11
+// re-reads each projection's own run (`values`), measures the step magnitudes in drift-free integer
+// cents, and takes their coefficient of variation (CV = stdev/mean): evenly-sized steps (CV ≤ 0.25) ⇒
+// smooth (the straight-line single number rests on firm footing); steps that lurch around (CV ≥ 0.6) ⇒
+// choppy (read the projection as a rough center, not a target); between ⇒ variable. To stay genuinely
+// ORTHOGONAL to D10 it requires ≥3 steps (≥4 reads) — on a 2-step run CV is a monotone function of D10's
+// pace ratio, so the ≥3-step floor makes D11 silent exactly where it would merely re-state D10. Jitter
+// is direction-NEUTRAL, so unlike D10 the note never branches on polarity. The live read totals revenue
+// to 12400, so each single-metric run below is [h0, h1, h2, →12400] (4 reads / 3 steps), climbing every
+// step so scopeTrend sees one unbroken up-run. These use OWN fixtures with clear margin from the 0.25 /
+// 0.60 CV boundaries so the level is unambiguous.
+
+test('intel-v14 D11: a run with evenly-sized steps ⇒ nowcast.stability "smooth" (the single number is well-grounded)', async () => {
+  // revenue [6400,8400,10400,→12400]: step magnitudes (cents) [200000,200000,200000] ⇒ CV 0, dead
+  // center of the smooth band. The pace is not just steady (D10) but DELIVERED evenly read-to-read, so
+  // the straight-line projection rests on firm footing — the "trust the number" case for jitter.
+  const history = [
+    [{ metric: 'revenue', current: 6400 }],
+    [{ metric: 'revenue', current: 8400 }],
+    [{ metric: 'revenue', current: 10400 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  assert.strictEqual(result.nowcast.status, 'projected')
+  const s = result.nowcast.stability
+  assert.ok(s, 'stability attaches on a projected nowcast carrying a ≥4-read run')
+  assert.strictEqual(s.status, 'assessed')
+  assert.strictEqual(s.level, 'smooth')
+  assert.strictEqual(s.assessedCount, 1)
+  assert.strictEqual(s.smoothCount, 1)
+  assert.strictEqual(s.variableCount, 0)
+  assert.strictEqual(s.choppyCount, 0)
+  assert.strictEqual(s.decisive.metric, 'revenue')
+  assert.strictEqual(s.jumpiest.metric, 'revenue')
+  assert.strictEqual(s.decisive.steps, 3)
+  assert.strictEqual(s.meta.basis, 'step-dispersion')
+  assert.strictEqual(
+    s.note,
+    "Revenue's updates have been evenly sized — the run is steady underfoot, so the projected figure rests on firm footing.")
+})
+
+test('intel-v14 D11: a run whose steps lurch ⇒ nowcast.stability "choppy" (read the projection as a rough center)', async () => {
+  // revenue [1400,2400,11400,→12400]: step magnitudes (cents) [100000,900000,100000] ⇒ mean 366666.67,
+  // stdev ≈ 377124, CV ≈ 1.03 — far past the 0.60 choppy boundary. The run still climbs to the SAME
+  // 12400 endpoint, so D3 projects and D10 may read it steady, yet no single next read is predictable
+  // from it: D11 honestly flags the straight-line number as a rough center, not a target.
+  const history = [
+    [{ metric: 'revenue', current: 1400 }],
+    [{ metric: 'revenue', current: 2400 }],
+    [{ metric: 'revenue', current: 11400 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const s = result.nowcast.stability
+  assert.ok(s)
+  assert.strictEqual(s.status, 'assessed')
+  assert.strictEqual(s.level, 'choppy')
+  assert.strictEqual(s.assessedCount, 1)
+  assert.strictEqual(s.smoothCount, 0)
+  assert.strictEqual(s.variableCount, 0)
+  assert.strictEqual(s.choppyCount, 1)
+  assert.strictEqual(s.decisive.metric, 'revenue')
+  assert.strictEqual(s.meta.basis, 'step-dispersion')
+  // direction-neutral: revenue is favorable, yet the note speaks only to reliability, never good/bad.
+  assert.strictEqual(
+    s.note,
+    "Revenue's updates have been uneven — the run is jumpy, so read the projected figure as a rough center, not a precise target.")
+})
+
+test('intel-v14 D11: a run between the bands ⇒ nowcast.stability "variable" (reasonable but not pinpoint)', async () => {
+  // revenue [7900,8900,10900,→12400]: step magnitudes (cents) [100000,200000,150000] ⇒ mean 150000,
+  // stdev ≈ 40825, CV ≈ 0.272 — inside the 0.25–0.60 variable band. The projection is defensible but
+  // the run is not even enough to call the single number pinpoint.
+  const history = [
+    [{ metric: 'revenue', current: 7900 }],
+    [{ metric: 'revenue', current: 8900 }],
+    [{ metric: 'revenue', current: 10900 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  const s = result.nowcast.stability
+  assert.ok(s)
+  assert.strictEqual(s.status, 'assessed')
+  assert.strictEqual(s.level, 'variable')
+  assert.strictEqual(s.assessedCount, 1)
+  assert.strictEqual(s.smoothCount, 0)
+  assert.strictEqual(s.variableCount, 1)
+  assert.strictEqual(s.choppyCount, 0)
+  assert.strictEqual(s.decisive.metric, 'revenue')
+  assert.strictEqual(s.meta.basis, 'step-dispersion')
+  assert.strictEqual(s.note, "Revenue's updates vary in size — the projection is reasonable but not pinpoint.")
+})
+
+test('intel-v14 D11: a 2-step run ⇒ momentum speaks but NO stability key (the ≥3-step orthogonality floor)', async () => {
+  // revenue [8000,10000,→12400]: only 2 steps. D10 has its early-vs-late pace to compare, so momentum
+  // attaches — but D11 stays SILENT, because on 2 steps CV is a monotone function of D10's pace ratio and
+  // would merely re-state it. This is the integration-level proof that D11 is not a second momentum lens.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('momentum' in result.nowcast, true)  // D10 speaks on the 2-step run…
+  assert.strictEqual('stability' in result.nowcast, false) // …but D11 does not (would just echo D10).
+})
+
+test('intel-v14 D11: no projected nowcast ⇒ NO stability (additive, byte-identical envelope)', async () => {
+  // Omitting `history` ⇒ no trend ⇒ no nowcast at all, so there is nothing for D11 to read and the
+  // envelope is byte-identical to every pre-D11 caller.
+  const result = await runScopeInsight(INPUT, fakeQuery(NEXT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D11: the stability payload embeds no tenant identity (renders identically on both surfaces)', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 6400 }],
+    [{ metric: 'revenue', current: 8400 }],
+    [{ metric: 'revenue', current: 10400 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  const serialized = JSON.stringify(result.nowcast.stability)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `stability leaked tenant identity: ${needle}`)
+  }
+})
