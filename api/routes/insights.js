@@ -89,6 +89,13 @@ const {
 } = require('../lib/insights')
 // Pure synthesis: one client's feed → { score, band, counts, driver, contributors }.
 const { scoreClient } = require('../lib/health')
+// Per-route authorization. Every portfolio/agency surface below carries cross-tenant
+// data (peer identities, book-wide shares, budget advice) and must reject role='client'
+// outright (requireAgency); only the per-client GET /:clientId card is client-reachable,
+// scoped to the caller's own client_id (scopeClientParam). Individual guards — NOT a
+// blanket router.use — because that client route is declared AFTER every literal route
+// (so it can't shadow them) and a router.use would wrongly gate it too.
+const { requireAgency, scopeClientParam } = require('../middleware/authz')
 
 const router = express.Router()
 
@@ -181,7 +188,7 @@ function tallyByBand(roster) {
 
 // ── GET /api/insights ─────────────────────────────────────────────────────────
 // Portfolio-wide active feed, severity-ranked, with per-client names.
-router.get('/', async (req, res) => {
+router.get('/', requireAgency, async (req, res) => {
   try {
     const [insights, effTable] = await Promise.all([
       getPortfolioInsights({ limit: parseLimit(req.query.limit, 100) }),
@@ -206,7 +213,7 @@ router.get('/', async (req, res) => {
 // Portfolio TRIAGE ROSTER: every client rolled into one 0–100 health score, ranked
 // worst-first — "where do I look first?" in a single list. Declared before the
 // :clientId route so the literal "health" can never be captured as a client id.
-router.get('/health', async (_req, res) => {
+router.get('/health', requireAgency, async (_req, res) => {
   try {
     const roster = await getPortfolioHealth()
     res.json({
@@ -226,7 +233,7 @@ router.get('/health', async (_req, res) => {
 // Agency surface — this payload CARRIES peer identities; the client-facing view is
 // the anonymous standing folded into GET /:clientId. Declared before the :clientId
 // route so the literal "benchmarks" can never be captured as a client id.
-router.get('/benchmarks', async (req, res) => {
+router.get('/benchmarks', requireAgency, async (req, res) => {
   try {
     const benchmarks = await getPortfolioBenchmarks({ weeks: parseWeeks(req.query.weeks, 4) })
     res.json(benchmarks)
@@ -242,7 +249,7 @@ router.get('/benchmarks', async (req, res) => {
 // newest fix first, each tagged with its client_name. Default trailing window 30d.
 // The positive counterpart to GET / (active problems). Declared before the :clientId
 // route so the literal "recoveries" can never be captured as a client id.
-router.get('/recoveries', async (req, res) => {
+router.get('/recoveries', requireAgency, async (req, res) => {
   try {
     const recoveries = await getPortfolioRecoveries({
       limit: parseLimit(req.query.limit, 50),
@@ -267,7 +274,7 @@ router.get('/recoveries', async (req, res) => {
 // route so the literal "systemic" can never be captured as a client id. Optional
 // ?minClients (distinct-client floor, default 3) and ?minShare (0..1 book-fraction floor,
 // default 0 = off; the count gate is the size-independent primary).
-router.get('/systemic', async (req, res) => {
+router.get('/systemic', requireAgency, async (req, res) => {
   try {
     const opts = {}
     const mc = parseMinClients(req.query.minClients)
@@ -294,7 +301,7 @@ router.get('/systemic', async (req, res) => {
 // respect, so it lives here and never rides the per-client GET /:clientId (or shared-link)
 // payload. Declared before the :clientId route so the literal "trajectory" can never be
 // captured as a client id. Optional ?horizon (sweeps ahead to project, 1..52; default 4).
-router.get('/trajectory', async (req, res) => {
+router.get('/trajectory', requireAgency, async (req, res) => {
   try {
     const opts = {}
     const h = parseHorizon(req.query.horizon)
@@ -318,7 +325,7 @@ router.get('/trajectory', async (req, res) => {
 // per-client GET /:clientId (or shared-link) payload — a client sees only its OWN pace, folded in
 // below. Declared before the :clientId route so the literal "pacing" can never be captured as a
 // client id. No params: the window is the current calendar month, the clock is "now".
-router.get('/pacing', async (_req, res) => {
+router.get('/pacing', requireAgency, async (_req, res) => {
   try {
     const out = await getPortfolioPacing()
     res.json({ ...out, count: out.roster.length })
@@ -341,7 +348,7 @@ router.get('/pacing', async (_req, res) => {
 // narrateReallocation is silent for the client audience and getClientReallocation is deliberately NOT
 // folded into /:clientId. Declared before the :clientId route so the literal "reallocation" can never be
 // captured as a client id. No params: the window is the trailing 26 weeks, the clock is "now".
-router.get('/reallocation', async (_req, res) => {
+router.get('/reallocation', requireAgency, async (_req, res) => {
   try {
     const out = await getPortfolioReallocation()
     res.json({ ...out, count: out.roster.length })
@@ -363,7 +370,7 @@ router.get('/reallocation', async (_req, res) => {
 // getClientReallocationEfficacy is deliberately NOT folded into /:clientId. Declared before the :clientId
 // route so the literal "reallocation-efficacy" can never be captured as a client id. No params: the span
 // is the trailing (decision + boundaries·horizon) weeks, the clock is "now".
-router.get('/reallocation-efficacy', async (_req, res) => {
+router.get('/reallocation-efficacy', requireAgency, async (_req, res) => {
   try {
     const out = await getPortfolioReallocationEfficacy()
     res.json(out)
@@ -385,7 +392,7 @@ router.get('/reallocation-efficacy', async (_req, res) => {
 // shared-link) payload; the client narration is unconditionally silent (Layer 26d proves it). Declared before
 // the :clientId route so the literal "reallocation-efficacy-health" can never be captured as a client id. No
 // params: the span is M samples stepped one realized-horizon apart back from "now".
-router.get('/reallocation-efficacy-health', async (_req, res) => {
+router.get('/reallocation-efficacy-health', requireAgency, async (_req, res) => {
   try {
     const out = await getReallocationEfficacyHealth()
     res.json(out)
@@ -406,7 +413,7 @@ router.get('/reallocation-efficacy-health', async (_req, res) => {
 // rides a per-client payload (the client-safe degraded note is A4's separate job).
 // Optional ?clientId scopes to one client (drill-down); absent = the whole portfolio.
 // Declared before the :clientId route so the literal can't be captured as a client id.
-router.get('/connection-health', async (req, res) => {
+router.get('/connection-health', requireAgency, async (req, res) => {
   try {
     const clientId = req.query.clientId ? String(req.query.clientId) : null
     const out = await getConnectionHealth({ clientId })
@@ -428,7 +435,7 @@ router.get('/connection-health', async (req, res) => {
 // drill-down into one client's recovery ledger (own numbers only; reallocation excluded). The
 // client-FACING "your wins" surface is a separate client-safe reducer (B4), never this route.
 // Declared before the :clientId route so the literal "impact" can't be captured as a client id.
-router.get('/impact', async (req, res) => {
+router.get('/impact', requireAgency, async (req, res) => {
   try {
     const clientId = req.query.clientId ? String(req.query.clientId) : null
     const out = await getImpactLedger({ clientId })
@@ -450,7 +457,7 @@ router.get('/impact', async (req, res) => {
 // per-client GET /:clientId payload (a client sees only its OWN pulse, folded in below).
 // Declared before the :clientId route so the literal "pulse" can't be read as a client id.
 // No params: the window is the trailing week, the clock is "now".
-router.get('/pulse', async (_req, res) => {
+router.get('/pulse', requireAgency, async (_req, res) => {
   try {
     const out = await getPortfolioPulse()
     res.json({ ...out, count: out.roster.length, act_today_count: out.act_today.length })
@@ -474,7 +481,7 @@ router.get('/pulse', async (_req, res) => {
 // an agency-operations view; 1c lifts a single play's note onto the client surface. Declared
 // before the :clientId route so the literal "efficacy" can never be captured as a client id.
 // Optional ?priorWeight (shrink strength, 0..100; default 6; 0 = raw rates, no shrink).
-router.get('/efficacy', async (req, res) => {
+router.get('/efficacy', requireAgency, async (req, res) => {
   try {
     const opts = {}
     const pw = parsePriorWeight(req.query.priorWeight)
@@ -491,7 +498,7 @@ router.get('/efficacy', async (req, res) => {
 // On-demand full-portfolio sweep. Body may pin { asOf, weeks } (the scheduler
 // passes neither → "now", 26 weeks). Declared before the param routes so the
 // literal "run" can never be swallowed as a :clientId.
-router.post('/run', async (req, res) => {
+router.post('/run', requireAgency, async (req, res) => {
   try {
     const summary = await runInsightsForAll({ asOf: req.body?.asOf, weeks: req.body?.weeks })
     res.json(summary)
@@ -502,7 +509,7 @@ router.post('/run', async (req, res) => {
 })
 
 // ── POST /api/insights/:id/ack ────────────────────────────────────────────────
-router.post('/:id/ack', async (req, res) => {
+router.post('/:id/ack', requireAgency, async (req, res) => {
   const id = Number(req.params.id)
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ error: 'insight id must be a positive integer' })
@@ -518,7 +525,7 @@ router.post('/:id/ack', async (req, res) => {
 })
 
 // ── POST /api/insights/:id/resolve ────────────────────────────────────────────
-router.post('/:id/resolve', async (req, res) => {
+router.post('/:id/resolve', requireAgency, async (req, res) => {
   const id = Number(req.params.id)
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ error: 'insight id must be a positive integer' })
@@ -536,7 +543,7 @@ router.post('/:id/resolve', async (req, res) => {
 // ── POST /api/insights/:clientId/run ──────────────────────────────────────────
 // Single-client on-demand sweep. :clientId is a UUID, distinct from the integer
 // :id of the ack/resolve routes, so the patterns never collide.
-router.post('/:clientId/run', async (req, res) => {
+router.post('/:clientId/run', requireAgency, async (req, res) => {
   const { clientId } = req.params
   try {
     if (!(await clientExists(clientId))) {
@@ -555,7 +562,7 @@ router.post('/:clientId/run', async (req, res) => {
 
 // ── GET /api/insights/:clientId ───────────────────────────────────────────────
 // One client's active feed. Declared last so it can't shadow the literal routes.
-router.get('/:clientId', async (req, res) => {
+router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   try {
     if (!(await clientExists(clientId))) {

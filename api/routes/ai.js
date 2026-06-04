@@ -72,6 +72,7 @@ const { narrateEmphasisControlHealth } = require('../lib/briefEmphasisControlHea
 const { narrateEmphasisControlTuning } = require('../lib/briefEmphasisControlTuning')
 const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 const { runScopeInsight, runScopeFreshness } = require('../lib/scopeNarrative')
+const { scopeClientParam } = require('../middleware/authz')
 
 const router = express.Router()
 
@@ -174,7 +175,7 @@ function resolveConsumerScope(req) {
 
 // ── GET /api/ai/recap/:clientId ───────────────────────────────────────────────
 // Stored recap, generated-on-miss. Idempotent and cheap on repeat hits.
-router.get('/recap/:clientId', async (req, res) => {
+router.get('/recap/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { week, error } = resolveWeek(req.query.week)
   if (error) return res.status(400).json({ error })
@@ -193,7 +194,7 @@ router.get('/recap/:clientId', async (req, res) => {
 
 // ── POST /api/ai/recap/:clientId ──────────────────────────────────────────────
 // Force regenerate + overwrite. Accepts ?week=… or { week } in the body.
-router.post('/recap/:clientId', async (req, res) => {
+router.post('/recap/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { week, error } = resolveWeek(req.query.week ?? req.body?.week)
   if (error) return res.status(400).json({ error })
@@ -215,7 +216,7 @@ router.post('/recap/:clientId', async (req, res) => {
 // (getOrGenerateClientBrief → the LLM is called at most once per client-day).
 // Idempotent and cheap on repeat hits. ?as_of=YYYY-MM-DD selects the day; absent
 // → today (UTC). This is what the in-app client brief card hits.
-router.get('/brief/:clientId', async (req, res) => {
+router.get('/brief/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { asOf, error } = resolveAsOf(req.query.as_of)
   if (error) return res.status(400).json({ error })
@@ -235,7 +236,7 @@ router.get('/brief/:clientId', async (req, res) => {
 // ── POST /api/ai/brief/:clientId ──────────────────────────────────────────────
 // Force a fresh client brief and overwrite the stored row — the "Regenerate"
 // button. Always re-narrates + re-verifies. Accepts ?as_of=… or { as_of } in body.
-router.post('/brief/:clientId', async (req, res) => {
+router.post('/brief/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const { asOf, error } = resolveAsOf(req.query.as_of ?? req.body?.as_of)
   if (error) return res.status(400).json({ error })

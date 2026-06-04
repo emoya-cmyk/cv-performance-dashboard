@@ -1,6 +1,16 @@
 const express    = require('express')
 const { query }  = require('../db')
+const { requireAgency } = require('../middleware/authz')
 const router     = express.Router()
+
+// Every route on this router (create / list / revoke share links) is an agency
+// operation: it controls who can view a client's data through a public snapshot
+// link. A role='client' caller must never mint or enumerate share tokens, so the
+// whole router is agency-only. The PUBLIC read path is the standalone
+// publicSnapshot() handler (mounted separately at GET /api/share/:token with no
+// auth, by design) — it is NOT registered on this router, so this guard never
+// touches it.
+router.use(requireAgency)
 
 // ── helpers (inline – mirrors metrics.js) ─────────────────────────────────────
 function periodCutoff(weeks) {

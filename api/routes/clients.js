@@ -1,10 +1,26 @@
 const express = require('express')
 const { query } = require('../db')
+const { requireAgency, scopeClientParam, scopeClientId } = require('../middleware/authz')
 const router = express.Router()
 
 // GET /api/clients
+// Agency sees every client; a scoped 'client' token sees ONLY its own row (and
+// nothing at all if its token carries no client_id). scopeClientId returns the
+// caller's hard client id, or null for an agency caller (no confinement). This
+// is a FILTER, not a reject — the list endpoint must still answer, just narrowed.
 router.get('/', async (req, res) => {
   try {
+    if (req.user && req.user.role === 'client') {
+      const scopeId = scopeClientId(req)
+      if (!scopeId) return res.json([])
+      const { rows } = await query(
+        `SELECT id, name, location, industry, status, ghl_location_id, hubspot_portal_id,
+                contact_email, calendar_url
+         FROM clients WHERE id = $1`,
+        [scopeId]
+      )
+      return res.json(rows)
+    }
     const { rows } = await query(
       `SELECT id, name, location, industry, status, ghl_location_id, hubspot_portal_id,
               contact_email, calendar_url
@@ -16,8 +32,8 @@ router.get('/', async (req, res) => {
   }
 })
 
-// POST /api/clients  (create/onboard a new client)
-router.post('/', async (req, res) => {
+// POST /api/clients  (create/onboard a new client) — agency only
+router.post('/', requireAgency, async (req, res) => {
   const { name, location, industry, ghl_location_id, hubspot_portal_id, contact_email, calendar_url } = req.body
   if (!name) return res.status(400).json({ error: 'name is required' })
   try {
@@ -38,8 +54,8 @@ router.post('/', async (req, res) => {
   }
 })
 
-// GET /api/clients/:id
-router.get('/:id', async (req, res) => {
+// GET /api/clients/:id — a client may read only its own record
+router.get('/:id', scopeClientParam('id'), async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT id, name, location, industry, status, ghl_location_id, hubspot_portal_id,
@@ -54,8 +70,8 @@ router.get('/:id', async (req, res) => {
   }
 })
 
-// PUT /api/clients/:id
-router.put('/:id', async (req, res) => {
+// PUT /api/clients/:id — agency only
+router.put('/:id', requireAgency, async (req, res) => {
   const { name, location, industry, status, ghl_location_id, hubspot_portal_id, contact_email, calendar_url } = req.body
   try {
     const { rows } = await query(
@@ -81,8 +97,8 @@ router.put('/:id', async (req, res) => {
   }
 })
 
-// DELETE /api/clients/:id
-router.delete('/:id', async (req, res) => {
+// DELETE /api/clients/:id — agency only
+router.delete('/:id', requireAgency, async (req, res) => {
   try {
     await query(`DELETE FROM clients WHERE id = $1`, [req.params.id])
     res.json({ ok: true })

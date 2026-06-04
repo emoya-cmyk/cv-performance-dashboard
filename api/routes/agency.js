@@ -1,5 +1,7 @@
 const express = require('express')
 const { query } = require('../db')
+const { requireAuth } = require('../middleware/auth')
+const { requireAgency } = require('../middleware/authz')
 const router = express.Router()
 
 const AGENCY_DEFAULTS = { agency_name: '10X Performance', accent_hex: '#e53935', logo_url: null, contact_email: null, calendar_url: null }
@@ -15,8 +17,11 @@ router.get('/settings', async (req, res) => {
   }
 })
 
-// PUT /api/agency/settings — agency auth required (caller mounts with requireAuth)
-router.put('/settings', async (req, res) => {
+// PUT /api/agency/settings — agency auth required. This router is mounted WITHOUT
+// a requireAuth gate (GET /settings is deliberately public for the client view and
+// shared reports), so the write path must authenticate AND authorize inline —
+// otherwise anyone on the internet could rewrite the agency's branding.
+router.put('/settings', requireAuth, requireAgency, async (req, res) => {
   const { agency_name, accent_hex, logo_url, contact_email, calendar_url } = req.body
   if (!agency_name?.trim()) return res.status(400).json({ error: 'agency_name is required' })
   if (accent_hex && !/^#[0-9a-fA-F]{6}$/.test(accent_hex))

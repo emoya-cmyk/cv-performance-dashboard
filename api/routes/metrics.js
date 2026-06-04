@@ -3,6 +3,7 @@
 const express   = require('express')
 const { query } = require('../db')
 const { AGG, derive } = require('../lib/metricsCore')
+const { requireAgency, scopeClientParam } = require('../middleware/authz')
 const router    = express.Router()
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -28,7 +29,7 @@ function prevRange(weeks) {
 
 // ── GET /api/metrics/:clientId ────────────────────────────────────────────────
 // Query: ?period=this_week|last_4w|last_8w|last_12w  (default: last_4w)
-router.get('/:clientId', async (req, res) => {
+router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weekMap = { this_week: 1, last_4w: 4, last_8w: 8, last_12w: 12 }
   const weeks   = weekMap[req.query.period] || 4
@@ -124,7 +125,7 @@ router.get('/:clientId', async (req, res) => {
 
 // ── GET /api/metrics/:clientId/weekly?weeks=8 ────────────────────────────────
 // Per-week channel data for sparklines — one row per week, ordered ascending
-router.get('/:clientId/weekly', async (req, res) => {
+router.get('/:clientId/weekly', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weeks  = Math.min(parseInt(req.query.weeks) || 8, 52)
   const cutoff = periodCutoff(weeks)
@@ -162,7 +163,7 @@ router.get('/:clientId/weekly', async (req, res) => {
 
 // ── GET /api/metrics/:clientId/summary ────────────────────────────────────────
 // Lightweight summary for dashboard cards
-router.get('/:clientId/summary', async (req, res) => {
+router.get('/:clientId/summary', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weeks  = 4
   const cutoff = periodCutoff(weeks)
@@ -181,7 +182,7 @@ router.get('/:clientId/summary', async (req, res) => {
 
 // ── GET /api/metrics/:clientId/anomalies ─────────────────────────────────────
 // Return metrics that deviate significantly from the prior period
-router.get('/:clientId/anomalies', async (req, res) => {
+router.get('/:clientId/anomalies', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weekMap = { this_week: 1, last_4w: 4, last_8w: 8 }
   const weeks   = weekMap[req.query.period] || 4
@@ -233,7 +234,7 @@ router.get('/:clientId/anomalies', async (req, res) => {
 
 // ── GET /api/metrics (agency-wide anomalies) ──────────────────────────────────
 // Used by AnomalyStrip: returns anomalies across all clients
-router.get('/', async (req, res) => {
+router.get('/', requireAgency, async (req, res) => {
   const weekMap = { this_week: 1, last_4w: 4, last_8w: 8 }
   const weeks   = weekMap[req.query.period] || 4
   const cutoff  = periodCutoff(weeks)

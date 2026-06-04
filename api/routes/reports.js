@@ -2,11 +2,12 @@
 
 const express = require('express')
 const { query } = require('../db')
+const { requireAgency, scopeClientParam } = require('../middleware/authz')
 const router = express.Router()
 
 // GET /api/reports/:clientId — return weekly reports for a client
 // Query: ?weeks=12 (default 12), ?from=YYYY-MM-DD, ?to=YYYY-MM-DD
-router.get('/:clientId', async (req, res) => {
+router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weeks = parseInt(req.query.weeks) || 12
 
@@ -26,7 +27,7 @@ router.get('/:clientId', async (req, res) => {
 })
 
 // GET /api/reports/:clientId/latest — return the most recent weekly report
-router.get('/:clientId/latest', async (req, res) => {
+router.get('/:clientId/latest', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   try {
     const { rows } = await query(
@@ -45,7 +46,7 @@ router.get('/:clientId/latest', async (req, res) => {
 
 // POST /api/reports/:clientId — upsert a weekly report
 // Body: { week_start, ads_spend, ads_clicks, ... }
-router.post('/:clientId', async (req, res) => {
+router.post('/:clientId', requireAgency, async (req, res) => {
   const { clientId } = req.params
   const b = req.body
 

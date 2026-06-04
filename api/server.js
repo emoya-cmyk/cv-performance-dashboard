@@ -24,6 +24,7 @@ const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const { requireAuth }    = require('./middleware/auth')
+const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { startScheduler } = require('./scheduler')
 const { migrate, query } = require('./db')
 
@@ -83,7 +84,7 @@ app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intellige
 
 // Email digest prefs — GET + PUT /api/clients/:id/email
 // Defined before the clients router so this specific path wins
-app.get('/api/clients/:id/email', requireAuth, async (req, res) => {
+app.get('/api/clients/:id/email', requireAuth, scopeClientParam('id'), async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT digest_email, digest_enabled FROM clients WHERE id = $1`,
@@ -93,7 +94,7 @@ app.get('/api/clients/:id/email', requireAuth, async (req, res) => {
     res.json(rows[0])
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
-app.put('/api/clients/:id/email', requireAuth, async (req, res) => {
+app.put('/api/clients/:id/email', requireAuth, requireAgency, async (req, res) => {
   const { digest_email, digest_enabled } = req.body
   try {
     const { rows } = await query(

@@ -1,8 +1,14 @@
 // CRUD for client_connections (API credentials per channel)
 const express   = require('express')
 const { query } = require('../db')
+const { requireAgency } = require('../middleware/authz')
 
 const router = express.Router()
+
+// Every route here reads or writes client API credentials, so the entire
+// surface is agency-only. A scoped 'client' token is refused outright (403);
+// it must never see or mutate connection secrets, not even for its own client.
+router.use(requireAgency)
 
 // Lazily load connectors — they may not all be implemented
 function getConnector(channel) {

@@ -1,5 +1,6 @@
 const express   = require('express')
 const { query } = require('../db')
+const { requireAgency, scopeClientParam } = require('../middleware/authz')
 const router    = express.Router()
 
 // Resolve period → cutoff date string
@@ -11,7 +12,7 @@ function cutoff(weeks = 4) {
 
 // ── GET /api/campaigns/:clientId?period=last_4w ───────────────────────────────
 // Returns campaigns aggregated over the period, grouped by external_id
-router.get('/:clientId', async (req, res) => {
+router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const weeks = { this_week: 1, last_4w: 4, last_8w: 8 }[req.query.period] || 4
   try {
@@ -50,7 +51,7 @@ router.get('/:clientId', async (req, res) => {
 
 // ── POST /api/campaigns/:clientId ─────────────────────────────────────────────
 // Upsert a campaign row for this week. external_id auto-assigned if omitted.
-router.post('/:clientId', async (req, res) => {
+router.post('/:clientId', requireAgency, async (req, res) => {
   const { clientId } = req.params
   const {
     name, channel, status = 'active',
@@ -98,7 +99,7 @@ router.post('/:clientId', async (req, res) => {
 })
 
 // ── PUT /api/campaigns/:clientId/:externalId ──────────────────────────────────
-router.put('/:clientId/:externalId', async (req, res) => {
+router.put('/:clientId/:externalId', requireAgency, async (req, res) => {
   const { clientId, externalId } = req.params
   const { name, status, spend, leads, revenue, clicks, impressions } = req.body
   try {
@@ -124,7 +125,7 @@ router.put('/:clientId/:externalId', async (req, res) => {
 
 // ── DELETE /api/campaigns/:clientId/:externalId ───────────────────────────────
 // Soft-delete: set status = 'ended' on all weeks for this campaign
-router.delete('/:clientId/:externalId', async (req, res) => {
+router.delete('/:clientId/:externalId', requireAgency, async (req, res) => {
   const { clientId, externalId } = req.params
   try {
     await query(

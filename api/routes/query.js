@@ -20,6 +20,7 @@ const express = require('express')
 const { query } = require('../db')
 const { runQuerySpec, QuerySpecError } = require('../semantic/compile')
 const { catalog } = require('../semantic/registry')
+const { scopeClientId } = require('../middleware/authz')
 
 const router = express.Router()
 
@@ -33,7 +34,24 @@ router.get('/schema', (_req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const out = await runQuerySpec(req.body || {}, query)
+    const spec = { ...(req.body || {}) }
+    // ── Multi-tenant clamp ────────────────────────────────────────────────
+    // The compiler honours spec.clients ('all' | [ids]) from the body, so an
+    // un-clamped client token could read every tenant's facts by sending
+    // { clients: 'all' } (or another client's id, or a forged dim:'client'
+    // filter that re-widens the scope in validateQuerySpec's filter loop).
+    // For a 'client' caller, pin clients to their own id AND strip any
+    // dim:'client' filter so nothing can re-open the boundary. Agency is
+    // unconfined. This mirrors the scoped /ask path (lib/ask.js scopeClientId).
+    if (req.user && req.user.role === 'client') {
+      const cid = scopeClientId(req)
+      if (!cid) return res.status(403).json({ error: 'Forbidden' })
+      spec.clients = [cid]
+      if (Array.isArray(spec.filters)) {
+        spec.filters = spec.filters.filter(f => !(f && f.dim === 'client'))
+      }
+    }
+    const out = await runQuerySpec(spec, query)
     res.json(out)
   } catch (err) {
     if (err instanceof QuerySpecError || err.status === 400) {
