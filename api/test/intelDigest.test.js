@@ -38,6 +38,7 @@ test('empty inputs → an all-zero, well-formed digest (never throws)', () => {
     adjusting: { count: 0, areas: [] },
     improving: { count: 0, areas: [] },
     pacing: { on_track: 0, at_risk: 0 },
+    impact: { proven: false, note: null },   // silent by default — no impact supplied
   })
 })
 
@@ -163,4 +164,71 @@ test('every numeric leaf of the digest is a finite integer (grounded-friendly)',
   })(d)
   assert.ok(leaves.length > 0)
   for (const n of leaves) assert.ok(Number.isInteger(n) && Number.isFinite(n), `${n} is a finite int`)
+})
+
+// ── THE influence-note seam (intel-v12 B2): safeImpact is the ONLY way `impact`
+//    enters the digest, and exactly two leak-safe leaves may survive it ──────────
+test('absent opts.impact → the silent { proven:false, note:null } default', () => {
+  // Even with a busy feed, no impact supplied means a silent influence block.
+  const d = summarizeIntelligence([escalated('leads'), plain('cpl')], [recovery('revenue')], { metrics: [] })
+  assert.deepEqual(d.impact, { proven: false, note: null })
+})
+
+test('a proven CLIENT-safe note passes through (trimmed); proven is coerced to a bool', () => {
+  const d = summarizeIntelligence([], [], { metrics: [] },
+    { impact: { proven: 1, note: '  The work behind the scenes has been paying off.  ' } })
+  assert.deepEqual(d.impact, { proven: true, note: 'The work behind the scenes has been paying off.' })
+})
+
+test('a non-string / empty / whitespace note degrades to null', () => {
+  for (const bad of [undefined, null, 42, {}, '', '   ']) {
+    const d = summarizeIntelligence([], [], { metrics: [] }, { impact: { proven: true, note: bad } })
+    assert.equal(d.impact.note, null, `note ${JSON.stringify(bad)} → null`)
+    assert.equal(d.impact.proven, true)
+  }
+})
+
+test('LEAK-PROOF: a mis-passed AGENCY summary (dollars, client names, counts) cannot ride the digest', () => {
+  // Hand summarizeIntelligence the rich agency-side shape on purpose — a dollar
+  // headline, per-client identities, raw event counts. safeImpact must strip it to
+  // just { proven, note }, so none of those keys or values reach the client pack.
+  const agencyLike = {
+    proven: true,
+    note: 'We recovered $48,200 across Acme Co and Vandelay this month.',  // a LEAKY line
+    headline: { value: 48200, unit: 'dollars', weighted_value: 31330 },
+    by_client: { acme: 41000, vandelay: 7200 },
+    client_count: 2, count: 11,
+    entries: [{ client_id: 'acme', value: 41000 }],
+    summary: 'Impact: $48,200 recovered (11 wins across 2 clients)',
+  }
+  const d = summarizeIntelligence([escalated('leads')], [recovery('revenue')], { metrics: [] },
+    { impact: agencyLike })
+
+  // Only the two leak-safe leaves survive, in that exact shape.
+  assert.deepEqual(Object.keys(d.impact).sort(), ['note', 'proven'])
+  assert.equal(d.impact.proven, true)
+  // The note string is copied verbatim (it is a label the numeric verifier ignores);
+  // what must NOT survive are the structured dollar/client/count LEAVES.
+  const json = JSON.stringify(d.impact)
+  assert.doesNotMatch(json, /headline|by_client|client_count|entries|summary|weighted/i)
+  // and the dollar / client-count numbers must not appear as structured leaves
+  const nums = new Set((json.match(/\d+/g) || []).map(Number))
+  for (const leaked of [48200, 31330, 41000, 7200, 11, 2]) {
+    assert.ok(!nums.has(leaked), `agency figure ${leaked} must not survive as a digest leaf`)
+  }
+})
+
+test('the digest impact leaf has no structured numeric leaves of its own (note is a string)', () => {
+  // The grounded-friendly walker (numbers must be finite ints) skips the impact
+  // block entirely: proven is a boolean and note is a string or null. Confirm there
+  // is no number hiding inside impact regardless of what was passed.
+  const d = summarizeIntelligence([], [], { metrics: [] },
+    { impact: { proven: true, note: 'holding up', value: 999, count: 7 } })
+  const impactNums = []
+  ;(function walk(v) {
+    if (typeof v === 'number') impactNums.push(v)
+    else if (Array.isArray(v)) v.forEach(walk)
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk)
+  })(d.impact)
+  assert.deepEqual(impactNums, [])   // 999 / 7 were dropped by safeImpact
 })

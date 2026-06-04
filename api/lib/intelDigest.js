@@ -31,6 +31,17 @@
 //     the label strings are ignored by the numeric verifier. No verifier change
 //     is required to let the narrator quote them.
 //
+// THE INFLUENCE NOTE (intel-v12 B2). The digest also carries an optional `impact`
+// block — the honest "your wins are holding up" line from the influence ledger.
+// It is built upstream (lib/evidence.js, from THIS client's recoveries alone) and
+// pre-narrated for the CLIENT audience, so it is null unless the client's own wins
+// are proven and never carries a number, name or category. This module only
+// SANITISES it (safeImpact): exactly two leak-safe leaves — a boolean `proven` and
+// a string-or-null `note` — survive, so even a mis-passed agency summary (which
+// does carry a dollar headline) cannot leak through this seam. Both constraints
+// above hold for it too: `note` is a label-like string the numeric verifier
+// ignores, `proven` is a grounded boolean.
+//
 // PURE + DEPENDENCY-FREE. Takes already-computed inputs (decorated findings, the
 // recovery stream, the pacing block) and returns a plain object. No db, no
 // network, no import of the heavy insight engine — so it stays trivially
@@ -79,6 +90,20 @@ function areaRoll(items, keyOf, label, maxAreas) {
   return { count: seen.size, areas }
 }
 
+// Sanitise the optional pre-narrated influence note into the ONLY two leak-safe
+// leaves that may ride a client payload: a boolean `proven` and a string-or-null
+// `note`. The note must already be the CLIENT-audience narration (lib/impactLedger
+// narrateImpactLedger → audience:'client'): null unless the client's own wins are
+// proven, and never carrying a number, name or category. Anything else on the
+// input object (a dollar headline, raw counts, client names) is DROPPED here, so
+// even a mis-passed agency summary cannot leak through this seam. Absent impact →
+// the silent { proven:false, note:null } default.
+function safeImpact(x) {
+  if (!x || typeof x !== 'object') return { proven: false, note: null }
+  const note = typeof x.note === 'string' && x.note.trim() ? x.note.trim() : null
+  return { proven: !!x.proven, note }
+}
+
 /**
  * Summarise the client's current intelligence posture into a client-safe digest.
  *
@@ -90,11 +115,15 @@ function areaRoll(items, keyOf, label, maxAreas) {
  * @param {Object} [opts]
  * @param {Function} [opts.label]    metricKey|null → display label (default built-in).
  * @param {number}   [opts.maxAreas] max named areas per roll-up (default 3).
+ * @param {Object}   [opts.impact]   pre-narrated CLIENT-safe influence note
+ *                   {proven?:boolean, note?:?string}; sanitised by safeImpact so
+ *                   only those two leak-safe leaves survive (default silent).
  * @returns {{active:number,
  *            by_severity:{critical:number,warning:number,info:number},
  *            adjusting:{count:number, areas:Array<{metric:?string,label:string}>},
  *            improving:{count:number, areas:Array<{metric:?string,label:string}>},
- *            pacing:{on_track:number, at_risk:number}}}
+ *            pacing:{on_track:number, at_risk:number},
+ *            impact:{proven:boolean, note:?string}}}
  *   A pure value; safe to JSON-embed in the evidence pack. Carries NO efficacy
  *   percentages and no peer identities.
  */
@@ -136,6 +165,7 @@ function summarizeIntelligence(findings, recoveries, pacing, opts = {}) {
     adjusting,
     improving,
     pacing: { on_track, at_risk },
+    impact: safeImpact(opts.impact),
   }
 }
 

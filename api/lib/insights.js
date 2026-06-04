@@ -256,6 +256,21 @@ const {
   NEUTRAL: REALLOC_CAL_NEUTRAL,
 } = require('./reallocationEfficacyHealth')
 
+// intel-v12 INFLUENCE LEDGER (B1/B2): the honest scoreboard of what the intelligence layer
+// has actually been WORTH. impactLedger.js is the pure algebra (one canonical impact-event in,
+// a weighted-by-confidence, per-unit-totaled, proven-or-not ledger out); impactSources.js is the
+// pure adapter that maps each already-computed upstream verdict — a recovered finding, a vindicated
+// budget shift, an early-warning that proved out — into that canonical shape. getImpactLedger (below)
+// is the only place that touches the DB: it loads those upstream outputs and runs them through the
+// adapter + algebra. AGENCY-ONLY layers (reallocation efficacy) are loaded ONLY for a portfolio-scope
+// ledger and NEVER for a client-scoped one, so an agency instrument can never ride a client payload.
+const {
+  buildImpactLedger,
+  summarizeImpactLedger,
+  narrateImpactLedger,
+} = require('./impactLedger')
+const { collectImpactEvents } = require('./impactSources')
+
 // Action→recovery efficacy (PURE): the recommendation layer (recommendedAction) proposes a
 // PLAY for every adverse finding; the recovery classifier (lib/outcomes) later proves whether
 // that finding's problem RECOVERED or merely LAPSED. Those two organs were never connected —
@@ -2891,6 +2906,41 @@ async function getClientConnectionNote(clientId, { asOf } = {}) {
   return clientConnectionNote(records)
 }
 
+// getImpactLedger({ clientId, asOf }) — intel-v12 (B2): the engine seam for the INFLUENCE LEDGER.
+// THE ONLY place the influence layer touches the DB. It loads the already-computed upstream verdicts,
+// hands them to the pure adapter (collectImpactEvents) + pure algebra (buildImpactLedger), and returns
+// the honest scoreboard of what the intelligence layer has been worth. Mirrors getConnectionHealth:
+// scope-aware (clientId scopes the data, null = whole portfolio), AGENCY audience, computed on READ.
+//
+// LEAK-PROOF BY CONSTRUCTION: reallocation efficacy is a pooled, cross-client media-buying instrument,
+// so it is loaded ONLY for a portfolio ledger and NEVER for a client-scoped one — even an agency
+// drill-down into one client never attributes portfolio-wide budget shifts to that client. The
+// client-FACING surface (B4) is a separate client-safe reducer, exactly as getClientConnectionNote is
+// to getConnectionHealth; this getter is the agency read and is mounted behind requireAuth only.
+async function getImpactLedger({ clientId = null, asOf } = {}) {
+  const when = asOf ? String(asOf) : new Date().toISOString()
+  // Recovered findings — this client's win stream, or the whole portfolio's.
+  const recoveries = clientId != null
+    ? await getRecentRecoveries(clientId, {})
+    : await getPortfolioRecoveries({})
+  // AGENCY-ONLY: pooled reallocation efficacy rides ONLY a portfolio ledger, never a client one.
+  const reallocation = clientId != null
+    ? null
+    : await getPortfolioReallocationEfficacy({ asOf: when })
+  // early_warning live-wiring is intentionally deferred to a later pass: the adapter supports it and
+  // is fully tested, but complete portfolio coverage needs per-client daily-series grading that
+  // getClientPulse only surfaces on FIRING signals. v1 ledgers the two cheap, already-pooled sources.
+  const events = collectImpactEvents({ recoveries, reallocation })
+  const ledger = buildImpactLedger(events, { window: { until: when } })
+  return {
+    scope: clientId != null ? 'client' : 'portfolio',
+    as_of: when,
+    ...summarizeImpactLedger(ledger),
+    ledger,
+    narration: narrateImpactLedger(ledger, { audience: 'agency' }) || null,
+  }
+}
+
 // ============================================================================
 // INTRA-WEEK PULSE (intel-v7) — the early-warning organ over the ATOMIC DAILY grain.
 //
@@ -3361,6 +3411,10 @@ module.exports = {
   loadChannelCoverage,
   getConnectionHealth,
   getClientConnectionNote,
+  // intel-v12 INFLUENCE LEDGER (B2): the agency read of what the intelligence layer has been worth.
+  // Mounts behind requireAuth only; reallocation (agency-only) rides a portfolio ledger, never a
+  // client one. The client-FACING surface is a separate client-safe reducer (B4), not this getter.
+  getImpactLedger,
   // feed (read) + lifecycle (write) + portfolio + autonomous sweep
   getOpenInsights, getInsightFeed, getPortfolioInsights, getPortfolioHealth, normalizeInsightRow,
   setInsightStatus, ackInsight, resolveInsight, runInsightsForAll,

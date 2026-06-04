@@ -82,6 +82,7 @@ const {
   getPortfolioPacing, getClientPacing,
   getPortfolioReallocation, getPortfolioReallocationEfficacy, getReallocationEfficacyHealth,
   getConnectionHealth, getClientConnectionNote,
+  getImpactLedger,
   getPortfolioPulse, getClientPulse, clientSafePulse,
   ackInsight, resolveInsight,
   runInsightsForClient, runInsightsForAll,
@@ -413,6 +414,28 @@ router.get('/connection-health', async (req, res) => {
   } catch (err) {
     console.error('[insights] GET connection-health error', err.message)
     res.status(500).json({ error: 'Failed to load connection-health verdict' })
+  }
+})
+
+// ── GET /api/insights/impact ──────────────────────────────────────────────────
+// intel-v12 INFLUENCE LEDGER — the honest scoreboard of what the intelligence layer has been
+// WORTH: recovered findings (problems measurably cleared) and vindicated budget shifts, each
+// weighted by the confidence its OWN track record earned, totaled strictly per unit (dollars
+// protected, wins booked — units never sum across each other), flagged `proven` only once enough
+// calibrated evidence clears a real bar. AGENCY surface: the pooled reallocation component is a
+// cross-client media-buying instrument, so it rides ONLY the portfolio ledger and never a client
+// one — the getter drops it at the source for any client scope. Optional ?clientId scopes an agency
+// drill-down into one client's recovery ledger (own numbers only; reallocation excluded). The
+// client-FACING "your wins" surface is a separate client-safe reducer (B4), never this route.
+// Declared before the :clientId route so the literal "impact" can't be captured as a client id.
+router.get('/impact', async (req, res) => {
+  try {
+    const clientId = req.query.clientId ? String(req.query.clientId) : null
+    const out = await getImpactLedger({ clientId })
+    res.json(out)
+  } catch (err) {
+    console.error('[insights] GET impact error', err.message)
+    res.status(500).json({ error: 'Failed to load impact ledger' })
   }
 })
 

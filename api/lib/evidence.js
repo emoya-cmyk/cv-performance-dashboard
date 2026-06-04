@@ -18,6 +18,14 @@ const { query }                      = require('../db')
 const { AGG, derive, pctChange, detectAnomalies } = require('./metricsCore')
 const { weekStartOf, weekEndOf }     = require('./rollup')
 const { summarizeIntelligence }      = require('./intelDigest')
+// intel-v12 INFLUENCE LEDGER (B2): the pure algebra + adapter that turn THIS
+// client's recovered findings into the honest "your wins are holding up" note the
+// recap may quote. Both are pure (no DB / clock / network) and require neither
+// evidence.js nor insights.js, so they open no cycle. CLIENT-SCOPE on this path:
+// the ledger is built from recoveries ALONE — the pooled reallocation source is
+// agency-only and is loaded only by insights.getImpactLedger, never here.
+const { collectImpactEvents }                    = require('./impactSources')
+const { buildImpactLedger, narrateImpactLedger } = require('./impactLedger')
 // The live intelligence organs (read-only): the current open feed + the same
 // read-time decorators the /insights/:clientId route applies, recent recoveries,
 // this client's own pace-to-goal, and the pooled efficacy ledger. insights.js does
@@ -107,7 +115,18 @@ async function intelligenceDigest(clientId) {
     // notes first, then escalate where a play is proven ineffective — that
     // escalation is exactly the 'play_ineffective' signal `adjusting` surfaces.
     const annotated = attachEscalations(attachEfficacyNotes(feed, effTable), effTable)
-    return summarizeIntelligence(annotated, recoveries, pacing, { label: metricLabel })
+    // CLIENT-safe influence note: build a client-scoped impact ledger from the
+    // recoveries already in hand (no extra DB read, and NO agency-only reallocation
+    // source — that rides only insights.getImpactLedger) and surface ONLY its
+    // CLIENT-audience narration: a gated, deliberately vague line that is null
+    // unless THIS client's own wins are proven and that leaks no number, name or
+    // category. summarizeIntelligence sanitises it (safeImpact) on the way in.
+    const clientLedger = buildImpactLedger(collectImpactEvents({ recoveries }))
+    const impact = {
+      proven: !!clientLedger.proven,
+      note: narrateImpactLedger(clientLedger, { audience: 'client' }) || null,
+    }
+    return summarizeIntelligence(annotated, recoveries, pacing, { label: metricLabel, impact })
   } catch (err) {
     console.error('[evidence] intelligence digest failed; using zero digest:', err && err.message)
     return summarizeIntelligence([], [], { metrics: [] })   // stable shape, all zeros
