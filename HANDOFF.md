@@ -1,6 +1,6 @@
 # Performance Dashboard — Handoff Brief
 
-_Last updated: 2026-06-04 · HEAD `ed98f7a` on `main` (local-only, never pushed)_
+_Last updated: 2026-06-04 · HEAD `4fe8845` on `main` (local-only, never pushed)_
 
 Start a new chat with this file. It states **what the tool is**, **what's built**,
 **what was just finished**, and **what's next** to get to client onboarding.
@@ -205,16 +205,19 @@ plan) — automate up to the click, then a human does it:
 
 ## 5. What's next (suggested order for the new chat)
 
+> **The entire build backlog #1–#266 is complete** — all intel-vN feature work (through the
+> intel-v14 D11 stability cue, `4fe8845`) and the full launch-hardening sprint are done, both gates
+> green. Nothing code-side is open. What remains to go live is **operator-only** (Class-C) plus one
+> un-audited code slice:
+
 1. **Provision the operator gates** — §4's "Operator gates" 1–5: deploy with `JWT_SECRET` (auto on
    Render), set `CRON_SECRET` + wire the Render Cron Job, optionally set `ANTHROPIC_API_KEY`, and
    pick the always-on path (cron vs. paid plan).
 2. **First client onboarding flow** — create a client (`POST /api/clients`, agency-only ✅), connect
    that client's ad/CRM accounts (the operator's one job), watch the first sync + rollup and the
    first nightly intelligence sweep land.
-3. **Auth-provisioning pass** over `routes/auth.js` (gate 6) — the last un-audited slice.
-4. **#257 — the one open intel task** (deferred, additive, pure UI): _intel-v14 D11 (c/d):
-   stability cue on the shared `NowcastStrip` (both surfaces)._ Engine half (D11 a/b) is done; this
-   is the front-end cue only.
+3. **Auth-provisioning pass** over `routes/auth.js` (gate 6) — the last un-audited slice: login/
+   signup, password storage, token expiry/refresh. The only remaining code work before onboarding.
 
 ---
 
