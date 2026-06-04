@@ -55,14 +55,22 @@ const AGG = `
 `
 
 // Coerce a wide weekly_reports row → numeric, then add the derived KPIs.
-// Identical to routes/metrics.js#derive — keep the two in lockstep.
+// This is the ONE derive the live metrics endpoints (routes/metrics.js imports
+// it), the AI evidence pack, and the digest all share.
+//
+// Cold-start hardening: a present column is already zeroed by `parseFloat(v)||0`,
+// but an ABSENT column (degenerate/empty row, or a caller passing `undefined`)
+// would leave it `undefined` and make the additive base `NaN`. The `|| 0`
+// fallbacks below keep every derived KPI a finite number even on an empty row —
+// no behavior change for real rows (all columns present → already numbers), so
+// the golden-parity and evidence-exactness tests are unaffected.
 function derive(row) {
   const r = {}
   Object.entries(row || {}).forEach(([k, v]) => { r[k] = parseFloat(v) || 0 })
-  r.total_spend   = r.ads_spend + r.lsa_spend + r.meta_spend
-  r.total_leads   = r.raw_leads
-  r.total_closed  = r.closed_won
-  r.total_revenue = r.projected_revenue
+  r.total_spend   = (r.ads_spend || 0) + (r.lsa_spend || 0) + (r.meta_spend || 0)
+  r.total_leads   = r.raw_leads || 0
+  r.total_closed  = r.closed_won || 0
+  r.total_revenue = r.projected_revenue || 0
   r.roas = r.total_spend > 0 ? r.total_revenue / r.total_spend : 0
   r.close_rate = r.total_leads > 0 ? (r.total_closed / r.total_leads) * 100 : 0
   r.cpl = r.total_leads > 0 ? r.total_spend / r.total_leads : 0
