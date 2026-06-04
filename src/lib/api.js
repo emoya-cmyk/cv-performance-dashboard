@@ -146,16 +146,26 @@ export async function askExplain(spec, clientId) {
  * non-tenant axis) and a client-dim body filter is dropped server-side, so the payload
  * is leak-safe on a shared/per-client surface too. Mirrors ask()'s error contract
  * (preserves the server's `.code`/`.status` on the thrown Error).
+ *
+ * intel-v14 D1: pass `since` — a compact [{metric,current}] snapshot of the findings
+ * the panel is CURRENTLY showing — to also get back a session-relative `result.delta`
+ * ("since you last looked: revenue +$1,240…"), the diff of that read against the fresh
+ * one. Purely ADDITIVE: omit `since` (the default) and the request + response are
+ * byte-identical to before — no `since` key is sent, no `delta` key comes back. The
+ * snapshot is leak-safe by construction (it is the panel's own already-scoped findings).
  */
-export async function askScopeInsight(body, clientId) {
+export async function askScopeInsight(body, clientId, since) {
   const token = getToken()
+  const payload = { ...(body || {}) }
+  if (clientId) payload.clientId = clientId
+  if (since !== undefined) payload.since = since
   const res = await fetch(`${BASE}/api/ai/ask/scope-insight`, {
     method:  'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(clientId ? { ...(body || {}), clientId } : (body || {})),
+    body: JSON.stringify(payload),
   })
   if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
   const data = await res.json().catch(() => ({}))

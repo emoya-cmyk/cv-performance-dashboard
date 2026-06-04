@@ -22,6 +22,7 @@
 const { runQuerySpec } = require('../semantic/compile')
 const { CHANNEL_LABELS, metricKeyDeps, channelId } = require('../semantic/registry')
 const { generateScopeInsight } = require('./scopeInsight')
+const { diffScopeInsights } = require('./scopeDelta')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -136,9 +137,20 @@ function driversFromChannelRows(rows, metrics) {
 }
 
 // The entry point the route calls. `input` = request body (metrics?, dateRange,
-// filters?, compareTo?); `query` = the shared pg query fn; `scope` = the
+// filters?, compareTo?, since?); `query` = the shared pg query fn; `scope` = the
 // route-resolved tenancy ({scopeClientId, role}). Returns the narrator payload
 // plus a small `scope_applied` echo and the resolved windows.
+//
+// intel-v14 D1: when the caller hands us `since` — a compact snapshot
+// ([{metric,current}]) of the read they were looking at — we ALSO attach a
+// session-relative `delta` block ("since you last looked: revenue +$1,240…"),
+// the diff of that prior read against this fresh narration. This is purely
+// ADDITIVE: a caller that omits `since` gets a byte-identical response (no
+// `delta` key at all). Leak-safe by construction — both sides are the same
+// already-tenant-scoped scope-insight surface (drivers attributed only by the
+// global CHANNEL axis), and scopeDelta emits no tenant identity. The fresh
+// `next` side is tenancy-pinned upstream; `since` is only the subtrahend, so a
+// client can at most skew its OWN delta strip, never see another tenant's data.
 async function runScopeInsight(input, query, scope) {
   const opts = input && typeof input === 'object' ? input : {}
   const sc = scope && typeof scope === 'object' ? scope : {}
@@ -169,12 +181,22 @@ async function runScopeInsight(input, query, scope) {
     metrics, current, previous, windowLabel, compareLabel, drivers, limit: metrics.length,
   })
 
-  return {
+  const result = {
     ...narration,
     scope_applied: { role: sc.role || null, clients, metrics },
     window: totals.meta.dateRange,
     compare_window: totals.meta.compareTo,
   }
+
+  // ADDITIVE: only when the caller opted into session-relative narration by
+  // sending a `since` snapshot. Absent `since` ⇒ no `delta` key ⇒ byte-identical
+  // to every pre-D1 caller. diffScopeInsights is fail-safe (junk/empty `since`
+  // degrades to status 'baseline'), so this never throws on a malformed body.
+  if (opts.since !== undefined) {
+    result.delta = diffScopeInsights(opts.since, narration)
+  }
+
+  return result
 }
 
 // ── intel-v13 C4 (step b): the CHEAP per-scope data-version probe ────────────

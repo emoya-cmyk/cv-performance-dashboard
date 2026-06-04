@@ -248,3 +248,68 @@ test('integration: empty scope → honest "No data in scope" headline, no findin
   assert.strictEqual(result.meta.metrics_considered, 0)
   assert.deepStrictEqual(result.scope_applied.clients, ['7'])
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2b — intel-v14 D1: the optional "since you last looked" delta block.
+// Proves the WIRING (runScopeInsight reads body.since, attaches a delta computed
+// from the REAL narration); the diff semantics themselves are owned by
+// scopeDelta.test.js. The diff is additive — absent `since`, the envelope is
+// byte-identical to every pre-D1 caller.
+// ──────────────────────────────────────────────────────────────────────────
+
+// "Fresh data lands" for the SAME scope: google_ads revenue 8000 → 10400, so the
+// scope total moves 10000 → 12400. Everything else is identical to CURRENT_RAW, so
+// only revenue (and the revenue-derived roas) move between the two reads.
+const NEXT_RAW = [
+  ...rawRows(1, '2026-05-15', { revenue: 10400, spend: 2000, leads: 100, closed_won: 20, raw_leads: 200 }),
+  ...rawRows(2, '2026-05-15', { revenue: 2000, spend: 1000, leads: 50, closed_won: 5, raw_leads: 100 }),
+]
+
+test('intel-v14 D1: omitting `since` ⇒ NO delta key (additive, byte-identical envelope)', async () => {
+  const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('delta' in result, false)
+})
+
+test('intel-v14 D1: `since:[]` ⇒ baseline delta (the panel had nothing to diff yet)', async () => {
+  const result = await runScopeInsight({ ...INPUT, since: [] }, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.ok(result.delta, 'delta present when since is supplied')
+  assert.strictEqual(result.delta.status, 'baseline')
+  assert.strictEqual(result.delta.headline, null)
+  assert.deepStrictEqual(result.delta.changes, [])
+})
+
+test('intel-v14 D1: a real cross-read move surfaces as a `delta` ("since you last looked")', async () => {
+  // Read 1 — the panel's current state. Snapshot its findings the way the FE will:
+  // a compact [{metric,current}] of exactly what is on screen.
+  const read1 = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  const since = read1.findings.map(f => ({ metric: f.metric, current: f.evidence.current }))
+  assert.ok(since.find(s => s.metric === 'revenue' && s.current === 10000), 'snapshot carries the on-screen revenue level')
+
+  // Read 2 — fresh data lands; the FE replays the SAME scope with that snapshot as
+  // `since` to get the session-relative diff alongside the fresh narration.
+  const read2 = await runScopeInsight({ ...INPUT, since }, fakeQuery(NEXT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+
+  assert.ok(read2.delta, 'delta attached when since supplied')
+  assert.strictEqual(read2.delta.status, 'changed')
+
+  const rev = read2.delta.changes[0]            // biggest |Δ cents| ⇒ first
+  assert.strictEqual(rev.metric, 'revenue')
+  assert.strictEqual(rev.from, 10000)
+  assert.strictEqual(rev.to, 12400)
+  assert.strictEqual(rev.delta, 2400)
+  assert.strictEqual(rev.direction, 'up')
+  assert.strictEqual(rev.improved, true)        // revenue up = good
+  assert.ok(read2.delta.headline.startsWith('Since you last looked: revenue +$2,400'), read2.delta.headline)
+
+  // leads did NOT move between the two reads (150 → 150) ⇒ never a change row…
+  assert.ok(read2.delta.changes.every(c => c.metric !== 'leads'), 'unmoved metric must not be a change')
+  // …even though leads is still a CARD in the fresh narration (it moved vs the COMPARE
+  // window). This is the whole point: the delta is session-relative, not period-over-period.
+  assert.ok(read2.findings.find(f => f.metric === 'leads'), 'leads is still a narrated card')
+
+  // leak-safe: the session diff embeds no tenant identity — only the global channel axis.
+  const serialized = JSON.stringify(read2.delta)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `delta leaked tenant identity: ${needle}`)
+  }
+})
