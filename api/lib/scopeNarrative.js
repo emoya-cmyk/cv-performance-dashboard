@@ -25,6 +25,7 @@ const { generateScopeInsight } = require('./scopeInsight')
 const { diffScopeInsights } = require('./scopeDelta')
 const { detectScopeTrends } = require('./scopeTrend')
 const { projectScopeTrend } = require('./scopeNowcast')
+const { gradeScopeNowcast } = require('./scopeNowcastAccuracy')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -225,6 +226,25 @@ async function runScopeInsight(input, query, scope) {
   // 'none', never throws), so this stays leak-safe and cannot break the response.
   if (result.trend && result.trend.status === 'trending') {
     result.nowcast = projectScopeTrend(result.trend, opts)
+
+    // ADDITIVE (intel-v14 D4): grade that projection against itself. We replay the
+    // nowcast over the SAME buffered series ([...history, this fresh read]) — for each
+    // interior prefix, reproduce the one-step projection that WOULD have been shown and
+    // compare it to the read that actually followed — yielding a "within ~X% of actual"
+    // confidence beneath the live projection. This rides strictly on top of D3: the key
+    // only appears when there is a projected nowcast AND enough buffered reads to grade
+    // (≥4), so a caller with a fresh streak but a short buffer gets `nowcast` with NO
+    // `accuracy` sub-key — byte-identical to a pre-D4 caller. gradeScopeNowcast is pure,
+    // deterministic, fail-safe (junk / too-little history → status 'none', never throws)
+    // and leak-safe (it reads the same already-tenant-scoped buffered snapshots and emits
+    // only metric labels + bare error statistics — no tenant identity), so it can neither
+    // break the response nor widen the blast radius beyond the caller's own reads.
+    if (result.nowcast && result.nowcast.status === 'projected') {
+      const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
+      if (accuracy && accuracy.status === 'graded') {
+        result.nowcast.accuracy = accuracy
+      }
+    }
   }
 
   return result

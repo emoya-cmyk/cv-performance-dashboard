@@ -445,3 +445,67 @@ test('intel-v14 D3: a confirmed streak surfaces a `nowcast` projecting the run f
     assert.ok(!serialized.includes(needle), `nowcast leaked tenant identity: ${needle}`)
   }
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2d — intel-v14 D4: the optional `nowcast.accuracy` sub-block. Proves the
+// WIRING (runScopeInsight backtests its OWN nowcast over the buffered series and
+// attaches a confidence grade) — the backtest math itself is owned by
+// scopeNowcastAccuracy.test.js. accuracy rides strictly on top of D3: it appears
+// ONLY when there is a projected nowcast AND enough buffered reads to grade (≥4),
+// so a fresh streak on a short buffer is byte-identical to a pre-D4 caller.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D4: a streak with enough buffered history ⇒ nowcast.accuracy grades the projections', async () => {
+  // Three prior reads (8000, 10000, 12000) + the fresh read (NEXT_RAW totals 12400) = a
+  // 4-read buffer — the floor at which the backtest can replay one interior projection and
+  // check it. The lone interior prefix [8000,10000,12000] projects 14000 (pace 2000); the
+  // read that actually followed is 12400, so |14000−12400| ÷ 13200 = 12.12% → graded 'fair'.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // it still rides on the live D3 nowcast — accuracy never replaces it…
+  assert.strictEqual(result.trend.status, 'trending')
+  assert.ok(result.nowcast, 'nowcast still present')
+  assert.strictEqual(result.nowcast.status, 'projected')
+
+  // …and now grades that projection against the buffer it was drawn from.
+  assert.ok(result.nowcast.accuracy, 'accuracy attached once there are ≥4 buffered reads to backtest')
+  assert.strictEqual(result.nowcast.accuracy.status, 'graded')
+  assert.strictEqual(result.nowcast.accuracy.overall.samples, 1)   // one interior prefix was gradeable
+  assert.strictEqual(result.nowcast.accuracy.overall.smape, 12.12)
+  assert.strictEqual(result.nowcast.accuracy.overall.grade, 'fair')
+  assert.strictEqual(
+    result.nowcast.accuracy.headline,
+    'Recent projections have landed within ~12% of actual — 1 check.')
+  assert.strictEqual(result.nowcast.accuracy.metrics[0].metric, 'revenue')
+
+  // leak-safe: the self-grade embeds no tenant identity — only metric labels + bare stats.
+  const serialized = JSON.stringify(result.nowcast.accuracy)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `accuracy leaked tenant identity: ${needle}`)
+  }
+})
+
+test('intel-v14 D4: a fresh streak on a SHORT buffer ⇒ nowcast but NO accuracy sub-key (byte-identical to D3)', async () => {
+  // The D3 streak setup exactly: two prior reads + the fresh read = a 3-read buffer — below
+  // the 4-read floor the backtest needs (it must hold out a read to grade against). So the
+  // nowcast projects, but there is nothing yet to grade ⇒ the `accuracy` key never appears.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.ok(result.nowcast, 'nowcast present on the streak')
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+})
