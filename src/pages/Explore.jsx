@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort, delta } from '@/lib/utils'
+import ScopeNarrative from '@/components/ScopeNarrative'
 
 /*
  * Explore — the visible payoff of the Phase-1 atomic grain.
@@ -420,6 +421,20 @@ export default function Explore() {
   }, [metrics, start, end, channelFilter, compare])
   const totalsKey = useMemo(() => JSON.stringify(totalsSpec), [totalsSpec])
 
+  // The body for the always-on "Live read" narration panel (intel-v13 C3). It is
+  // the SAME scope the breakdown uses — metrics, window, channel filter — handed to
+  // POST /api/ai/ask/scope-insight, which re-narrates it server-side whenever this
+  // memo changes (the panel debounces). compareTo is intentionally omitted so the
+  // server defaults it to the prior period: this panel is an always-on "what changed
+  // and what to do" surface, so it always tells a change story; the Compare toggle
+  // still governs the table/card per-row deltas, not this read. No clientId → the
+  // whole agency portfolio (an agency token); drivers come back by channel only.
+  const scopeInsightBody = useMemo(() => {
+    const b = { metrics, dateRange: { start, end } }
+    if (channelFilter.length) b.filters = [{ dim: 'channel', op: 'in', values: channelFilter }]
+    return b
+  }, [metrics, start, end, channelFilter])
+
   // Auto-run whenever the spec changes (and the schema is ready). A monotonic
   // runId drops stale responses so fast control changes can't race. We fire the
   // breakdown and the all-up totals in parallel; the totals are best-effort (the
@@ -641,6 +656,13 @@ export default function Explore() {
           </div>
         </div>
       </div>
+
+      {/* Live read — on-demand narrated insight that regenerates with the controls */}
+      <ScopeNarrative
+        input={scopeInsightBody}
+        tone="agency"
+        enabled={Boolean(schema) && metrics.length > 0}
+      />
 
       {/* Result */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 min-h-[20rem]">

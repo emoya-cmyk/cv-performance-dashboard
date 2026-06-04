@@ -129,6 +129,45 @@ export async function askExplain(spec, clientId) {
   return data
 }
 
+/**
+ * On-demand scoped narrative (intel-v13 C3). Hands the SAME scope the dashboard is
+ * already showing — its metrics, dateRange, channel filters, and compare toggle — to
+ * the server, which re-reads that exact window through the real semantic compiler and
+ * returns a freshly NARRATED insight (headline + per-metric movement findings + the
+ * channel driver behind each + a recommendation) for it. This is what makes the
+ * insight TEXT and the advice regenerate when a filter or date changes, not just the
+ * numbers. Pure DB aggregation + the deterministic narrator server-side, so it needs
+ * NO ANTHROPIC_API_KEY and is cheap enough to call on every control change (debounced).
+ *
+ * `clientId` is honoured ONLY for an agency token (same posture as ask()): an agency
+ * caller may target one client or omit it for the whole portfolio; a client token is
+ * hard-pinned server-side and this hint can never widen its scope — so the client
+ * surface can pass its own id freely. Drivers are ALWAYS by channel (a global,
+ * non-tenant axis) and a client-dim body filter is dropped server-side, so the payload
+ * is leak-safe on a shared/per-client surface too. Mirrors ask()'s error contract
+ * (preserves the server's `.code`/`.status` on the thrown Error).
+ */
+export async function askScopeInsight(body, clientId) {
+  const token = getToken()
+  const res = await fetch(`${BASE}/api/ai/ask/scope-insight`, {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(clientId ? { ...(body || {}), clientId } : (body || {})),
+  })
+  if (res.status === 401) { clearToken(); if (window.location.pathname !== '/login') window.location.href = '/login'; throw new Error('Session expired') }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err  = new Error(data.error || `API /api/ai/ask/scope-insight → ${res.status}`)
+    err.status = res.status
+    err.code   = data.code || null
+    throw err
+  }
+  return data
+}
+
 export const api = {
   clients:       ()               => get('/api/clients'),
   createClient:  (body)           => post('/api/clients', body),
@@ -184,6 +223,14 @@ export const api = {
   // per-client contributions. Same scope rules as ask(). Throws with .code/.status on
   // the honest failure modes (NOT_EXPLAINABLE 422 = this spec isn't decomposable).
   askExplain,
+  // askScopeInsight (intel-v13 C3): on-demand re-narration of whatever scope a
+  // dashboard is currently showing. Pass the live { metrics?, dateRange, filters?,
+  // compareTo? } and (agency only) an optional clientId; the server re-reads that exact
+  // window through the semantic compiler and returns a fresh headline + per-metric
+  // movement findings + channel drivers + recommendations. Deterministic + key-free, so
+  // it's cheap to call (debounced) on every filter/date change. Same scope posture as
+  // ask(); leak-safe on client/shared surfaces (drivers always by channel).
+  askScopeInsight,
   // askSuggestions (intel-v6): dynamic opening chips for the Ask box — the biggest
   // period-over-period movers for whatever the caller is allowed to see, each a
   // click-to-run question. Same scope rules as ask(): a client token only ever gets
