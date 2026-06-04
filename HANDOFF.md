@@ -1,6 +1,6 @@
 # Performance Dashboard — Handoff Brief
 
-_Last updated: 2026-06-04 · HEAD `4fe8845` on `main` (local-only, never pushed)_
+_Last updated: 2026-06-04 · HEAD `494da9a` on `main` (local-only, never pushed)_
 
 Start a new chat with this file. It states **what the tool is**, **what's built**,
 **what was just finished**, and **what's next** to get to client onboarding.
@@ -42,7 +42,7 @@ React + Vite + Tailwind (src/)            Express + node-postgres / SQLite (api/
   - `lib/ask.js` `compileQuery` (NL → validated spec → safe SQL → grounded answer) — **scoped**.
   - `semantic/compile.js` `runQuerySpec` (powers `POST /api/query`) — honors `clients:'all'`,
     so it is **clamped in the route** for `client` callers (see §4).
-- **Tests:** `node --test` (1959 currently green). DB seam: unset `DATABASE_URL` +
+- **Tests:** `node --test` (1977 currently green). DB seam: unset `DATABASE_URL` +
   `SQLITE_PATH` → ephemeral SQLite, set **before** any `require('../db')`.
 
 ---
@@ -85,7 +85,8 @@ Took the build from "great craft, not yet launch-ready" to **onboarding-ready**.
 its own local-only commit, both gates green at every step:
 **auth/tenant-isolation → P0 security & cost → P1 always-on cron → P2 cold-start → hygiene.**
 Full commit lineage (all on `main`, never pushed):
-`511e54d` → `52ca9a9` → `553bacb` → `20435df` → `feb9fa9` → `f340d16` → `08d2911` → `ed98f7a`.
+`511e54d` → `52ca9a9` → `553bacb` → `20435df` → `feb9fa9` → `f340d16` → `08d2911` → `ed98f7a`
+→ `7cd9d9c` → `494da9a` (gate-6 auth-provisioning hardening, added right after the sprint — see §4.6).
 
 ### 4.1 Authorization / tenant isolation — the onboarding unblock (commit `511e54d`)
 
@@ -178,13 +179,41 @@ finite number on a degenerate/empty/`undefined` row (golden-parity unaffected).
 Removed two unreferenced May-25 debug scripts (`api/check_db.js`, `api/check_db2.js`) to keep the
 deploy surface clean. Verified unreferenced; test count unchanged (1959).
 
+### 4.6 Gate-6 auth-provisioning hardening (commits `7cd9d9c` + `494da9a`)
+
+The last un-audited slice — how `client`/`agency` users are created and authenticated. The audit of
+`routes/auth.js` + `middleware/auth.js` produced **exactly three** in-scope findings; all three
+shipped. New pure module `lib/authSecurity.js` (`7cd9d9c`, +9 unit tests) holds the primitives;
+`494da9a` wires them in (+9 integration tests, incl. two that spawn the **real** `server.js`):
+
+- **Password floor.** `POST /api/auth/setup` and `POST /api/auth/users` now reject a sub-10-char or
+  `>72`-byte password with `400` **before** hashing. Closes the hole where the first agency admin
+  (the most privileged account) could be created with a 1-char password, and refuses passwords past
+  bcrypt's silent 72-byte truncation point instead of hashing a misleading prefix.
+- **Login timing equalizer.** The `/login` no-user branch now runs `bcrypt.compare(password,
+  DUMMY_HASH)` before returning `401`, so an unregistered email costs ~the same wall-clock as a wrong
+  password — closing the account-enumeration timing oracle. Still `401`; only the timing changed.
+- **Fail-closed boot guard.** In `NODE_ENV=production` the server now **refuses to boot**
+  (`process.exit(1)`, `[boot] FATAL`) when `JWT_SECRET` is unset or still the public dev fallback —
+  otherwise every issued token would be forgeable. It runs **before** `migrate()`/`listen`, so a
+  misconfigured prod boot never binds a port. This does **not** generate or store a secret (that
+  stays the Class-C operator gate); it only makes the handoff enforceable by refusing to run
+  insecurely.
+
+Judged acceptable-for-launch and deliberately **not** pursued: email-format validation (DB-unique +
+presence checks suffice for a single-agency deploy) and refresh-token rotation (7-day stateless JWT
+is fine for the trust model). API gate **1977/1977**; FE `vite build` green.
+
 ### Operator gates before go-live (Class-C — never self-healed in code)
 The sprint closed everything automatable. What remains is **operator-only** (secrets, OAuth, host
 plan) — automate up to the click, then a human does it:
 1. **`JWT_SECRET` in production.** `middleware/auth.js` falls back to the literal
    `'dev-secret-change-in-production'` if unset → tokens would be forgeable. On Render this is
    handled automatically (`render.yaml` → `generateValue: true`); **off Render, an operator must set
-   it.**
+   it.** As of `494da9a` the server **fails closed**: in `NODE_ENV=production` it refuses to boot
+   (`process.exit(1)`, `[boot] FATAL`) when `JWT_SECRET` is unset or still the dev fallback — so a
+   misconfigured deploy can't silently issue forgeable tokens. This enforces the gate; it does **not**
+   satisfy it — the operator still supplies the value.
 2. **`CRON_SECRET`** — set on the web service **and** the Cron Job (same value) to arm the heartbeat
    (§4.3). Unset = the cron endpoint is disabled (503, fails closed).
 3. **`ANTHROPIC_API_KEY`** — **optional.** Unset = AI recap/brief render deterministic templates
@@ -196,7 +225,10 @@ plan) — automate up to the click, then a human does it:
 5. **Connect each client's accounts** — the operator's one recurring job: the client's ad/CRM OAuth
    (Google Ads/GBP/GA4/LSA, Meta, GHL). This is the only thing the tool can't do for itself.
 6. **Auth-provisioning review** — how `client`/`agency` users are created (`routes/auth.js`):
-   login/signup, password storage, token expiry/refresh. Not yet audited.
+   login/signup, password storage, token expiry/refresh. ✅ **DONE** (`7cd9d9c` + `494da9a`) — see
+   §4.6. Shipped a password floor on /setup + /users, a login timing equalizer, and the fail-closed
+   boot guard above. Email-format validation and refresh-token rotation were judged
+   acceptable-for-launch and deliberately deferred.
 7. **Public surfaces are by design** (token-validated) but re-confirm: `GET /api/share/:token`,
    `GET /api/unsubscribe/:token`, the HMAC webhook receivers, and `/api/agency`
    (GET public / PUT self-guards).
@@ -205,19 +237,17 @@ plan) — automate up to the click, then a human does it:
 
 ## 5. What's next (suggested order for the new chat)
 
-> **The entire build backlog #1–#266 is complete** — all intel-vN feature work (through the
-> intel-v14 D11 stability cue, `4fe8845`) and the full launch-hardening sprint are done, both gates
-> green. Nothing code-side is open. What remains to go live is **operator-only** (Class-C) plus one
-> un-audited code slice:
+> **The entire build backlog #1–#268 is complete** — all intel-vN feature work (through the
+> intel-v14 D11 stability cue, `4fe8845`), the full launch-hardening sprint, **and** the gate-6
+> auth-provisioning hardening (`7cd9d9c` → `494da9a`, §4.6) are done, both gates green.
+> **Nothing code-side is open.** What remains to go live is **operator-only** (Class-C):
 
 1. **Provision the operator gates** — §4's "Operator gates" 1–5: deploy with `JWT_SECRET` (auto on
-   Render), set `CRON_SECRET` + wire the Render Cron Job, optionally set `ANTHROPIC_API_KEY`, and
-   pick the always-on path (cron vs. paid plan).
+   Render; now boot-enforced — §4.6), set `CRON_SECRET` + wire the Render Cron Job, optionally set
+   `ANTHROPIC_API_KEY`, and pick the always-on path (cron vs. paid plan).
 2. **First client onboarding flow** — create a client (`POST /api/clients`, agency-only ✅), connect
    that client's ad/CRM accounts (the operator's one job), watch the first sync + rollup and the
    first nightly intelligence sweep land.
-3. **Auth-provisioning pass** over `routes/auth.js` (gate 6) — the last un-audited slice: login/
-   signup, password storage, token expiry/refresh. The only remaining code work before onboarding.
 
 ---
 
