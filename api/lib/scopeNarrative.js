@@ -28,6 +28,7 @@ const { projectScopeTrend } = require('./scopeNowcast')
 const { gradeScopeNowcast } = require('./scopeNowcastAccuracy')
 const { calibrateNowcastBand } = require('./scopeNowcastBand')
 const { calibrateNowcastVoice } = require('./scopeNowcastVoice')
+const { corroborateNowcast } = require('./scopeNowcastCorroboration')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -242,6 +243,34 @@ async function runScopeInsight(input, query, scope) {
     // only metric labels + bare error statistics — no tenant identity), so it can neither
     // break the response nor widen the blast radius beyond the caller's own reads.
     if (result.nowcast && result.nowcast.status === 'projected') {
+      // ADDITIVE (intel-v14 D7): cross-check the projection against a GENUINELY
+      // INDEPENDENT lens. D4–D6 grade the nowcast against its OWN past error — a
+      // self-backtest that is structurally blind to a regime change (right at a
+      // turning point it can speak most confidently exactly when it is most wrong).
+      // The honest guard is a second opinion with its own reference frame: the
+      // `delta` lens (how the lead metric moved since the caller last looked). It is
+      // the only independent witness here — scopeNowcast copies the projection's
+      // direction straight from the trend, and the trend's run is by construction the
+      // maximal same-direction streak ending at the latest read, so trend, latest
+      // in-buffer step, and nowcast all share one trajectory; only delta can diverge.
+      // Computed OUTSIDE the graded branch, on purpose: corroboration needs only the
+      // projected nowcast + an independent delta lens, NOT a buffer long enough to
+      // grade — so a fresh streak with a since-snapshot but a short history is still
+      // corroborated. This rides strictly on top of D3 + D1: the `corroboration` key
+      // appears ONLY when the lead trajectory was cross-checked against ≥1 independent
+      // lens (status 'corroborated'); with no `since` there is no `result.delta`, so
+      // the module returns status 'none' and NO key is attached — byte-identical to a
+      // pre-D7 caller. It can only add an "aligned" reassurance or a "mixed" caution;
+      // it never mutates the headline, the voice, or any number, and never inflates
+      // confidence. corroborateNowcast is pure, deterministic, fail-safe (junk →
+      // status 'none', never throws) and leak-safe (it consumes the already-leak-safe
+      // projection + delta and emits a metric label + direction words + small counts —
+      // no tenant identity), so it can neither break the response nor widen the blast
+      // radius. The module stays pure: the projection↔delta join lives here in the
+      // wiring, exactly as the D4/D5/D6 composes below it.
+      const corroboration = corroborateNowcast(result.nowcast, result.delta, opts)
+      if (corroboration && corroboration.status === 'corroborated') result.nowcast.corroboration = corroboration
+
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {
         result.nowcast.accuracy = accuracy

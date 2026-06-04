@@ -718,3 +718,173 @@ test('intel-v14 D6: omitting `history` ⇒ no nowcast ⇒ no voice (additive, by
   const result = await runScopeInsight(INPUT, fakeQuery(CURRENT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
   assert.strictEqual('nowcast' in result, false)
 })
+
+// ──────────────────────────────────────────────────────────────────────────
+// Layer 2g — intel-v14 D7: the optional `nowcast.corroboration` — an INDEPENDENT
+// cross-lens second opinion the self-backtest (D4–D6) structurally cannot give.
+// Proves the WIRING (runScopeInsight cross-checks the lead projection's trajectory
+// against the genuinely independent `delta` lens — the metric's move since the
+// caller's own `since` snapshot — and attaches `corroboration` only when status
+// 'corroborated'); the aligned/mixed arithmetic itself is owned by
+// scopeNowcastCorroboration.test.js. The defining property, exercised below: it is
+// wired BEFORE the accuracy grade, so it attaches on a projected nowcast + an
+// independent delta EVEN ON A SHORT BUFFER too short to grade — independent of the
+// confidence ladder. Additive — absent `since` (⇒ no delta), the nowcast carries
+// no `corroboration` key, byte-identical to a pre-D7 caller. It NEVER mutates the
+// headline, voice, band, or accuracy — it only rides a sibling cue alongside them.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('intel-v14 D7: a graded streak + an independent delta that AGREES ⇒ nowcast.corroboration "aligned"', async () => {
+  // The D6 graded fixture (prior reads 8000/10000/12000 + fresh NEXT_RAW total 12400)
+  // ⇒ nowcast revenue UP with accuracy/band/voice. The caller also sends a `since`
+  // snapshot of the on-screen revenue (10000) — so the independent delta moves
+  // 10000 → 12400 (+2400 = up), the SAME way the projection points. Corroborated, aligned.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const since = [{ metric: 'revenue', current: 10000 }]
+  const result = await runScopeInsight(
+    { ...INPUT, history, since },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // the independent delta is present and points up — the witness the cue reads from.
+  assert.ok(result.delta && result.delta.status === 'changed')
+  assert.strictEqual(result.delta.changes.find(c => c.metric === 'revenue').direction, 'up')
+
+  // the cross-lens cue rides on the nowcast.
+  const c = result.nowcast.corroboration
+  assert.ok(c, 'corroboration attached once a projected nowcast has an independent delta')
+  assert.strictEqual(c.status, 'corroborated')
+  assert.strictEqual(c.level, 'aligned')
+  assert.strictEqual(c.leadMetric, 'revenue')
+  assert.strictEqual(c.leadLabel, 'Revenue')
+  assert.strictEqual(c.trajectory, 'up')   // what the nowcast claims
+  assert.strictEqual(c.recent, 'up')       // the independent delta move
+  assert.strictEqual(c.agree, true)
+  assert.strictEqual(c.witnessCount, 1)
+  assert.strictEqual(c.confirmCount, 1)
+  assert.strictEqual(c.conflictCount, 0)
+  assert.deepStrictEqual(c.witnesses, [{ lens: 'delta', direction: 'up', agrees: true }])
+  assert.match(c.note, /also points up/)
+  assert.match(c.note, /corroborated/)
+  assert.deepStrictEqual(c.meta, { independentLenses: ['delta'], basis: 'cross-lens' })
+
+  // it rides ALONGSIDE the D4 accuracy → D5 band → D6 voice — none replaced.
+  assert.ok(result.nowcast.accuracy, 'D4 accuracy still present')
+  assert.ok(result.nowcast.projections[0].band, 'D5 band still pinned on the lead projection')
+  assert.ok(result.nowcast.voice && result.nowcast.voice.status === 'voiced', 'D6 voice still present')
+})
+
+test('intel-v14 D7: a graded streak + an independent delta that DISAGREES ⇒ nowcast.corroboration "mixed"', async () => {
+  // Same UP projection, but the caller last looked when revenue read 99999 — so the
+  // independent move since then is DOWN (12400 < 99999), AGAINST the projected up.
+  // This is the regime-change catch the self-backtest cannot make: the run is up
+  // (trend up → nowcast up) yet the metric has ticked down vs the caller's snapshot.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const since = [{ metric: 'revenue', current: 99999 }]
+  const result = await runScopeInsight(
+    { ...INPUT, history, since },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  assert.strictEqual(result.delta.changes.find(c => c.metric === 'revenue').direction, 'down')
+
+  const c = result.nowcast.corroboration
+  assert.ok(c)
+  assert.strictEqual(c.status, 'corroborated')
+  assert.strictEqual(c.level, 'mixed')
+  assert.strictEqual(c.trajectory, 'up')
+  assert.strictEqual(c.recent, 'down')
+  assert.strictEqual(c.agree, false)
+  assert.strictEqual(c.confirmCount, 0)
+  assert.strictEqual(c.conflictCount, 1)
+  assert.deepStrictEqual(c.witnesses, [{ lens: 'delta', direction: 'down', agrees: false }])
+  assert.match(c.note, /points down/)
+  assert.match(c.note, /against the projected up/)
+  assert.match(c.note, /caution/)
+
+  // the voice/headline still speak the projection in full — corroboration only tempers, never edits.
+  assert.ok(result.nowcast.voice && result.nowcast.voice.status === 'voiced')
+  assert.ok(result.nowcast.headline.startsWith('At this pace, revenue reaches ~'), result.nowcast.headline)
+})
+
+test('intel-v14 D7: a SHORT buffer too short to grade STILL corroborates (independent of the accuracy ladder)', async () => {
+  // Two prior reads + the fresh read = a 3-read buffer ⇒ nowcast projects but earns
+  // NO accuracy/band/voice (below the grading floor). Corroboration is wired BEFORE
+  // the grade, so with an independent `since` it attaches anyway — the key property
+  // that separates it from the self-backtest layers: it does not need a gradeable run.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+  ]
+  const since = [{ metric: 'revenue', current: 10000 }]
+  const result = await runScopeInsight(
+    { ...INPUT, history, since },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // the nowcast projects but is ungraded — no accuracy/band/voice on this buffer.
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.ok(result.nowcast.projections.every(p => !('band' in p)))
+  assert.strictEqual('voice' in result.nowcast, false)
+
+  // …yet corroboration IS present — it rides on the projection + the independent delta alone.
+  const c = result.nowcast.corroboration
+  assert.ok(c, 'corroboration attaches on a projected-but-ungraded nowcast')
+  assert.strictEqual(c.status, 'corroborated')
+  assert.strictEqual(c.level, 'aligned')
+  assert.strictEqual(c.trajectory, 'up')
+  assert.strictEqual(c.recent, 'up')
+})
+
+test('intel-v14 D7: a graded streak with NO `since` ⇒ no delta ⇒ NO corroboration key (byte-identical to D6)', async () => {
+  // Without a `since` snapshot there is no independent lens to cross-check against, so
+  // corroboration gates to status 'none' and attaches nothing — the nowcast is exactly
+  // what a pre-D7 caller saw (accuracy/band/voice intact, no corroboration key).
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('delta' in result, false)
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.ok(result.nowcast.voice, 'the D6 voice is untouched')
+  assert.strictEqual('corroboration' in result.nowcast, false)
+})
+
+test('intel-v14 D7: omitting `history` ⇒ no nowcast ⇒ no corroboration (additive, byte-identical envelope)', async () => {
+  // Even with a `since` in hand, no nowcast means nothing to corroborate — the
+  // corroboration cue lives strictly inside the nowcast block.
+  const since = [{ metric: 'revenue', current: 10000 }]
+  const result = await runScopeInsight({ ...INPUT, since }, fakeQuery(NEXT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D7: the corroboration payload embeds no tenant identity (renders identically on both surfaces)', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const since = [{ metric: 'revenue', current: 10000 }]
+  const result = await runScopeInsight(
+    { ...INPUT, history, since },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  const serialized = JSON.stringify(result.nowcast.corroboration)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `corroboration leaked tenant identity: ${needle}`)
+  }
+})
