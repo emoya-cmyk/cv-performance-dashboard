@@ -30,6 +30,7 @@ const { calibrateNowcastBand } = require('./scopeNowcastBand')
 const { calibrateNowcastVoice } = require('./scopeNowcastVoice')
 const { corroborateNowcast } = require('./scopeNowcastCorroboration')
 const { assessNowcastCoherence } = require('./scopeNowcastCoherence')
+const { assessNowcastMateriality } = require('./scopeNowcastMateriality')
 const scopeFreshness = require('./scopeFreshness')
 
 // The six KPIs the narrator speaks. Every id here is valid in BOTH the ask
@@ -299,6 +300,30 @@ async function runScopeInsight(input, query, scope) {
       // blast radius.
       const coherence = assessNowcastCoherence(result.nowcast, opts)
       if (coherence && coherence.status === 'assessed') result.nowcast.coherence = coherence
+
+      // ADDITIVE (intel-v14 D9): D8 above answers WHAT the basket is doing (polarity:
+      // unified/divergent/deteriorating); D9 answers WHETHER it is big enough to act on.
+      // assessNowcastMateriality reads each polarity-bearing projection's |pct| and sizes
+      // the DECISIVE side (the worsening one if any, else the gaining one) against a
+      // materiality threshold (default 5%), so a technically-divergent-but-trivial basket
+      // — revenue projected up ~30% over cost per lead projected up ~1% — reads "the
+      // divergence is marginal" instead of sounding the same alarm as a real revenue +8% /
+      // cpl +25% divergence. Together D8 + D9 guard the two opposite failures: D8 stops a
+      // vanity metric from hiding trouble; D9 stops a trivial wobble from masquerading as
+      // trouble. Computed OUTSIDE the graded branch alongside D7+D8, on purpose: materiality
+      // needs only ≥1 polarity-bearing projection with a finite magnitude — NOT a buffer
+      // long enough to grade — so a fresh streak still gets the magnitude temper, and it
+      // even speaks on the single-metric nowcast D8 stays silent on. The `materiality` key
+      // appears ONLY when status 'assessed'; otherwise NO key is attached — byte-identical
+      // to a pre-D9 caller. It can only add a "material" amplifier or a "marginal" temper
+      // beside the voice; it never mutates the headline, the voice, the coherence, the
+      // corroboration, or any number, and never inflates confidence. assessNowcastMateriality
+      // is pure, deterministic, fail-safe (junk → status 'none', never throws) and leak-safe
+      // (it consumes the already-leak-safe projection set and emits metric labels + direction
+      // words + integer percents + small counts — no tenant identity), so it can neither
+      // break the response nor widen the blast radius.
+      const materiality = assessNowcastMateriality(result.nowcast, opts)
+      if (materiality && materiality.status === 'assessed') result.nowcast.materiality = materiality
 
       const accuracy = gradeScopeNowcast([...opts.history, narration], opts)
       if (accuracy && accuracy.status === 'graded') {

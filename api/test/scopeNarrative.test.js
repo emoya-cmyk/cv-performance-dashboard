@@ -995,3 +995,143 @@ test('intel-v14 D8: the coherence payload embeds no tenant identity (renders ide
     assert.ok(!serialized.includes(needle), `coherence leaked tenant identity: ${needle}`)
   }
 })
+
+// ── intel-v14 D9: magnitude temper (nowcast.materiality) ──────────────────────────────────────────
+// D8 classifies the projection basket by POLARITY (unified / divergent / deteriorating). D9 supplies
+// the missing half — MAGNITUDE: is the move that matters big enough to act on, or a hairline? The two
+// guard opposite failures (D8: a vanity metric hides trouble; D9: a trivial wobble masquerades as
+// trouble), so they COEXIST on the same basket. Like coherence, materiality needs no grade — it rides
+// on the projection vector alone (it even speaks on the single-metric nowcast D8 stays silent on).
+
+test('intel-v14 D9: a material divergence (revenue +~18%, cost per lead worsening +~20%) ⇒ nowcast.materiality "material"', async () => {
+  // Same basket as the D8 divergent case: revenue [8000,10000,→12400] improving while cpl [12,16,→20]
+  // is worsening. D8 already named the POLARITY tension; D9 sizes it — the worsening side (the
+  // decisive one) clears the 5% threshold, so this divergence is real, not noise. The 3-read buffer is
+  // too short to GRADE, so — exactly like coherence — materiality attaches on the projection vector
+  // ALONE, with no accuracy / band / voice.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'cpl', current: 12 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'cpl', current: 16 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // ungraded on the short buffer — no accuracy / band / voice (materiality rides ahead of the grade)…
+  assert.strictEqual(result.nowcast.status, 'projected')
+  assert.strictEqual('accuracy' in result.nowcast, false)
+  assert.ok(result.nowcast.projections.every(p => !('band' in p)))
+  assert.strictEqual('voice' in result.nowcast, false)
+
+  // …and D8 + D9 BOTH speak on the same basket: divergent (polarity) AND material (magnitude).
+  assert.strictEqual(result.nowcast.coherence.level, 'divergent')
+
+  const m = result.nowcast.materiality
+  assert.ok(m, 'materiality attaches on a projected-but-ungraded multi-metric nowcast')
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.level, 'material')
+  assert.strictEqual(m.assessedCount, 2)
+  assert.strictEqual(m.materialCount, 2)         // both sides clear 5%
+  assert.strictEqual(m.marginalCount, 0)
+  assert.strictEqual(m.biggestFavorable.metric, 'revenue')
+  assert.strictEqual(m.biggestAdverse.metric, 'cpl')
+  assert.strictEqual(m.decisive.metric, 'cpl')   // the worsening side is decisive
+  // the note names the decisive (worsening) side at its real size; cpl's live label is 'Cost per lead'.
+  const cplPct = Math.round(Math.abs(result.nowcast.projections.find(p => p.metric === 'cpl').pct))
+  assert.strictEqual(m.note, `Cost per lead is projected to worsen ~${cplPct}% — a material divergence, not noise.`)
+})
+
+test('intel-v14 D9: a big headline over a hairline slip (revenue +~18%, cpl +~1%) ⇒ nowcast.materiality "marginal"', async () => {
+  // THE signature D9 case. cpl [19.6,19.8,→20] is technically worsening, so D8 still calls the basket
+  // 'divergent' — but the worsening side projects barely ~1%, well under the 5% threshold. Sounding the
+  // same caution as a real divergence would be crying wolf; D9 tempers it to 'marginal' even though the
+  // headline (revenue) itself moved materially. materialCount/marginalCount keep the raw tally (the
+  // material gain is still counted) while `level` keys only on the decisive (worsening) side.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'cpl', current: 19.6 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'cpl', current: 19.8 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // D8 still sees the polarity split (a rising cpl is worsening, however small)…
+  assert.strictEqual(result.nowcast.coherence.level, 'divergent')
+
+  // …but D9 reads the size and refuses to cry wolf.
+  const m = result.nowcast.materiality
+  assert.ok(m)
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.level, 'marginal')
+  assert.strictEqual(m.assessedCount, 2)
+  assert.strictEqual(m.materialCount, 1)         // revenue is a material gain…
+  assert.strictEqual(m.marginalCount, 1)         // …but the worsening side is a hairline
+  assert.strictEqual(m.biggestFavorable.metric, 'revenue')
+  assert.strictEqual(m.biggestAdverse.metric, 'cpl')
+  assert.strictEqual(m.decisive.metric, 'cpl')   // marginal worsening sets the (marginal) level
+  // the note names the material headline AND the under-threshold worsening side, so 'marginal' reads
+  // honestly — not as a denial that anything is moving.
+  const revPct = Math.round(Math.abs(result.nowcast.projections.find(p => p.metric === 'revenue').pct))
+  assert.strictEqual(
+    m.note,
+    `Revenue is projected up ~${revPct}%, while the worsening side stays under ~5% — the divergence is marginal.`)
+})
+
+test('intel-v14 D9: a single-metric GRADED nowcast ⇒ materiality present (the case D8 omits coherence on)', async () => {
+  // A revenue-only buffer long enough to GRADE (3 history + the live read = 4 reads). D8 stays SILENT
+  // here — one polarity-bearing metric has nothing to cohere WITH. D9 does NOT: "revenue projected up
+  // ~12%" is a material move on its own. So on the exact fixture where coherence is absent, materiality
+  // speaks — the two lenses are complementary, never redundant.
+  const history = [
+    [{ metric: 'revenue', current: 8000 }],
+    [{ metric: 'revenue', current: 10000 }],
+    [{ metric: 'revenue', current: 12000 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+
+  // graded single-metric nowcast: accuracy + voice present, coherence ABSENT (nothing to cohere with)…
+  assert.strictEqual(result.nowcast.projections.length, 1)
+  assert.ok(result.nowcast.accuracy, 'a 4-read revenue buffer grades')
+  assert.ok(result.nowcast.voice)
+  assert.strictEqual('coherence' in result.nowcast, false)
+
+  // …yet materiality DOES speak on the single projection.
+  const m = result.nowcast.materiality
+  assert.ok(m, 'materiality speaks on a single polarity-bearing projection')
+  assert.strictEqual(m.status, 'assessed')
+  assert.strictEqual(m.level, 'material')
+  assert.strictEqual(m.assessedCount, 1)
+  assert.strictEqual(m.materialCount, 1)
+  assert.strictEqual(m.biggestFavorable.metric, 'revenue')
+  assert.strictEqual(m.biggestAdverse, null)     // no worsening side
+  assert.strictEqual(m.decisive.metric, 'revenue')
+  const revPct = Math.round(Math.abs(result.nowcast.projections[0].pct))
+  assert.strictEqual(m.note, `Revenue is projected up ~${revPct}% — a material gain.`)
+})
+
+test('intel-v14 D9: no projected nowcast ⇒ NO materiality (additive, byte-identical envelope)', async () => {
+  // Omitting `history` ⇒ no trend ⇒ no nowcast at all, so there is nothing for D9 to size and the
+  // envelope is byte-identical to every pre-D9 caller.
+  const result = await runScopeInsight(INPUT, fakeQuery(NEXT_RAW, PREVIOUS_RAW), { scopeClientId: '7', role: 'client' })
+  assert.strictEqual('nowcast' in result, false)
+})
+
+test('intel-v14 D9: the materiality payload embeds no tenant identity (renders identically on both surfaces)', async () => {
+  const history = [
+    [{ metric: 'revenue', current: 8000 }, { metric: 'cpl', current: 12 }],
+    [{ metric: 'revenue', current: 10000 }, { metric: 'cpl', current: 16 }],
+  ]
+  const result = await runScopeInsight(
+    { ...INPUT, history },
+    fakeQuery(NEXT_RAW, PREVIOUS_RAW),
+    { scopeClientId: '7', role: 'client' })
+  const serialized = JSON.stringify(result.nowcast.materiality)
+  for (const needle of ['"7"', 'client_id', 'clientId', 'scopeClientId', 'tenant', 'locationId', 'location_id', 'accountId']) {
+    assert.ok(!serialized.includes(needle), `materiality leaked tenant identity: ${needle}`)
+  }
+})
