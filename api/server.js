@@ -25,13 +25,23 @@ const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
+const { securityHeaders } = require('./middleware/securityHeaders')
 const { startScheduler } = require('./scheduler')
 const { migrate, query } = require('./db')
 
 const app  = express()
 const PORT = process.env.PORT || 3001
 
+// Express advertises itself via X-Powered-By; disabling it at the app level is
+// the only reliable way to strip it (Express sets it at send time, after any
+// removeHeader() in middleware would have run).
+app.disable('x-powered-by')
+
 // ── Middleware ────────────────────────────────────────────────────────────────
+// Security headers first so EVERY response (API JSON, SPA bundle, 404s) carries
+// the hardening set — before CORS, body parse, and all routes.
+app.use(securityHeaders())
+
 app.use(cors({
   origin:  process.env.ALLOWED_ORIGIN || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
