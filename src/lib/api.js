@@ -449,6 +449,16 @@ export const api = {
   // gated factor it actually applies. AGENCY-ONLY control machinery — like getReallocationEfficacy it NEVER
   // rides getClientInsights(); the client narration is unconditionally silent. No params (M stepped samples).
   getReallocationEfficacyHealth: () => get('/api/insights/reallocation-efficacy-health'),
+  // getConnectionHealth() → portfolio PIPELINE-HEALTH roster (intel-v11 self-healing layer). For every
+  // client × channel it reports the connection's sync state (HEALTHY/STALE/ERRORING/AUTH_EXPIRED/
+  // NEVER_SYNCED/DISABLED), what the self-healing watchdog is doing about it (auto-retry on a deterministic
+  // plateauing backoff vs. waiting on a human), and — for AUTH failures only, the one thing the machine
+  // NEVER self-heals — an operator_required reconnect flag. Payload {scope, as_of, summary{counts,
+  // needs_attention, operator_required, self_healing, exhausted, worst_status, next_wake_at, ok},
+  // connections:[{...,narration}], narration}. AGENCY-ONLY operational machinery: a row names another
+  // client and the narration is agency-voiced, so (like getReallocation*/getPulse) it NEVER rides
+  // getClientInsights() — the client's own degraded note is leak-proof and lives elsewhere. No params.
+  getConnectionHealth: ()        => get('/api/insights/connection-health'),
   // getPulse() → portfolio DAILY-PULSE roster: the INTRA-WEEK grain. The weekly engine is blind
   // between Mondays; this watches each client's trailing-7-day LEVEL on the ATOMIC DAILY facts and
   // flags every client × flow metric whose trailing week has slid out of that client's OWN recent

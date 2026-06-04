@@ -272,11 +272,17 @@ export default function ConnectionsPage() {
   const [conns,    setConns]    = useState([])
   const [loading,  setLoading]  = useState(false)
 
-  // Load client list once
+  // Load client list once. Honor a ?client=<id> deep-link (the Pipeline-health Reconnect
+  // CTA on the Intelligence page points here pre-targeted at the feed that needs a human),
+  // falling back to the first client when the param is absent or doesn't match a known id.
   useEffect(() => {
     api.clients().then(list => {
       setClients(list)
-      if (list.length) setClientId(list[0].id)
+      if (list.length) {
+        const wanted = new URLSearchParams(window.location.search).get('client')
+        const match  = wanted && list.find(c => String(c.id) === String(wanted))
+        setClientId(match ? match.id : list[0].id)
+      }
     }).catch(() => {})
   }, [])
 

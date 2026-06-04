@@ -19,7 +19,7 @@
 // lifts straight into ClientView + Intelligence (2c/2d), and the confidence chip /
 // consistency note are the live 3c/3d surfaces. Client names here are fictional.
 // ============================================================
-import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, ArrowRight, ArrowLeftRight, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp } from 'lucide-react'
+import { ArrowUp, ArrowDown, Minus, Activity, Sparkles, Clock, ShieldCheck, Gauge, ShieldAlert, Crosshair, AlertTriangle, AlertOctagon, Wrench, Eye, CheckCircle2, Radar, Target, SlidersHorizontal, ArrowUpCircle, ArrowRight, ArrowLeftRight, TrendingDown, Scale, Check, Inbox, Scissors, Stethoscope, RotateCcw, ThumbsUp, Plug, Users } from 'lucide-react'
 import { fmtMetricValue } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'   // the now-shared component this preview helped design (2c/2d)
 
@@ -3707,6 +3707,285 @@ function ReallocationEfficacyHealthPanelPreview({ data }) {
   )
 }
 
+/* ── PIPELINE HEALTH (intel-v11 A3) — agency self-healing-watchdog surface, preview twin.
+   Faithful mirror of PipelineHealthPanel in Intelligence.jsx, but with baked display strings
+   (no cn(), no timeAgo / pipelineEta — those don't exist in this preview file) over static
+   fixtures. Two banner voices and never more: ROSE when a feed needs a human reconnect (an
+   expired sign-in — the ONE fault the watchdog never retries on its own), AMBER when feeds are
+   merely degraded and already self-healing. Agency-only by construction — a client never sees it. */
+const PIPELINE_STATUS_TONE_PV = {
+  HEALTHY:      { pill: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', chip: 'bg-emerald-100 text-emerald-700', label: 'Healthy',         Icon: CheckCircle2 },
+  STALE:        { pill: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-500',   chip: 'bg-amber-100 text-amber-700',     label: 'Stale',           Icon: Clock },
+  ERRORING:     { pill: 'border-orange-200 bg-orange-50 text-orange-700',    dot: 'bg-orange-500',  chip: 'bg-orange-100 text-orange-700',   label: 'Erroring',        Icon: AlertTriangle },
+  AUTH_EXPIRED: { pill: 'border-rose-200 bg-rose-50 text-rose-700',          dot: 'bg-rose-500',    chip: 'bg-rose-100 text-rose-700',       label: 'Sign-in expired', Icon: ShieldAlert },
+  NEVER_SYNCED: { pill: 'border-violet-200 bg-violet-50 text-violet-700',    dot: 'bg-violet-500',  chip: 'bg-violet-100 text-violet-700',   label: 'Never synced',    Icon: Plug },
+  DISABLED:     { pill: 'border-slate-200 bg-slate-100 text-slate-500',      dot: 'bg-slate-300',   chip: 'bg-slate-100 text-slate-500',     label: 'Disabled',        Icon: Minus },
+}
+const PIPELINE_COUNT_ORDER_PV = ['HEALTHY', 'STALE', 'ERRORING', 'AUTH_EXPIRED', 'NEVER_SYNCED', 'DISABLED']
+
+// client_id → display name (the live panel fetches this via api.clients(); here it's a fixture).
+const PIPELINE_NAMES = { '21': 'Harbor Dental', '14': 'Vista Plumbing', '8': 'Summit HVAC' }
+
+// A degraded morning: one feed needs a human reconnect (Google's sign-in expired — never
+// auto-retried), two are degraded-but-already-self-healing (a plateaued Meta error + a just-
+// stale GA4), four others quietly healthy. Display strings (last_ok / eta / next_wake_eta /
+// checked) are baked so the twin renders deterministically with no clock math.
+const PIPELINE_HEALTH = {
+  scope: 'portfolio',
+  checked: 'just now',
+  summary: {
+    total: 7,
+    counts: { HEALTHY: 4, STALE: 1, ERRORING: 1, AUTH_EXPIRED: 1, NEVER_SYNCED: 0, DISABLED: 0 },
+    needs_attention: 3,
+    operator_required: 1,
+    self_healing: 2,
+    exhausted: 1,
+    worst_status: 'AUTH_EXPIRED',
+    worst_severity: 'critical',
+    next_wake_eta: 'in 4m',
+    ok: false,
+  },
+  connections: [
+    {
+      channel: 'google_ads', label: 'Google Ads', status: 'AUTH_EXPIRED',
+      needs_attention: true, operator_required: true, failures: 5, client_id: 21,
+      narration: 'The Google Ads sign-in expired about seven hours ago, so auto-sync is paused — the watchdog will not retry a revoked token on its own. One reconnect clears it.',
+      last_ok: '7h ago',
+      recovery: { action: 'reconnect', retryable: false, exhausted: false, eta: '' },
+    },
+    {
+      channel: 'meta_ads', label: 'Meta Ads', status: 'ERRORING',
+      needs_attention: true, operator_required: false, failures: 6, client_id: 14,
+      narration: 'The Meta API has been throwing 500s on the last few pulls. The watchdog is retrying on a backoff that has plateaued at its ceiling — slow cadence, but it never gives up.',
+      last_ok: '1d ago',
+      recovery: { action: 'escalate', retryable: true, exhausted: true, eta: 'in 2h' },
+    },
+    {
+      channel: 'ga4', label: 'GA4', status: 'STALE',
+      needs_attention: true, operator_required: false, failures: 1, client_id: 8,
+      narration: 'GA4 last synced just past its freshness window. A refresh is already queued on the next watchdog beat — nothing to do.',
+      last_ok: '26h ago',
+      recovery: { action: 'resync', retryable: true, exhausted: false, eta: 'in 4m' },
+    },
+  ],
+  narration: 'Reconnect Google Ads for Harbor Dental — its sign-in expired and it is the only feed that needs a human; the other two are already self-healing.',
+}
+
+// The same surface on an all-clear morning — the calm state the alarm is silent on by design.
+const PIPELINE_HEALTH_OK = {
+  scope: 'portfolio',
+  checked: 'just now',
+  summary: {
+    total: 6,
+    counts: { HEALTHY: 6, STALE: 0, ERRORING: 0, AUTH_EXPIRED: 0, NEVER_SYNCED: 0, DISABLED: 0 },
+    needs_attention: 0,
+    operator_required: 0,
+    self_healing: 0,
+    exhausted: 0,
+    worst_status: 'HEALTHY',
+    worst_severity: 'none',
+    next_wake_eta: '',
+    ok: true,
+  },
+  connections: [],
+  narration: null,
+}
+
+function PipelineHealthBannerPreview({ summary }) {
+  if (!summary) return null
+  const opReq = summary.operator_required || 0
+  const attn  = summary.needs_attention   || 0
+  if (opReq === 0 && attn === 0) return null
+
+  const reconnect = opReq > 0
+  const t = reconnect
+    ? { wrap: 'border-rose-200 bg-rose-50',  icon: 'text-rose-500',  kicker: 'text-rose-600',  head: 'text-rose-900',  body: 'text-rose-800/80',  Icon: ShieldAlert, label: 'Action needed · reconnect' }
+    : { wrap: 'border-amber-200 bg-amber-50', icon: 'text-amber-500', kicker: 'text-amber-600', head: 'text-amber-900', body: 'text-amber-800/80', Icon: Wrench,      label: 'Self-healing · no action needed' }
+
+  const head = reconnect
+    ? `${opReq} ${opReq === 1 ? 'feed needs' : 'feeds need'} a human reconnect`
+    : `${attn} ${attn === 1 ? 'feed is healing' : 'feeds are healing'} automatically`
+  const detail = reconnect
+    ? 'Their sign-in expired, so auto-sync is paused until someone re-authorizes — the one fault the system will never retry on its own. Use the Reconnect button on each feed below.'
+    : 'The watchdog is already re-syncing them on a deterministic backoff — stale data refreshes and transient errors retry without anyone stepping in. Nothing to do but watch.'
+  const alsoHealing = reconnect && attn > opReq
+  const BannerIcon = t.Icon
+
+  return (
+    <div className={`mb-4 rounded-xl border px-3.5 py-3 ${t.wrap}`} role="alert">
+      <div className="flex items-start gap-2.5">
+        <BannerIcon className={`w-4 h-4 mt-0.5 shrink-0 ${t.icon}`} />
+        <div className="min-w-0 flex-1">
+          <p className={`text-[10px] font-black uppercase tracking-wider ${t.kicker}`}>
+            Pipeline watchdog · {t.label}
+          </p>
+          <p className={`mt-0.5 text-[13px] font-bold leading-snug ${t.head}`}>{head}</p>
+          <p className={`mt-1 text-[11px] font-medium leading-snug ${t.body}`}>{detail}</p>
+          {alsoHealing && (
+            <p className={`mt-1.5 text-[10px] font-semibold leading-snug ${t.body}`}>
+              The other {attn - opReq} degraded {attn - opReq === 1 ? 'feed is' : 'feeds are'} already self-healing — no action needed there.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PipelineConnRowPreview({ conn, names }) {
+  const tone   = PIPELINE_STATUS_TONE_PV[conn.status] || PIPELINE_STATUS_TONE_PV.DISABLED
+  const Icon   = tone.Icon
+  const cname  = names[String(conn.client_id)] || (conn.client_id != null ? `Client ${conn.client_id}` : 'Unknown client')
+  const rec    = conn.recovery || {}
+  const opReq  = !!conn.operator_required
+  const eta    = rec.eta || ''
+  const lastOk = conn.last_ok || ''
+
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 ${opReq ? 'border-rose-200 bg-rose-50/40' : conn.needs_attention ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100 bg-white'}`}>
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${tone.chip}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[13px] font-black text-slate-900">{conn.label || conn.channel}</span>
+            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">
+              <Users className="w-3 h-3" /> {cname}
+            </span>
+            <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide ${tone.pill}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} /> {tone.label}
+            </span>
+          </div>
+          {conn.narration && <p className="mt-1 text-[12px] font-medium text-slate-600 leading-snug">{conn.narration}</p>}
+          <div className="mt-1.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+            {lastOk && <span className="inline-flex items-center gap-1"><Check className="w-2.5 h-2.5" /> last ok {lastOk}</span>}
+            {conn.failures > 0 && (
+              <span className="inline-flex items-center gap-1 text-slate-500">
+                <AlertTriangle className="w-2.5 h-2.5" /> {conn.failures} {conn.failures === 1 ? 'failure' : 'failures'}
+              </span>
+            )}
+            {!opReq && rec.retryable && eta && (
+              <span className="inline-flex items-center gap-1 text-emerald-600">
+                <RotateCcw className="w-2.5 h-2.5" /> auto-retry {eta}{rec.exhausted ? ' · slow cadence' : ''}
+              </span>
+            )}
+          </div>
+        </div>
+        {opReq && (
+          <a
+            href={`/connections?client=${encodeURIComponent(conn.client_id)}`}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-[11px] font-black text-rose-700 hover:bg-rose-50 transition"
+            title={`Reconnect ${conn.label || conn.channel} for ${cname}`}
+          >
+            <Plug className="w-3.5 h-3.5" /> Reconnect
+          </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PipelineHealthPanelPreview({ data, names }) {
+  const s         = data?.summary || null
+  const worst     = s?.worst_status || null
+  const worstTone = worst ? (PIPELINE_STATUS_TONE_PV[worst] || null) : null
+  const conns     = Array.isArray(data?.connections) ? data.connections : []
+  const roster    = conns.filter(c => c && c.status !== 'HEALTHY')
+  const ROSTER_CAP = 12
+  const shown     = roster.slice(0, ROSTER_CAP)
+  const overflow  = roster.length - shown.length
+  const healthyN  = s?.counts?.HEALTHY || 0
+  const allOk     = !!(s && s.ok && roster.length === 0)
+  const nextWake  = s?.next_wake_eta || ''
+  const checked   = data?.checked || ''
+
+  return (
+    <section className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 flex-wrap px-4 pt-4 pb-3 border-b border-slate-50">
+        <span className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <Plug className="w-4 h-4 text-brand-600" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-black text-slate-900 leading-tight">Pipeline health</h2>
+          <p className="text-[11px] font-medium text-slate-400 leading-tight truncate">
+            Live sync status across every client feed · self-healing watchdog
+          </p>
+        </div>
+        {s && worstTone && (
+          <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold ${allOk ? PIPELINE_STATUS_TONE_PV.HEALTHY.pill : worstTone.pill}`} title={`Worst connection state: ${worst}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${allOk ? PIPELINE_STATUS_TONE_PV.HEALTHY.dot : worstTone.dot}`} /> {allOk ? 'All healthy' : worstTone.label}
+          </span>
+        )}
+        {s && s.self_healing > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700" title="Connections the watchdog is auto-recovering right now, no operator involved">
+            <Wrench className="w-3 h-3" /> {s.self_healing} self-healing
+          </span>
+        )}
+        <span className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-bold text-slate-400">
+          <RefreshCw className="w-3.5 h-3.5" /> Refresh
+        </span>
+      </div>
+
+      <div className="px-4 py-4">
+        {s && <PipelineHealthBannerPreview summary={s} />}
+
+        {s && s.total > 0 && (
+          <>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {PIPELINE_COUNT_ORDER_PV.filter(k => (s.counts?.[k] || 0) > 0).map(k => {
+                const tone = PIPELINE_STATUS_TONE_PV[k]
+                return (
+                  <span key={k} className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-bold ${tone.pill}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
+                    <span className="tabular-nums">{s.counts[k]}</span> {tone.label}
+                  </span>
+                )
+              })}
+            </div>
+
+            {(s.self_healing > 0 || s.exhausted > 0) && (
+              <div className="mt-2.5 flex items-center gap-3 flex-wrap text-[10px] font-semibold text-slate-400">
+                {s.self_healing > 0 && <span className="inline-flex items-center gap-1 text-emerald-600"><Wrench className="w-2.5 h-2.5" /> {s.self_healing} auto-recovering</span>}
+                {s.exhausted > 0 && <span className="inline-flex items-center gap-1 text-slate-500"><Clock className="w-2.5 h-2.5" /> {s.exhausted} on slow retry</span>}
+                {nextWake && s.self_healing > 0 && <span className="inline-flex items-center gap-1"><RotateCcw className="w-2.5 h-2.5" /> next attempt {nextWake}</span>}
+              </div>
+            )}
+
+            {allOk ? (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                <p className="text-[12px] font-semibold text-emerald-800">
+                  All {s.total} {s.total === 1 ? 'feed is' : 'feeds are'} healthy and syncing on schedule — nothing needs attention.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {shown.map((c, i) => <PipelineConnRowPreview key={`${c.client_id}:${c.channel}:${i}`} conn={c} names={names} />)}
+                {overflow > 0 && (
+                  <p className="text-[11px] font-semibold text-slate-400 pl-1">+ {overflow} more {overflow === 1 ? 'connection' : 'connections'} needing attention</p>
+                )}
+                {healthyN > 0 && (
+                  <p className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 pl-1">
+                    <CheckCircle2 className="w-3 h-3" /> {healthyN} other {healthyN === 1 ? 'feed' : 'feeds'} healthy and syncing
+                  </p>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="px-4 py-2.5 bg-brand-50/30 border-t border-slate-50">
+        <p className="text-[11px] font-medium text-slate-400 leading-relaxed">
+          The watchdog self-heals what it safely can — stale feeds resync, transient errors retry on a backoff that plateaus but never gives up. The one thing it never touches is an expired sign-in: a revoked credential is surfaced here for a human <span className="font-semibold text-slate-500">Reconnect</span>, never retried against a dead token.
+          {checked ? ` Checked ${checked}.` : ''} Agency-only.
+        </p>
+      </div>
+    </section>
+  )
+}
+
 export default function PulseDiagnosisPreview() {
   return (
     <div className="min-h-screen bg-slate-100/70 p-6 sm:p-10">
@@ -3734,6 +4013,32 @@ export default function PulseDiagnosisPreview() {
             mixed it sets a higher bar (<span className="font-bold text-teal-500">Calmer</span> — fewer false alarms), always graded against the
             canonical band and never its own tuned one, so the loop can never chase its own tail. No LLM and no human-set dial anywhere in the
             chain; every figure traces to a stored daily fact. Sample numbers; client names fictional.
+          </p>
+        </div>
+
+        {/* ── PIPELINE HEALTH — the self-healing watchdog (intel-v11 A3), full width, at the TOP.
+            Every insight on this page stands on one assumption: the data underneath is fresh. This
+            is the surface that guarantees it — a watchdog that resyncs stale feeds and retries
+            transient errors on its own, escalating to a human ONLY for the one fault it must never
+            self-heal: an expired sign-in. Foundation first, then the intelligence it feeds. ─────── */}
+        <div className="mb-6">
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">Agency · Intelligence ▸ Pipeline health · the self-healing watchdog</p>
+          <PipelineHealthPanelPreview data={PIPELINE_HEALTH} names={PIPELINE_NAMES} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            Before any insight is trustworthy, its data has to be fresh — so this is the foundation everything else on the page stands on.
+            A watchdog sweeps every client feed on a schedule and <span className="font-bold text-emerald-600">self-heals what it safely can</span>:
+            stale feeds resync, transient errors retry on a backoff that plateaus but <span className="font-bold text-emerald-600">never gives up</span>.
+            The <span className="font-bold text-rose-600">one</span> thing it will never retry on its own is an{' '}
+            <span className="font-bold text-rose-600">expired sign-in</span> — a revoked credential is the single fault that needs a human, so it
+            surfaces a <span className="font-bold text-rose-600">Reconnect</span> button instead of hammering a dead token. The banner speaks in exactly
+            two voices — <span className="font-bold text-rose-600">act</span> (reconnect) or <span className="font-bold text-amber-600">watch</span> (already
+            healing) — and never a third. No operator runs this; it runs itself and only asks for a human on the one thing only a human can fix.
+          </p>
+          <p className="mt-4 mb-2 px-1 text-[10px] font-black uppercase tracking-widest text-slate-300">…and the same surface on an all-clear morning</p>
+          <PipelineHealthPanelPreview data={PIPELINE_HEALTH_OK} names={PIPELINE_NAMES} />
+          <p className="mt-2 px-1 text-[11px] font-medium text-slate-400 leading-relaxed">
+            When every feed is healthy the alarm stays silent by design — no banner, no roster, just a calm green confirmation that all
+            feeds are syncing on schedule. The watchdog earns its keep precisely by being quiet until something actually needs a human.
           </p>
         </div>
 
