@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope } from 'lucide-react'
+import { Sparkles, RefreshCw, AlertCircle, Route, History, TrendingUp, Telescope, Target } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { severityMeta, urgencyMeta, directionIcon } from '@/lib/insightMeta'
@@ -274,6 +274,63 @@ function TrendStrip({ trend, tone }) {
   )
 }
 
+// intel-v14 D4 — the nowcast's self-graded TRACK RECORD. D3 projects where a streak is heading
+// "at this pace"; D4 closes the loop by asking how well those projections have actually held up.
+// The server backtests the nowcast against the very reads the FE already buffered
+// (gradeScopeNowcast) and attaches `nowcast.accuracy` ONLY when there is a projected nowcast AND
+// ≥4 buffered reads to grade against — so a fresh streak on a short session shows a nowcast with
+// no track record yet, and once enough reads accrue a confidence read appears beneath it. Every
+// field is from the already-leak-safe `accuracy` (a plain-language grade + bare error statistics
+// + metric labels; never any tenant identity), so it renders identically on agency and client —
+// `tone` only re-voices the words. The grade colors the chip so a viewer reads the projection's
+// trustworthiness at a glance: tight=emerald, fair=amber, loose=slate.
+const ACCURACY_GRADE = {
+  tight: { chip: 'text-emerald-700 bg-emerald-50 border-emerald-200', agency: 'Tight', client: 'Reliable' },
+  fair:  { chip: 'text-amber-700 bg-amber-50 border-amber-200',       agency: 'Fair',  client: 'Fair' },
+  loose: { chip: 'text-slate-600 bg-slate-50 border-slate-200',       agency: 'Loose', client: 'Rough' },
+}
+
+// The headline error as a compact, honest token — mirrors the server's fmtPct so the chip and
+// the sentence never disagree: a genuine 0 stays "0", anything under 1% reads "<1", else rounded.
+const fmtOff = (smape) => {
+  const n = Number(smape)
+  if (!Number.isFinite(n)) return null
+  return n === 0 ? '0' : n < 1 ? '<1' : String(Math.round(n))
+}
+
+// The one-line substantiation under the nowcast headline. Agency gets the server's raw, precise
+// headline ("…within ~4% of actual — N checks."); client gets a softer sentence with no
+// "projections"/"checks" machinery, just the reassurance that recent estimates have landed close.
+function accuracyNote(accuracy, tone) {
+  const o = accuracy && accuracy.overall
+  if (!o) return null
+  if (tone === 'client') {
+    const off = fmtOff(o.smape)
+    return off != null ? `Recent pace estimates have landed within ~${off}% of actual.` : null
+  }
+  return accuracy.headline || null
+}
+
+// The at-a-glance confidence chip for the nowcast header, sitting beside the accelerating /
+// at-floor badges. Grade-colored; agency also shows the ±error magnitude, client just the
+// plain-language grade. Hover reveals the full headline on either surface.
+function AccuracyChip({ accuracy, tone }) {
+  const o = accuracy && accuracy.overall
+  if (!o || !o.grade) return null
+  const g = ACCURACY_GRADE[o.grade] || ACCURACY_GRADE.loose
+  const off = fmtOff(o.smape)
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded border px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${g.chip}`}
+      title={accuracy.headline || undefined}
+    >
+      <Target size={10} strokeWidth={2.5} />
+      {tone === 'client' ? g.client : g.agency}
+      {tone !== 'client' && off != null && <span className="font-normal normal-case opacity-70">±{off}%</span>}
+    </span>
+  )
+}
+
 // intel-v14 D3 — the live NOWCAST strip. D2's TrendStrip says a metric is on a streak; this
 // says where that streak is HEADING at its current pace ("At this pace, revenue reaches
 // ~$14,600 next update"). It only appears beneath a trending streak (the server attaches
@@ -288,6 +345,10 @@ function NowcastStrip({ nowcast, tone }) {
   if (!projections.length) return null
   const accelerating = projections.some((p) => p && p.accelerating)
   const floored = projections.some((p) => p && p.clamped)
+  // intel-v14 D4 — the self-graded track record, present only when the server could backtest the
+  // projection (a projected nowcast AND ≥4 buffered reads). Absent ⇒ chip + note simply omitted.
+  const accuracy = nowcast.accuracy && nowcast.accuracy.status === 'graded' ? nowcast.accuracy : null
+  const note = accuracy ? accuracyNote(accuracy, tone) : null
 
   return (
     <div className="mt-2 rounded-xl border border-dashed border-sky-300/80 border-l-4 border-l-sky-500 bg-sky-50/40 px-3.5 py-2.5">
@@ -308,9 +369,13 @@ function NowcastStrip({ nowcast, tone }) {
                 at floor
               </span>
             )}
+            {accuracy && <AccuracyChip accuracy={accuracy} tone={tone} />}
           </div>
           {nowcast.headline && (
             <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-700">{nowcast.headline}</p>
+          )}
+          {note && (
+            <p className="mt-0.5 text-[11px] text-slate-400">{note}</p>
           )}
 
           <div className="mt-2 flex flex-wrap gap-1.5">
