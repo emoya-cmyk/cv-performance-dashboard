@@ -1,4 +1,5 @@
 import { summarizeLiveness } from '@/lib/liveness'
+import { useNow } from '@/lib/useNow'
 
 // ============================================================================
 // components/StreamStatus.jsx — the shared live-stream badge (intel-v13 C2).
@@ -15,9 +16,15 @@ import { summarizeLiveness } from '@/lib/liveness'
 // refresh indicator ({loading, lastRefresh}) wired into TopBar. This badge reflects
 // the SSE transport health + data recency, a distinct concept; the two coexist.
 //
-// Purely presentational and stateless: it owns no timer and reads no payload. It
-// re-renders when its props change — the parent owns the subscription via
-// useLiveStream and passes connected/lastEventAt down, refreshed on every event.
+// Reads no payload — it folds only the parent's connected/lastEventAt (the parent
+// owns the SSE subscription via useLiveStream). But it is NOT timer-free: the verdict
+// is time-relative ("Live · updated 3m ago", and the live→connected decay at ~90s),
+// and a real stream can sit healthy-but-quiet for minutes (the 30s keep-alive ping
+// moves no state, so no prop changes). Re-rendering only on prop change would freeze
+// that age and falsely hold "Live" long after the last event. So it advances its own
+// low-frequency wall clock (lib/useNow — paused while hidden, re-grounds on re-show)
+// purely to keep the age honest; supply a fixed `now` to disable it (tests/preview).
+// The added clock carries no data, so the badge stays leak-safe on every surface.
 // ============================================================================
 
 // Semantic tone (declared in liveness.js) → Tailwind classes. The mapping lives
@@ -43,7 +50,13 @@ const TONE_TEXT = {
  * @param {string}       [props.className]
  */
 export default function StreamStatus({ connected, lastEventAt, now, showDetail = true, className = '' }) {
-  const v    = summarizeLiveness({ connected, lastEventAt }, now)
+  // Keep the time-relative verdict honest on a long-open, quiet stream: advance an
+  // internal wall clock so "updated Nm ago" and the live→connected decay re-evaluate
+  // even when no event (hence no prop change) arrives. A caller-supplied fixed `now`
+  // (tests/preview) disables the clock and is used verbatim, preserving determinism;
+  // otherwise we feed the ticking clock, matching the prior default-to-now behaviour.
+  const liveNow = useNow({ active: now === undefined })
+  const v    = summarizeLiveness({ connected, lastEventAt }, now ?? liveNow)
   const dot  = TONE_DOT[v.tone]  || TONE_DOT.muted
   const text = TONE_TEXT[v.tone] || TONE_TEXT.muted
 
