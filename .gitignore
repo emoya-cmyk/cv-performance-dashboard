@@ -31,3 +31,9 @@ Thumbs.db
 
 # Vite
 *.local
+.vercel
+
+# Temp / one-off scripts
+seed-remote.js
+api/.env.production
+api/dev.db.showcase-bak

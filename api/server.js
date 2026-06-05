@@ -45,6 +45,16 @@ app.disable('x-powered-by')
 // load balancer. One hop only — never `true` (which would trust a spoofed XFF).
 app.set('trust proxy', 1)
 
+// Serverless cold-start guard: block all requests until the migration promise
+// resolves. The promise is stored on `app` after the if/else at the bottom;
+// by the time a real HTTP request arrives the module has finished loading, so
+// the key is always set in serverless mode.
+app.use((req, res, next) => {
+  const p = app.get('_migrationReady')
+  if (p) p.then(() => next()).catch(() => next())
+  else next()
+})
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 // Security headers first so EVERY response (API JSON, SPA bundle, 404s) carries
 // the hardening set — before CORS, body parse, and all routes.
@@ -207,8 +217,11 @@ if (require.main === module) {
     startScheduler()
   })
 } else {
-  // Serverless cold-start: run migrations once per instance lifecycle.
-  migrate().catch(err => console.error('[db] migration error', err.message))
+  // Serverless cold-start: run migrations and store the promise so the
+  // readiness middleware (registered above) can block requests until done.
+  app.set('_migrationReady', migrate().catch(err => {
+    console.error('[db] migration error', err.message)
+  }))
 }
 
 module.exports = app
