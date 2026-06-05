@@ -940,6 +940,12 @@ export default function Clients() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {clientSummary.map(c => {
           const s = STATUS_STYLE[c.status] || STATUS_STYLE.paused
+          // ROI and Win rate are derived from the card's own figures so they never read
+          // "—" when the summary endpoint omits the pre-aggregated avg_roas / mql_rate.
+          // Same revenue/spend and jobs/leads math the client + exec heroes use
+          // (e.g. Apex $235,110 / $15,122 → 15.5×). Fall back to any pre-computed field.
+          const roi     = c.total_spend > 0 ? c.total_revenue / c.total_spend : (c.avg_roas ?? null)
+          const winRate = c.total_leads > 0 ? c.total_closed / c.total_leads  : (c.mql_rate ?? null)
           return (
             <div
               key={c.id}
@@ -983,11 +989,11 @@ export default function Clients() {
               <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                 <div className="flex items-center gap-1.5 text-xs text-slate-500">
                   <TrendingUp className="w-3.5 h-3.5 text-brand-500" />
-                  <span>ROI <strong className="text-slate-700">{fmtX(c.avg_roas)}</strong></span>
+                  <span>ROI <strong className="text-slate-700">{fmtX(roi)}</strong></span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500">
-                    Win rate <strong className="text-slate-700">{fmtPct(c.mql_rate)}</strong>
+                    Win rate <strong className="text-slate-700">{fmtPct(winRate)}</strong>
                   </span>
                   {/* Agency-only: write update / goals / delete */}
                   {(!USE_API || isAgency()) && (

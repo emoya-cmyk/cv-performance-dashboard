@@ -8,6 +8,7 @@
 
 require('dotenv').config()
 const { query, migrate } = require('./db')
+const facts = require('./lib/facts')   // column→fact adapter (powers the defect-C atomic-grain seed)
 const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
 
@@ -17,9 +18,70 @@ function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + m
 function randF(min, max, dec = 1) { return parseFloat((Math.random() * (max - min) + min).toFixed(dec)) }
 
 function monday(weeksAgo) {
+  // UTC-anchored so the demo week_start can never drift by the host timezone and
+  // always equals rollup.js weekStartOf() (the Monday of the ISO week). The previous
+  // LOCAL-time computation is exactly what let a reseed on a different calendar day
+  // anchor on a neighbouring weekday, leaving a second, day-offset 12-week series
+  // behind that INSERT OR IGNORE keyed on (client_id, week_start) could never dedupe.
   const d = new Date()
-  d.setDate(d.getDate() - d.getDay() + 1 - weeksAgo * 7)
-  return d.toISOString().split('T')[0]
+  d.setUTCHours(0, 0, 0, 0)
+  const day = d.getUTCDay()                                  // 0=Sun … 6=Sat
+  d.setUTCDate(d.getUTCDate() + ((day === 0 ? -6 : 1) - day) - weeksAgo * 7)
+  return d.toISOString().slice(0, 10)
+}
+
+// ── fact_metric daily-grain spreader (defect C) ────────────────────────────────
+// /explore and the intra-week "Daily Pulse" read the atomic fact_metric grain, which
+// the seed never populated → both surfaces showed empty. We backfill it FROM the same
+// weekly_reports rows, through the SAME column→fact adapter the rollup/golden-parity
+// path uses, then spread each weekly fact across its 7 days. The split is exact: the
+// 7 daily values sum back to the weekly total (last day absorbs the rounding
+// remainder) and rate metrics are replicated (their weekly AVG is unchanged). Net
+// invariant: rebuildWeeklyRollup(fact_metric) === weekly_reports — the two data paths
+// are provably in agreement, so nothing can drift dirty.
+const DOW_WEIGHTS = [0.92, 1.04, 1.10, 1.12, 1.16, 0.94, 0.72]   // index 0 = Monday → realistic mid-week lift, lighter weekends
+const DOW_TOTAL   = DOW_WEIGHTS.reduce((a, b) => a + b, 0)
+
+// Period-average metrics must be REPLICATED across the week, never split — the weekly
+// AVG over 7 identical days equals the stored value. Derived from the column map so it
+// can never drift out of sync with facts.js.
+// COLUMN_FACT_MAP is flat: column-name → descriptor { channel, metric_key, agg? }.
+const AVG_METRIC_KEYS = new Set(
+  Object.values(facts.COLUMN_FACT_MAP)
+    .filter(d => d && d.agg === 'avg')
+    .map(d => d.metric_key)
+)
+// Money metrics carry 2-decimal precision; every other metric is an integer count.
+const CURRENCY_METRIC_KEYS = new Set(['spend', 'revenue', 'projected_revenue'])
+
+function addDaysISO(iso, n) {
+  const d = new Date(iso + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+const round2 = n => Math.round(n * 100) / 100
+
+// One weekly account-grain fact → 7 daily facts that reconstruct it exactly.
+function spreadFactAcrossWeek(f) {
+  const out = []
+  if (AVG_METRIC_KEYS.has(f.metric_key)) {
+    for (let i = 0; i < 7; i++) out.push({ date: addDaysISO(f.date, i), value: f.value })
+    return out
+  }
+  const isMoney = CURRENCY_METRIC_KEYS.has(f.metric_key)
+  let acc = 0
+  for (let i = 0; i < 7; i++) {
+    let v
+    if (i < 6) {
+      const raw = f.value * DOW_WEIGHTS[i] / DOW_TOTAL
+      v = isMoney ? round2(raw) : Math.round(raw)
+    } else {
+      v = isMoney ? round2(f.value - acc) : (f.value - acc)   // last day = exact remainder → Σ is exact
+    }
+    acc += v
+    out.push({ date: addDaysISO(f.date, i), value: v })
+  }
+  return out
 }
 
 // ── data ──────────────────────────────────────────────────────────────────────
@@ -32,11 +94,14 @@ const CLIENTS = [
 ]
 
 const seeds = {
-  0: { spend: [1800, 2200], lsa_spend: [600, 900],  meta_spend: [700, 1100], calls: [25, 40], views: [1400, 1900] },
-  1: { spend: [1200, 1600], lsa_spend: [400, 650],  meta_spend: [450, 800],  calls: [18, 30], views: [900, 1300]  },
-  2: { spend: [800, 1100],  lsa_spend: [300, 500],  meta_spend: [300, 600],  calls: [12, 22], views: [600, 900]   },
-  3: { spend: [1000, 1400], lsa_spend: [350, 550],  meta_spend: [400, 750],  calls: [15, 26], views: [750, 1100]  },
-  4: { spend: [500, 900],   lsa_spend: [150, 300],  meta_spend: [200, 450],  calls: [8, 14],  views: [400, 700]   },
+  // Spend ranges are revenue-basis calibrated: with home-services avg tickets
+  // ($2.8k–6.5k) and realistic close rates, CPL lands in the $45–80 industry band
+  // and blended revenue-ROAS lands ~10–15× (NOT the 3–5× ad-platform-reported basis).
+  0: { spend: [3600, 4400], lsa_spend: [1200, 1800], meta_spend: [1400, 2200], calls: [25, 40], views: [1400, 1900] },
+  1: { spend: [2400, 3200], lsa_spend: [800, 1300],  meta_spend: [900, 1600],  calls: [18, 30], views: [900, 1300]  },
+  2: { spend: [1600, 2200], lsa_spend: [600, 1000],  meta_spend: [600, 1200],  calls: [12, 22], views: [600, 900]   },
+  3: { spend: [2000, 2800], lsa_spend: [700, 1100],  meta_spend: [800, 1500],  calls: [15, 26], views: [750, 1100]  },
+  4: { spend: [1000, 1800], lsa_spend: [300, 600],   meta_spend: [400, 900],   calls: [8, 14],  views: [400, 700]   },
 }
 
 const WEEKS = Array.from({ length: 12 }, (_, i) => monday(11 - i))
@@ -112,6 +177,14 @@ async function seed() {
       const mql             = Math.round(raw_leads * randF(0.45, 0.60))
       const sql_val         = Math.round(mql * randF(0.35, 0.50))
       const closed_won      = Math.round(sql_val * randF(0.55, 0.75))
+      // Appointments booked beyond the LSA channel (web forms, phone, chat).
+      // Total booked is pinned ABOVE closed_won at a realistic 50–65% appt→close
+      // rate so the lead funnel narrows monotonically — you can never win more
+      // jobs than you booked. Clamping at 0 only ever makes booked LARGER, so
+      // booked > closed_won holds every week and therefore in aggregate.
+      const appt_close_rate = randF(0.50, 0.65)
+      const total_booked    = Math.round(closed_won / appt_close_rate)
+      const appointments    = Math.max(0, total_booked - lsa_booked)
       const avg_ticket      = rand(2800, 6500)
 
       // GA4 fields
@@ -133,8 +206,8 @@ async function seed() {
             gbp_views, gbp_searches, gbp_calls, gbp_directions, gbp_website_clicks,
             ga4_sessions, ga4_new_users, ga4_organic_sessions, ga4_paid_sessions,
             ga4_direct_sessions, ga4_conversions, ga4_engagement_rate,
-            raw_leads, mql, sql_count, closed_won, projected_revenue, avg_ticket
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
+            raw_leads, mql, sql_count, closed_won, projected_revenue, avg_ticket, appointments
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)`,
           [
             uuid(), clientIds[ci], week,
             ads_spend, ads_impressions, ads_clicks, ads_leads, randF(3.0, 6.5),
@@ -143,7 +216,7 @@ async function seed() {
             gbp_views, gbp_searches, gbp_calls, gbp_directions, gbp_website,
             ga4_sessions, ga4_new_users, ga4_organic_sessions, ga4_paid_sessions,
             ga4_direct_sessions, ga4_conversions, ga4_engagement_rate,
-            raw_leads, mql, sql_val, closed_won, closed_won * avg_ticket, avg_ticket,
+            raw_leads, mql, sql_val, closed_won, closed_won * avg_ticket, avg_ticket, appointments,
           ]
         )
         inserted++
@@ -154,10 +227,130 @@ async function seed() {
   }
   console.log(`[seed] inserted ${inserted} weekly reports`)
 
+  // ── self-healing convergence (data hygiene) ────────────────────────────────────
+  // A reseed under the OLD local-time monday() (or any future code/date drift) could
+  // leave a second, day-offset 12-week series in weekly_reports that INSERT OR IGNORE,
+  // keyed on (client_id, week_start), can never dedupe — the two overlapping daily
+  // spreads then collapse fact_metric to a last-writer mess and break the
+  // rebuildWeeklyRollup(fact_metric) === weekly_reports invariant. Converge to the
+  // canonical window: prune any demo-client weekly row OUTSIDE the current 12 Mondays,
+  // then clear demo-client facts so the block below rebuilds them as an exact
+  // projection of the now-clean wide table. Scoped to the 5 demo client IDs so a real
+  // deployment's connector-sourced data for any other client is never touched.
+  if (clientIds.length) {
+    const cph = clientIds.map((_, i) => `$${i + 1}`).join(',')
+    const wph = WEEKS.map((_, i) => `$${clientIds.length + i + 1}`).join(',')
+    const pruned = await query(
+      `DELETE FROM weekly_reports WHERE client_id IN (${cph}) AND week_start NOT IN (${wph})`,
+      [...clientIds, ...WEEKS]
+    )
+    if (pruned.rowCount) {
+      console.log(`[seed] pruned ${pruned.rowCount} out-of-window weekly row(s) — converged to the canonical 12-week window`)
+    }
+    const clearedFacts = await query(`DELETE FROM fact_metric WHERE client_id IN (${cph})`, clientIds)
+    if (clearedFacts.rowCount) {
+      console.log(`[seed] cleared ${clearedFacts.rowCount} demo fact_metric row(s) for clean rebuild`)
+    }
+  }
+
+  // ── fact_metric atomic grain (defect C) ────────────────────────────────────────
+  // Powers /explore and the intra-week Daily Pulse. Built FROM the weekly rows we just
+  // wrote — read them straight back so the grain can never disagree with the wide
+  // table — then expand each weekly fact to a daily series that rolls back up exactly.
+  // INSERT OR REPLACE keyed on (client_id, date, channel_id, entity_id, metric_key)
+  // makes every re-seed self-heal the grain rather than duplicate it.
+  const { rows: wrRows } = await query(`SELECT * FROM weekly_reports ORDER BY client_id, week_start`)
+  const factTuples = []
+  for (const wr of wrRows) {
+    for (const wf of facts.factsFromWeeklyRow(wr)) {
+      const channel_id = facts.channelId(wf.channel)
+      if (!channel_id) continue
+      for (const day of spreadFactAcrossWeek(wf)) {
+        if (day.value == null || !Number.isFinite(Number(day.value))) continue
+        // entity_id = null → account grain (matches factsFromWeeklyRow + the ux_fact_grain index)
+        factTuples.push([wr.client_id, day.date, channel_id, null, wf.metric_key, Number(day.value)])
+      }
+    }
+  }
+  // Chunked multi-row upsert: better-sqlite3 rejects BEGIN/COMMIT via prepare() and
+  // db-sqlite exposes no transaction helper, so we batch 100 rows × 6 cols = 600 bound
+  // params per statement — comfortably under SQLite's 999-variable cap.
+  let factRows = 0
+  const FACT_CHUNK = 100
+  for (let i = 0; i < factTuples.length; i += FACT_CHUNK) {
+    const slice = factTuples.slice(i, i + FACT_CHUNK)
+    const placeholders = slice
+      .map((_, r) => `($${r * 6 + 1},$${r * 6 + 2},$${r * 6 + 3},$${r * 6 + 4},$${r * 6 + 5},$${r * 6 + 6})`)
+      .join(',')
+    await query(
+      `INSERT OR REPLACE INTO fact_metric
+         (client_id, date, channel_id, entity_id, metric_key, metric_value)
+       VALUES ${placeholders}`,
+      slice.flat()
+    )
+    factRows += slice.length
+  }
+  console.log(`[seed] inserted ${factRows} fact_metric rows (daily atomic grain from ${wrRows.length} weekly rows)`)
+
   // ── agency settings ───────────────────────────────────────────────────────────
   await query(
     `INSERT OR IGNORE INTO agency_settings (id, agency_name, accent_hex) VALUES (1, '10X Performance', '#e53935')`
   )
+
+  // ── per-client monthly goals (lights up forecast + pacing for defect D) ─────────
+  // The forecast/pacing engine only speaks when a client has a goal for the current
+  // month (loadGoal → null ⇒ the surface stays dark). Seed deliberately varied,
+  // realistic targets for THIS month so /intelligence opens with a genuine worst-first
+  // roster instead of an empty forecast. Each target is sized against that client's OWN
+  // measured month-end projection (engine math: mtd + Holt weekly-rate × remaining-weeks)
+  // so the resulting pct-of-goal lands in a chosen severity band — nothing is hand-faked;
+  // runInsightsForAll() below recomputes every call from the same seeded data. The month
+  // key matches monthBounds(today).monthFirst, and the upsert is idempotent on
+  // (client_id, month) so a re-seed converges the targets in place.
+  const goalMonth = new Date().toISOString().slice(0, 7) + '-01'   // 'YYYY-MM-01'
+  // Indexed in CLIENTS order. ratio = projected ÷ target → band:
+  //   <0.7 critical · 0.7–0.9 behind(warning) · 0.9–1.1 on-track(silent) · ≥1.1 ahead(info)
+  const GOAL_TARGETS = [
+    { revenue: 247000, leads: 475, jobs: 58 },  // 0 Apex Roofing        — ahead / on-track / ahead
+    { revenue: 258000, leads: 455, jobs: 78 },  // 1 Blue Sky HVAC       — behind / on-track / behind
+    { revenue: 341000, leads: 340, jobs: 55 },  // 2 Cornerstone Plumbing — ahead / on-track / ahead
+    { revenue: 288000, leads: 515, jobs: 95 },  // 3 Precision Electric  — critical / behind / critical
+    { revenue: 240000, leads: 345, jobs: 65 },  // 4 Summit Solar        — behind / on-track / behind
+  ]
+  let goalRows = 0
+  for (let ci = 0; ci < clientIds.length; ci++) {
+    const g = GOAL_TARGETS[ci]
+    if (!g) continue
+    await query(
+      `INSERT INTO client_goals (client_id, month, revenue_target, leads_target, jobs_target)
+         VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (client_id, month) DO UPDATE SET
+         revenue_target = excluded.revenue_target,
+         leads_target   = excluded.leads_target,
+         jobs_target    = excluded.jobs_target,
+         updated_at     = datetime('now')`,
+      [clientIds[ci], goalMonth, g.revenue, g.leads, g.jobs]
+    )
+    goalRows++
+  }
+  console.log(`[seed] upserted ${goalRows} client_goals for ${goalMonth} (forecast/pacing light-up)`)
+
+  // ── intelligence layer (defect D) ──────────────────────────────────────────────
+  // The insights table seeds empty, so /intelligence and the per-client insight feed
+  // opened blank on a fresh DB. Rather than hand-fake rows, run the REAL nightly sweep
+  // once — the same engine scheduler.js runs — against the data we just seeded, so the
+  // findings are genuine and internally consistent (and the daily grain from defect C
+  // gives coverage detection real freshness to read). Best-effort: a thin-data client
+  // must never fail the whole seed.
+  try {
+    const { runInsightsForAll } = require('./lib/insights')
+    console.log('[seed] running intelligence sweep…')
+    const r = await runInsightsForAll()
+    console.log(`[seed] insights sweep — swept ${r.swept}/${r.clients} clients, ${r.findings} findings, ${r.snapshotted} health snapshots`)
+    if (r.failed) console.warn(`[seed] insights sweep — ${r.failed} client(s) errored:`, (r.errors || []).map(e => `${e.client_id}: ${e.error}`).join('; '))
+  } catch (e) {
+    console.warn('[seed] insights sweep skipped:', e.message)
+  }
 
   console.log('[seed] ✅ done — login: admin@example.com / admin')
   process.exit(0)

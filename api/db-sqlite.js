@@ -27,6 +27,13 @@ function getDb() {
     db = new Database(DB_PATH)
     db.pragma('journal_mode = WAL')
     db.pragma('foreign_keys = ON')
+    // Multi-process safety: the API server, the nightly seed/reseed, the cron
+    // sweeps, and ad-hoc probes can all hold this one dev.db at once. WAL already
+    // lets readers proceed against the last committed snapshot, but two writers
+    // still collide — and with the default busy_timeout of 0 the loser fails
+    // INSTANTLY with SQLITE_BUSY. Wait up to 5s for the write lock so concurrent
+    // writers serialize cleanly instead of erroring out mid-batch.
+    db.pragma('busy_timeout = 5000')
   }
   return db
 }

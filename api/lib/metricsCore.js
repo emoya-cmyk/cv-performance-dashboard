@@ -37,6 +37,7 @@ const AGG = `
   COALESCE(SUM(ads_leads),0)                     AS ads_leads,
   COALESCE(SUM(lsa_calls),0)                     AS lsa_calls,
   COALESCE(SUM(lsa_booked_jobs),0)               AS lsa_booked_jobs,
+  COALESCE(SUM(appointments),0)                  AS appointments,
   COALESCE(SUM(meta_leads),0)                    AS meta_leads,
   COALESCE(SUM(gbp_views),0)                     AS gbp_views,
   COALESCE(SUM(gbp_calls),0)                     AS gbp_calls,

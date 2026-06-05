@@ -14,7 +14,10 @@ const BENCHMARKS = {
   clickToLead:       { avg: 8.0,  unit: '%', label: 'Click-to-Lead' },
   leadToClose:       { avg: 22,   unit: '%', label: 'Lead-to-Job Close Rate' },
   cpl:               { avg: 62,   unit: '$', label: 'Cost Per Lead',      invert: true },
-  roas:              { avg: 3.5,  unit: '×', label: 'Marketing ROAS' },
+  // Revenue-basis ROAS (closed revenue ÷ ad spend). For high-ticket home services
+  // this runs ~8–15× — distinct from the 3–5× ad-platform-REPORTED ROAS. The funnel
+  // hero divides real closed revenue by spend, so it must be judged on this basis.
+  roas:              { avg: 11,   unit: '×', label: 'Marketing ROAS' },
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
@@ -34,9 +37,9 @@ function computeHealthScore({ closeRate, cpl, roas, leadTrend, dataCompleteness 
   // CPL vs $62 benchmark (20pts — lower is better)
   if (cpl > 0 && cpl <= 62) score += 20
   else if (cpl > 0 && cpl <= 120) score += Math.round(((120 - cpl) / 120) * 20)
-  // ROAS vs 3.5× benchmark (25pts)
-  if (roas >= 3.5) score += 25
-  else if (roas >= 1.5) score += Math.round((roas / 3.5) * 25)
+  // ROAS vs 8× benchmark (25pts) — revenue-basis, see BENCHMARKS.roas
+  if (roas >= 8) score += 25
+  else if (roas >= 4) score += Math.round((roas / 8) * 25)
   // Lead trend (15pts — are leads growing?)
   if (leadTrend > 5)  score += 15
   else if (leadTrend >= 0) score += 8
@@ -115,11 +118,18 @@ function FunnelWaterfall({ stages }) {
                   {(() => {
                     const next = stages.find((ns, ni) => ni > i && !ns.missing && ns.volume > 0)
                     if (!next) return null
+                    // Drop-off % is only meaningful between stages measured in the SAME unit.
+                    // Jobs Won (head count) → Revenue (dollars) is a unit change, not a drop —
+                    // computing it yields nonsense like "-429463%". Skip across a unit boundary.
+                    if ((s.unit || 'count') !== (next.unit || 'count')) return null
                     const dropped = s.volume - next.volume
+                    // A widening funnel (e.g. leads arrive from organic/GBP, not just paid clicks)
+                    // means next ≥ current. There is no drop to annotate, so omit the line.
+                    if (dropped <= 0) return null
                     const dropPct = (dropped / s.volume) * 100
                     return (
                       <p className="text-[9px] text-slate-400 font-medium">
-                        {fmtN(Math.max(dropped, 0))} dropped ({dropPct.toFixed(0)}%)
+                        {fmtN(dropped)} dropped ({dropPct.toFixed(0)}%)
                       </p>
                     )
                   })()}
@@ -168,7 +178,7 @@ function ChannelCard({ channel, sparkData }) {
         </div>
         <div>
           <p className="text-slate-400 font-bold">ROAS</p>
-          <p className={`font-black ${roas >= 3 ? 'text-emerald-600' : roas >= 1.5 ? 'text-amber-600' : roas > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+          <p className={`font-black ${roas >= 8 ? 'text-emerald-600' : roas >= 4 ? 'text-amber-600' : roas > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
             {roas > 0 ? `${roas.toFixed(1)}×` : '—'}
           </p>
         </div>
@@ -245,7 +255,7 @@ export default function LeadFunnel() {
       : { label: 'Appts Booked', missing: true, missingLabel: 'Connect scheduling to track appointments' },
     { label: 'Jobs Won', volume: jobs, format: fmtN, convRate: closeRate, goodThreshold: 20, okThreshold: 10 },
     revenueTracked
-      ? { label: 'Revenue', volume: revenue, format: fmt$$, convRate: null }
+      ? { label: 'Revenue', volume: revenue, format: fmt$$, convRate: null, unit: 'currency' }
       : { label: 'Revenue', missing: true, missingLabel: 'Connect CRM to track closed revenue' },
   ]
 
@@ -261,7 +271,7 @@ export default function LeadFunnel() {
       candidates.push({ stage: 'Lead → Job Close Rate', rate: closeRate, benchmark: 22, dollar: opportunity, why: ['Most close-rate gaps come from slow first response — aim for under 5 minutes.', 'Automated day-1 outreach via GHL workflows closes this gap in 2–3 weeks.', 'Make sure every lead gets a follow-up call, not just a text.'] })
     }
     if (!candidates.length && leads > 0 && roas < 1.5 && spend > 0) {
-      candidates.push({ stage: 'Marketing ROI', rate: roas * 100, benchmark: 350, dollar: null, why: ['ROAS below 1.5× means you\'re spending more than you\'re returning.', 'Pause lowest-performing campaigns and shift budget to top performers.', 'Review search terms to eliminate wasted spend on irrelevant queries.'] })
+      candidates.push({ stage: 'Marketing ROI', rate: roas * 100, benchmark: 800, dollar: null, why: ['ROAS below 1.5× means you\'re spending more than you\'re returning.', 'Pause lowest-performing campaigns and shift budget to top performers.', 'Review search terms to eliminate wasted spend on irrelevant queries.'] })
     }
     return candidates.sort((a, b) => (a.rate - b.rate))[0] || null
   }, [ctr, clickToLead, closeRate, roas, leads, jobs, revenue, spend])
@@ -279,7 +289,7 @@ export default function LeadFunnel() {
     const gbpLeads  = stats.gbp_calls   || 0
 
     if (adsSpend > 0 || adsLeads > 0)
-      list.push({ label: 'Google Ads', color: 'bg-blue-500', spend: adsSpend, leads: adsLeads, cpl: adsLeads > 0 ? adsSpend / adsLeads : 0, roas: adsRoas, status: adsRoas >= 3 ? 'strong' : adsRoas >= 1.5 ? 'building' : adsLeads > 0 ? 'low' : 'inactive' })
+      list.push({ label: 'Google Ads', color: 'bg-blue-500', spend: adsSpend, leads: adsLeads, cpl: adsLeads > 0 ? adsSpend / adsLeads : 0, roas: adsRoas, status: adsRoas >= 8 ? 'strong' : adsRoas >= 4 ? 'building' : adsLeads > 0 ? 'low' : 'inactive' })
     if (lsaSpend > 0 || lsaLeads > 0)
       list.push({ label: 'Google LSA', color: 'bg-cyan-500', spend: lsaSpend, leads: lsaLeads, cpl: lsaLeads > 0 ? lsaSpend / lsaLeads : 0, roas: 0, status: lsaLeads > 0 ? 'strong' : 'inactive' })
     if (metaSpend > 0 || metaLeads > 0)
@@ -405,7 +415,7 @@ export default function LeadFunnel() {
                   {[
                     { label: 'Close Rate',     value: closeRate !== null ? `${closeRate.toFixed(0)}%` : '—', good: closeRate !== null && closeRate >= 20, ok: closeRate !== null && closeRate >= 10 },
                     { label: 'Cost Per Lead',   value: cpl > 0 ? fmt$$(cpl) : '—',   good: cpl > 0 && cpl <= 62, ok: cpl > 0 && cpl <= 120 },
-                    { label: 'Marketing ROAS',  value: roas > 0 ? `${roas.toFixed(1)}×` : '—',  good: roas >= 3, ok: roas >= 1.5 },
+                    { label: 'Marketing ROAS',  value: roas > 0 ? `${roas.toFixed(1)}×` : '—',  good: roas >= 8, ok: roas >= 5 },
                     { label: 'Click-to-Lead',   value: clickToLead !== null ? `${clickToLead.toFixed(0)}%` : '—', good: clickToLead !== null && clickToLead >= 8, ok: clickToLead !== null && clickToLead >= 4 },
                   ].map(m => (
                     <div key={m.label} className="flex items-center justify-between">
@@ -533,7 +543,7 @@ export default function LeadFunnel() {
                 {[
                   { label: 'Close Rate (Lead → Job)',  yours: closeRate   !== null ? closeRate.toFixed(0) + '%'   : '—', avg: '20–25%',  good: closeRate !== null && closeRate >= 20,  ok: closeRate !== null && closeRate >= 10 },
                   { label: 'Cost Per Lead',             yours: cpl > 0     ? fmt$$(cpl)                           : '—', avg: '$45–80',   good: cpl > 0 && cpl <= 45,                  ok: cpl > 0 && cpl <= 80 },
-                  { label: 'Marketing ROAS',            yours: roas > 0    ? roas.toFixed(1) + '×'               : '—', avg: '3–5×',     good: roas >= 3,                              ok: roas >= 1.5 },
+                  { label: 'Marketing ROAS',            yours: roas > 0    ? roas.toFixed(1) + '×'               : '—', avg: '8–15×',    good: roas >= 8,                              ok: roas >= 5 },
                   { label: 'Click-Through Rate (CTR)',  yours: ctr !== null ? ctr.toFixed(1) + '%'                : '—', avg: '3–6%',     good: ctr !== null && ctr >= 3,               ok: ctr !== null && ctr >= 2 },
                   { label: 'Click-to-Lead Rate',        yours: clickToLead !== null ? clickToLead.toFixed(0) + '%' : '—', avg: '6–12%', good: clickToLead !== null && clickToLead >= 6, ok: clickToLead !== null && clickToLead >= 3 },
                 ].map(row => (

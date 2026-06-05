@@ -15,9 +15,14 @@ function aggregateAll(metricsCache, clients) {
 
   const SUM_FIELDS = [
     'ads_spend','lsa_spend','meta_spend','raw_leads','mql','sql_count',
-    'closed_won','projected_revenue','ads_leads','lsa_calls','lsa_booked_jobs',
+    'closed_won','projected_revenue','ads_leads','lsa_calls','lsa_booked_jobs','appointments',
     'meta_leads','gbp_views','gbp_calls','gbp_searches','gbp_directions',
     'gbp_website_clicks','ga4_sessions','ga4_new_users','ga4_conversions',
+    // Click counters must be summed alongside their impression counterparts —
+    // otherwise the "All Clients" funnel sees clicks=0 while impressions>0, which
+    // drops the Website-Clicks stage and zeroes CTR even though every client has
+    // real click data. Keep these paired with *_impressions below.
+    'ads_clicks','meta_clicks',
     'ads_impressions','meta_impressions','lsa_impressions',
   ]
 
