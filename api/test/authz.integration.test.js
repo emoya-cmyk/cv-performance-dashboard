@@ -224,6 +224,7 @@ test('ai recap/brief :clientId — cross-tenant client blocked (403) before any 
 const AGENCY_ONLY = [
   ['GET',    `/api/metrics/`],
   ['GET',    `/api/insights/`],
+  ['GET',    `/api/insights/ops`],       // autonomy-liveness grader — agency-only
   ['GET',    `/api/connections/${A}`],   // blanket router.use(requireAgency)
   ['GET',    `/api/shares/${A}`],        // blanket router.use(requireAgency)
   ['POST',   `/api/sync/${A}/all`],      // blanket router.use(requireAgency)
@@ -250,6 +251,7 @@ test('requireAgency surfaces: role=client is denied (403) on every agency-only e
 const AGENCY_ALLOWED_SAFE = [
   ['GET',  `/api/metrics/`],
   ['GET',  `/api/insights/`],
+  ['GET',  `/api/insights/ops`],   // empty ledger → 'warming' 200, never 403 for agency
   ['GET',  `/api/connections/${A}`],
   ['GET',  `/api/shares/${A}`],
   ['POST', `/api/sync/${A}/all`],
@@ -260,6 +262,44 @@ test('requireAgency surfaces: role=agency passes the guard on safe agency reads'
   for (const [m, p] of AGENCY_ALLOWED_SAFE) {
     const r = await request(m, p, { token: AGENCY })
     assert.notEqual(r.status, 403, `${m} ${p} must pass requireAgency for agency (got ${r.status})`)
+  }
+})
+
+// ── (2b) /ops autonomy-liveness: agency-shaped, never leaked to a client ──────
+// The ops-health grader is an AGENCY surface. Two properties:
+//   (i)  the agency GET /ops returns the assessOps shape (proves the route is
+//        actually wired — not merely guarded — and is SQLite-safe on an empty
+//        ledger, grading 'warming' rather than throwing).
+//   (ii) NONE of the distinctive ops-only field names ever appear in the
+//        client-reachable GET /:clientId card payload. These tokens identify
+//        engine-liveness internals (job cadence gradings, self-heal counts); a
+//        client must never see whether the autonomy loop is healthy or how often
+//        it self-heals. Asserted against the raw serialized body so a leak nested
+//        at any depth is caught.
+const OPS_ONLY_TOKENS = [
+  'liveCount', 'overdueCount', 'staleCount', 'neverCount',
+  'degradedCount', 'healsRecent', 'healWindowMs',
+]
+
+test('GET /api/insights/ops returns the agency ops-health shape (wired + SQLite-safe)', async () => {
+  await ready()
+  const r = await request('GET', '/api/insights/ops', { token: AGENCY })
+  assert.equal(r.status, 200, `agency /ops should 200 (got ${r.status} ${r.raw})`)
+  assert.ok(r.body && typeof r.body === 'object', 'ops body must be an object')
+  // Empty ledger in the test DB ⇒ no job has ever run ⇒ 'warming' (cold-start honest).
+  assert.equal(r.body.status, 'warming', `empty ledger must grade 'warming' (got ${r.body.status})`)
+  assert.ok(Array.isArray(r.body.jobs), 'ops payload must carry a per-job array')
+  assert.equal(r.body.neverCount, r.body.total, 'every job is "never" on an empty ledger')
+  assert.ok('healsRecent' in r.body, 'ops payload must carry the self-heal count')
+})
+
+test('client GET /:clientId card carries NO ops-liveness fields (leak-proof)', async () => {
+  await ready()
+  const r = await request('GET', `/api/insights/${A}`, { token: CLIENT_A })
+  assert.notEqual(r.status, 403, `client must reach its OWN card (got ${r.status})`)
+  const wire = JSON.stringify(r.body || {})
+  for (const tok of OPS_ONLY_TOKENS) {
+    assert.ok(!wire.includes(tok), `client card must NOT expose ops field "${tok}"`)
   }
 })
 

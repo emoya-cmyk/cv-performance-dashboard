@@ -18,6 +18,7 @@ const { listRecentBriefs }      = require('./lib/brief')
 const { summarizeBriefQuality } = require('./lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelivery')
 const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
+const { recordHeartbeat, classifyRunStatus } = require('./lib/opsHealth')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -54,8 +55,10 @@ function startScheduler() {
   cron.schedule(SCHEDULE, async () => {
     console.log('[scheduler] starting scheduled sync', new Date().toISOString())
 
+    const startedAt = Date.now()
     let total = 0
     let errors = 0
+    let fatal = false
 
     try {
       const { rows } = await query(
@@ -73,10 +76,29 @@ function startScheduler() {
         }
       }
     } catch (err) {
+      fatal = true
       console.error('[scheduler] fatal', err)
     }
 
     console.log(`[scheduler] done — ${total} succeeded, ${errors} failed`)
+
+    // Heartbeat — record this run so the autonomy-liveness layer (lib/opsHealth)
+    // can prove the sync sweep is alive and on-cadence. Best-effort and fully
+    // isolated: a ledger write must NEVER disturb the sweep it records. A fatal
+    // enumeration failure records 'error' (engine alive but degraded), never a
+    // false 'success'. detail carries aggregate counters only — never client PII.
+    try {
+      await recordHeartbeat({
+        query,
+        job: 'sync',
+        status: fatal ? 'error' : classifyRunStatus(total, errors),
+        durationMs: Date.now() - startedAt,
+        detail: { scanned: total + errors, synced: total, failed: errors },
+        now: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error('[scheduler] heartbeat record failed (sync):', err.message)
+    }
   })
 
   console.log(`[scheduler] running on schedule: ${SCHEDULE}`)
@@ -84,7 +106,9 @@ function startScheduler() {
   // ── Weekly email digest — Monday 8am ──────────────────────────────────────
   cron.schedule(DIGEST_SCHEDULE, async () => {
     console.log('[digest] starting weekly digest', new Date().toISOString())
+    const startedAt = Date.now()
     let sent = 0, errors = 0
+    let fatal = false
 
     const now          = new Date()
     const weekAgo      = new Date(now); weekAgo.setUTCDate(weekAgo.getUTCDate() - 7)
@@ -169,10 +193,27 @@ function startScheduler() {
 
       if (!clients.length) console.log('[digest] no clients with digest enabled')
     } catch (err) {
+      fatal = true
       console.error('[digest] fatal', err)
     }
 
     console.log(`[digest] done — ${sent} sent, ${errors} errors`)
+
+    // Heartbeat — record the weekly digest run for the autonomy-liveness layer.
+    // Isolated so a ledger write never disturbs the (already-sent) client emails.
+    // detail carries only aggregate send counts — never a recipient or PII.
+    try {
+      await recordHeartbeat({
+        query,
+        job: 'digest',
+        status: fatal ? 'error' : classifyRunStatus(sent, errors),
+        durationMs: Date.now() - startedAt,
+        detail: { sent, errors },
+        now: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error('[digest] heartbeat record failed:', err.message)
+    }
 
     // ── Narration self-check — does the agency need to know its OWN brief-writer
     //    is failing? ────────────────────────────────────────────────────────────
@@ -210,12 +251,32 @@ function startScheduler() {
   }
   cron.schedule(INSIGHTS_SCHEDULE, async () => {
     console.log('[insights] starting nightly sweep', new Date().toISOString())
+    const startedAt = Date.now()
+    let r = null
     try {
-      const r = await runInsightsForAll()
+      r = await runInsightsForAll()
       console.log(`[insights] done — ${r.swept}/${r.clients} clients, ${r.findings} findings, ${r.failed} failed`)
       for (const e of r.errors) console.error(`[insights] client ${e.client_id}: ${e.error}`)
     } catch (err) {
       console.error('[insights] fatal', err)
+    }
+
+    // Heartbeat — record the nightly self-improving sweep for the autonomy-liveness
+    // layer. A throw leaves r=null → recorded 'error' (engine alive, sweep failed).
+    // detail carries only aggregate sweep counts — never a client identifier.
+    try {
+      await recordHeartbeat({
+        query,
+        job: 'insights',
+        status: r ? classifyRunStatus(r.swept, r.failed) : 'error',
+        durationMs: Date.now() - startedAt,
+        detail: r
+          ? { swept: r.swept, clients: r.clients, findings: r.findings, failed: r.failed }
+          : { swept: 0, clients: 0, findings: 0, failed: 0 },
+        now: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error('[insights] heartbeat record failed:', err.message)
     }
   })
 
@@ -242,8 +303,10 @@ function startScheduler() {
       return
     }
     watchdogRunning = true
+    const startedAt = Date.now()
+    let r = null
     try {
-      const r = await runConnectionWatchdog({ query, runSync, logger: console })
+      r = await runConnectionWatchdog({ query, runSync, logger: console })
       console.log(
         `[watchdog] swept ${r.scanned} — ${r.healed} re-synced, ${r.failed} failed, ` +
         `${r.operator_required} need reconnect`
@@ -252,6 +315,25 @@ function startScheduler() {
       console.error('[watchdog] fatal', err.message)
     } finally {
       watchdogRunning = false
+    }
+
+    // Heartbeat — record this watchdog sweep for the autonomy-liveness layer. The
+    // watchdog is the self-healing organ itself; its 15-min heartbeat is what proves
+    // the loop is still actively watching. A throw leaves r=null → recorded 'error'.
+    // detail carries only aggregate machine counters (incl. heals) — never client PII.
+    try {
+      await recordHeartbeat({
+        query,
+        job: 'watchdog',
+        status: r ? classifyRunStatus(r.scanned, r.failed) : 'error',
+        durationMs: Date.now() - startedAt,
+        detail: r
+          ? { scanned: r.scanned, healed: r.healed, failed: r.failed, operator_required: r.operator_required }
+          : { scanned: 0, healed: 0, failed: 0, operator_required: 0 },
+        now: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error('[watchdog] heartbeat record failed:', err.message)
     }
   })
 

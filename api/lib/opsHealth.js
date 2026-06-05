@@ -145,6 +145,19 @@ function countHeals(runs, nowMs, windowMs = HEAL_WINDOW_MS) {
   return total
 }
 
+// Map a job's run counters to one of the three RUN_STATUSES. The universal shape:
+// nothing failed → success; some processed but some failed → partial; everything
+// attempted failed → error. An empty sweep (processed 0, failed 0) is a clean no-op
+// → success, never an error. A job that THREW is recorded 'error' by its caller's
+// catch, so this never needs to model the throw case. Pure; non-finite inputs → 0.
+function classifyRunStatus(processed, failed) {
+  const p = Number.isFinite(Number(processed)) ? Number(processed) : 0
+  const f = Number.isFinite(Number(failed))    ? Number(failed)    : 0
+  if (f <= 0) return 'success'
+  if (p > 0)  return 'partial'
+  return 'error'
+}
+
 function headlineFor(status, { jobs, liveCount, overdueCount, staleCount, degradedCount }) {
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
   if (status === 'warming') return 'Autonomy engine warming up — no scheduled jobs have run yet'
@@ -246,11 +259,62 @@ async function recordHeartbeat({ query, job, status = 'success', durationMs = nu
   return { job, status, ranAt: ranAtIso }
 }
 
+// ── ledger reader (DB-injected) ───────────────────────────────────────────────────
+
+// Read exactly the rows assessOps needs, via the injected `query`. Two reads, merged:
+//   (1) the LATEST run per job — an UNBOUNDED `ORDER BY ran_at DESC LIMIT 1` per job.
+//       Unbounded is deliberate: a job that last ran weeks ago must still return its
+//       row so it grades 'stale'. A bounded "recent only" window would drop it and
+//       mis-grade it 'never' (cold-start), hiding a real outage as a fresh install.
+//   (2) every watchdog row inside the heal window — so countHeals can total the
+//       self-heals for the "N self-heals this week" headline.
+// The latest watchdog row appears in BOTH reads; we dedupe by id so its `healed`
+// count is never double-totalled. Production callers stamp ran_at as explicit ISO
+// (recordHeartbeat `now`), so the DESC ordering and the `>= cutoff` filter compare
+// uniformly — no SQLite space-vs-'T' boundary mis-sort. Best-effort by the same
+// contract as recordHeartbeat: wrap at the call site so a ledger read never disturbs
+// a route's primary work.
+async function loadRecentRuns({ query, now, healWindowMs = HEAL_WINDOW_MS } = {}) {
+  if (typeof query !== 'function') throw new Error('loadRecentRuns: query function is required')
+  const nowMs = toMs(now)
+
+  const latest = []
+  for (const job of JOBS) {
+    const { rows } = await query(
+      `SELECT id, job, status, ran_at, duration_ms, detail
+         FROM job_heartbeats WHERE job = $1 ORDER BY ran_at DESC LIMIT 1`,
+      [job],
+    )
+    if (rows && rows[0]) latest.push(rows[0])
+  }
+
+  let healRows = []
+  if (nowMs != null) {
+    const cutoffIso = new Date(nowMs - healWindowMs).toISOString()
+    const { rows } = await query(
+      `SELECT id, job, status, ran_at, duration_ms, detail
+         FROM job_heartbeats WHERE job = $1 AND ran_at >= $2 ORDER BY ran_at DESC`,
+      ['watchdog', cutoffIso],
+    )
+    healRows = rows || []
+  }
+
+  const byId = new Map()
+  for (const r of latest.concat(healRows)) {
+    if (!r) continue
+    const key = r.id != null ? `id:${r.id}` : `job:${r.job}|at:${r.ran_at}`
+    if (!byId.has(key)) byId.set(key, r)
+  }
+  return Array.from(byId.values())
+}
+
 module.exports = {
   assessOps,
   assessJob,
   countHeals,
+  classifyRunStatus,
   recordHeartbeat,
+  loadRecentRuns,
   toMs,
   EXPECTED_MS,
   JOBS,

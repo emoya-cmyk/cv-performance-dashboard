@@ -30,7 +30,34 @@
 //     facts, the watchdog is deterministic-backoff-gated, insights re-grades and
 //     re-snapshots the same window.
 
+// The autonomy-liveness ledger writer + run grader. recordHeartbeat persists one
+// row per job run via the INJECTED `query` (so this module stays DB-free under test
+// — the fake query simply absorbs the write); the ops-health reader later grades
+// each job's freshness against its expected cadence to prove the loop is alive.
+const { recordHeartbeat, classifyRunStatus } = require('./opsHealth')
+
 const VALID_JOBS = ['sync', 'watchdog', 'insights']
+
+// Map a finished job result to the (status, detail) the heartbeat ledger records.
+// A job that threw (ok:false) is ALWAYS 'error' with zeroed counters — never a
+// false 'success' from classifying undefined counts. detail carries only aggregate
+// machine counters (no client identifiers), mirroring scheduler.js's writes so the
+// two drivers produce identical ledger rows.
+function ledgerStatus(job, result) {
+  if (!result || !result.ok) return 'error'
+  if (job === 'sync')     return classifyRunStatus(result.synced, result.failed)
+  if (job === 'watchdog') return classifyRunStatus(result.scanned, result.failed)
+  if (job === 'insights') return classifyRunStatus(result.swept, result.failed)
+  return 'error'
+}
+
+function ledgerDetail(job, result) {
+  const r = result || {}
+  if (job === 'sync')     return { scanned: r.scanned || 0, synced: r.synced || 0, failed: r.failed || 0 }
+  if (job === 'watchdog') return { scanned: r.scanned || 0, healed: r.healed || 0, failed: r.failed || 0, operator_required: r.operator_required || 0 }
+  if (job === 'insights') return { swept: r.swept || 0, clients: r.clients || 0, findings: r.findings || 0, failed: r.failed || 0 }
+  return {}
+}
 
 // Sync every active connection — the bulk freshness sweep (mirrors the 6-hour
 // SYNC cron in scheduler.js, the same idempotent runSync per connection). Isolates
@@ -101,6 +128,26 @@ async function runHeartbeat(deps = {}) {
       logger.error?.(`[heartbeat:${job}] fatal: ${err.message}`)
     }
     results[job].ms = Date.now() - started
+
+    // Heartbeat — persist THIS job's run to the autonomy-liveness ledger so the
+    // ops-health reader can prove the heartbeat-driven loop is alive and on-cadence
+    // even while the host is asleep and the in-process scheduler never fires. The
+    // injected `query` is the only DB seam (keeps this module unit-testable); a
+    // ledger-write failure is swallowed so it can never sink the heartbeat itself.
+    if (typeof query === 'function') {
+      try {
+        await recordHeartbeat({
+          query,
+          job,
+          status: ledgerStatus(job, results[job]),
+          durationMs: results[job].ms,
+          detail: ledgerDetail(job, results[job]),
+          now: new Date().toISOString(),
+        })
+      } catch (err) {
+        logger.error?.(`[heartbeat:${job}] ledger record failed: ${err.message}`)
+      }
+    }
   }
 
   const ok = order.every((j) => results[j] && results[j].ok)

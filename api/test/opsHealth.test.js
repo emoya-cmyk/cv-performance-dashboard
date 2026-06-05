@@ -6,7 +6,9 @@ const {
   assessOps,
   assessJob,
   countHeals,
+  classifyRunStatus,
   recordHeartbeat,
+  loadRecentRuns,
   toMs,
   EXPECTED_MS,
   JOBS,
@@ -268,6 +270,99 @@ test('recordHeartbeat fails loud on bad inputs (so a typo cannot write garbage)'
     () => recordHeartbeat({ query: captureQuery(), job: 'sync', status: 'weird', now: NOW }),
     /invalid status/,
   )
+})
+
+// ── classifyRunStatus: counters → run status ─────────────────────────────────────
+test('classifyRunStatus maps the (processed, failed) pair to success/partial/error', () => {
+  assert.equal(classifyRunStatus(10, 0), 'success', 'nothing failed → success')
+  assert.equal(classifyRunStatus(0, 0), 'success', 'an empty sweep is a clean no-op, not an error')
+  assert.equal(classifyRunStatus(8, 2), 'partial', 'some through, some failed → partial')
+  assert.equal(classifyRunStatus(0, 3), 'error', 'every attempt failed → error')
+})
+
+test('classifyRunStatus coerces non-finite counters to zero (never throws, never NaN)', () => {
+  assert.equal(classifyRunStatus(undefined, undefined), 'success')
+  assert.equal(classifyRunStatus(null, null), 'success')
+  assert.equal(classifyRunStatus('5', '1'), 'partial', 'numeric strings coerce')
+  assert.equal(classifyRunStatus(NaN, 4), 'error', 'NaN processed with real failures → error')
+  assert.equal(classifyRunStatus(2, NaN), 'success', 'NaN failures count as zero failures')
+})
+
+// ── loadRecentRuns: the ledger reader ────────────────────────────────────────────
+// A fake `query` that answers the two read shapes loadRecentRuns issues: the
+// per-job "latest" read (… ORDER BY ran_at DESC LIMIT 1, param [job]) and the
+// watchdog heal-window read (… AND ran_at >= $2).
+function routeQuery({ latest = {}, healWindow = [] } = {}) {
+  const calls = []
+  const fn = async (sql, params) => {
+    calls.push({ sql, params })
+    if (/LIMIT 1/.test(sql)) {
+      const row = latest[params[0]]
+      return { rows: row ? [row] : [] }
+    }
+    if (/ran_at >=/.test(sql)) return { rows: healWindow }
+    return { rows: [] }
+  }
+  fn.calls = calls
+  return fn
+}
+
+test('loadRecentRuns merges latest-per-job with the heal window and dedupes the shared watchdog row by id', async () => {
+  const wdLatest = { id: 2, job: 'watchdog', status: 'success', ran_at: new Date(NOW - 5 * MIN).toISOString(), detail: { healed: 2 } }
+  const q = routeQuery({
+    latest: {
+      sync:     { id: 1, job: 'sync',     status: 'success', ran_at: new Date(NOW - 2 * H).toISOString() },
+      watchdog: wdLatest,
+      insights: { id: 3, job: 'insights', status: 'success', ran_at: new Date(NOW - 6 * H).toISOString() },
+      digest:   { id: 4, job: 'digest',   status: 'success', ran_at: new Date(NOW - 2 * DAY).toISOString() },
+    },
+    healWindow: [
+      wdLatest,                                                                                                       // same id:2 — must NOT double count
+      { id: 5, job: 'watchdog', status: 'success', ran_at: new Date(NOW - 2 * DAY).toISOString(), detail: { healed: 1 } },
+    ],
+  })
+
+  const runs = await loadRecentRuns({ query: q, now: NOW })
+  const ids = runs.map(r => r.id).sort((a, b) => a - b)
+  assert.deepEqual(ids, [1, 2, 3, 4, 5], 'one row per job + the extra heal row; watchdog id:2 appears once')
+
+  // The dedupe is provable through the heal tally: 2 + 1, NOT 2 + 1 + 2.
+  const ops = assessOps({ runs, now: NOW })
+  assert.equal(ops.healsRecent, 3, 'shared watchdog row counted once')
+})
+
+test('loadRecentRuns requires a query function', async () => {
+  await assert.rejects(() => loadRecentRuns({ now: NOW }), /query function is required/)
+})
+
+test('loadRecentRuns without a now skips the heal-window read entirely', async () => {
+  const q = routeQuery({ latest: { sync: { id: 1, job: 'sync', status: 'success', ran_at: new Date(NOW).toISOString() } } })
+  const runs = await loadRecentRuns({ query: q })
+  assert.equal(q.calls.length, JOBS.length, 'only the per-job latest reads run — no heal-window query')
+  for (const c of q.calls) assert.match(c.sql, /LIMIT 1/, 'every issued read is a bounded latest-per-job read')
+  assert.deepEqual(runs.map(r => r.id), [1])
+})
+
+test('loadRecentRuns reads the latest row per job UNBOUNDED so a long-stalled job still returns (grades stale, not never)', async () => {
+  const q = routeQuery({
+    latest: { sync: { id: 9, job: 'sync', status: 'success', ran_at: new Date(NOW - 30 * DAY).toISOString() } },
+  })
+  const runs = await loadRecentRuns({ query: q, now: NOW })
+  const perJob = q.calls.filter(c => /LIMIT 1/.test(c.sql))
+  assert.equal(perJob.length, JOBS.length)
+  for (const c of perJob) assert.doesNotMatch(c.sql, /ran_at >=/, 'the latest-per-job read carries no lower-bound cutoff')
+  const sync = runs.find(r => r.job === 'sync')
+  assert.ok(sync, 'a 30-day-stalled sync row is still loaded')
+  assert.equal(assessJob('sync', sync, NOW).status, 'stale', 'and grades stale, not a misleading never')
+})
+
+test('loadRecentRuns scopes the heal-window read to watchdog with an ISO now-minus-window cutoff', async () => {
+  const q = routeQuery({ healWindow: [] })
+  await loadRecentRuns({ query: q, now: NOW })
+  const heal = q.calls.find(c => /ran_at >=/.test(c.sql))
+  assert.ok(heal, 'a heal-window read was issued')
+  assert.equal(heal.params[0], 'watchdog', 'heal read is scoped to the watchdog job')
+  assert.equal(heal.params[1], new Date(NOW - HEAL_WINDOW_MS).toISOString(), 'cutoff is now minus the heal window, ISO')
 })
 
 // ── constants: documented contract ──────────────────────────────────────────────

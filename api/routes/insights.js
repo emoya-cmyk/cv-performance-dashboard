@@ -89,6 +89,11 @@ const {
 } = require('../lib/insights')
 // Pure synthesis: one client's feed → { score, band, counts, driver, contributors }.
 const { scoreClient } = require('../lib/health')
+// Autonomy-liveness grader. assessOps grades each scheduled job-class's last-run age
+// against its expected cadence (live | overdue | stale | never); loadRecentRuns reads
+// the latest-per-job rows (+ heal window) from the job_heartbeats ledger. Agency-only:
+// the shape carries NO client identifier, so it never rides a per-client payload.
+const { assessOps, loadRecentRuns } = require('../lib/opsHealth')
 // Per-route authorization. Every portfolio/agency surface below carries cross-tenant
 // data (peer identities, book-wide shares, budget advice) and must reject role='client'
 // outright (requireAgency); only the per-client GET /:clientId card is client-reachable,
@@ -224,6 +229,25 @@ router.get('/health', requireAgency, async (_req, res) => {
   } catch (err) {
     console.error('[insights] GET health error', err.message)
     res.status(500).json({ error: 'Failed to load portfolio health' })
+  }
+})
+
+// ── GET /api/insights/ops ─────────────────────────────────────────────────────
+// AUTONOMY LIVENESS: is the self-healing engine actually alive and on-cadence, or
+// has it silently been dead for days? Grades each scheduled job-class (sync 6h /
+// watchdog 15m / insights daily / digest weekly) by its last-run age vs expected
+// cadence → live | overdue | stale | never, plus a trailing self-heal count. The
+// loop watching its OWN heartbeat. Agency-only: the payload carries aggregate
+// machine counters and NO client identifier, so it never rides a per-client view.
+// Declared before the :clientId route so "ops" can't be captured as a client id.
+router.get('/ops', requireAgency, async (_req, res) => {
+  try {
+    const now  = new Date().toISOString()
+    const runs = await loadRecentRuns({ query, now })
+    res.json(assessOps({ runs, now }))
+  } catch (err) {
+    console.error('[insights] GET ops error', err.message)
+    res.status(500).json({ error: 'Failed to load ops health' })
   }
 })
 
