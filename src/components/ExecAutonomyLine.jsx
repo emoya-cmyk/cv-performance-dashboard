@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
 import { ShieldCheck, Activity, AlertTriangle, Wrench } from 'lucide-react'
-import { api, USE_API } from '@/lib/api'
+import { USE_API } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useOpsHealth } from '@/lib/useOpsHealth'
 
 /**
  * ExecAutonomyLine — the EXEC-FACING confidence proof (ops-v2). It reads the exact
@@ -58,17 +58,9 @@ function ago(ms) {
 }
 
 export default function ExecAutonomyLine({ className = '' }) {
-  const [data, setData]     = useState(null)
-  const [loaded, setLoaded] = useState(false)
-
-  useEffect(() => {
-    if (!USE_API) return
-    let alive = true
-    api.getOpsHealth()
-      .then(d => { if (alive) { setData(d); setLoaded(true) } })
-      .catch(() => { if (alive) setLoaded(true) })   // swallow — hide the line, never break the page
-    return () => { alive = false }
-  }, [])
+  // Shared live-read: byte-identical first fetch + a low-cadence poll so the
+  // freshness fact below stays honest on a long-open tab (see lib/useOpsHealth).
+  const { data, loaded } = useOpsHealth()
 
   if (!USE_API || !loaded || !data || !data.status) return null
   const tone    = TONE[data.status] || TONE.warming
