@@ -56,7 +56,7 @@ function EventRow({ ev, now }) {
   const isLive  = ev.type === 'live'
 
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-slate-50 last:border-0 animate-fade-in">
+    <div className="flex items-start gap-3 py-2.5 border-b border-slate-50 last:border-0 fade-in">
       {/* Icon */}
       <div className="mt-0.5 shrink-0">
         {isError  && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
