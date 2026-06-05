@@ -113,13 +113,13 @@ function buildStrategicHeadline({ clientName, revenue, jobs, roas, spend, leads,
   }
 
   // Sentence 2 — ROI framing with benchmark context
-  if (roas >= 3) {
+  if (roas >= 8) {
     parts.push(
-      `At ${roas.toFixed(1)}× ROAS, every marketing dollar is returning $${roas.toFixed(2)} — above the 3–5× home services benchmark.`
+      `At ${roas.toFixed(1)}× ROAS, every marketing dollar is returning $${roas.toFixed(2)} — in line with the 8–15× home services benchmark.`
     )
-  } else if (roas >= 1.5) {
+  } else if (roas >= 5) {
     parts.push(
-      `Marketing ROI is positive at ${roas.toFixed(1)}× — below the 3–5× home services benchmark, with clear room to optimize.`
+      `Marketing ROI is positive at ${roas.toFixed(1)}× — below the 8–15× home services benchmark, with clear room to optimize.`
     )
   } else if (roas > 0) {
     parts.push(
@@ -156,8 +156,8 @@ function buildStrategicHeadline({ clientName, revenue, jobs, roas, spend, leads,
 // ── Health verdict ────────────────────────────────────────────────────────────
 function verdictFor({ revenue, revDelta, roas, leads, jobs }) {
   if (revenue <= 0) return null
-  const roasStrong  = roas >= 3
-  const roasOk      = roas >= 1.5
+  const roasStrong  = roas >= 8
+  const roasOk      = roas >= 5
   const revGrowing  = revDelta > 2
   const revFalling  = revDelta < -5
   const closeRate   = leads > 0 ? (jobs / leads) * 100 : 0
@@ -451,12 +451,12 @@ export default function ExecView({ store }) {
               pct={null}
               big
               benchmark={{
-                text:  roas >= 3   ? '✓ Above 3–5× home services avg'
-                     : roas >= 1.5 ? 'Home services avg: 3–5×'
-                     : roas > 0    ? '↘ Below breakeven · avg: 3–5×'
-                     :               'Home services avg: 3–5×',
-                color: roas >= 3   ? 'text-emerald-400'
-                     : roas >= 1.5 ? 'text-amber-400'
+                text:  roas >= 8   ? '✓ On target · 8–15× home services avg'
+                     : roas >= 5   ? 'Home services avg: 8–15×'
+                     : roas > 0    ? '↘ Below benchmark · avg: 8–15×'
+                     :               'Home services avg: 8–15×',
+                color: roas >= 8   ? 'text-emerald-400'
+                     : roas >= 5   ? 'text-amber-400'
                      : roas > 0    ? 'text-rose-400'
                      :               'text-white/35',
               }}
@@ -556,7 +556,7 @@ export default function ExecView({ store }) {
                     dataKey="size"
                     aspectRatio={4 / 3}
                     content={({ x, y, width, height, name, roas, revenue, jobs }) => {
-                      const color = roas >= 3 ? '#34d399' : roas >= 1.5 ? '#fbbf24' : '#f87171'
+                      const color = roas >= 8 ? '#34d399' : roas >= 5 ? '#fbbf24' : '#f87171'
                       const show  = width > 50 && height > 28
                       return (
                         <g>

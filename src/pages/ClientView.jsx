@@ -53,8 +53,8 @@ function periodToRange(period) {
 // ── Verdict logic (shared with ExecView) ─────────────────────────────────────
 function verdictFor({ revenue, revDelta, roas, leads, jobs }) {
   if (revenue <= 0) return null
-  const roasStrong  = roas >= 3
-  const roasOk      = roas >= 1.5
+  const roasStrong  = roas >= 8
+  const roasOk      = roas >= 5
   const revGrowing  = revDelta > 2
   const revFalling  = revDelta < -5
   const closeRate   = leads > 0 ? (jobs / leads) * 100 : 0
@@ -126,8 +126,8 @@ function buildAccountTeamBullets({ roas, leads, jobs, closeRate, spend, revDelta
   // Bullet 1 — ad efficiency signal
   if (roas > 0 && roas < 1.5) {
     bullets.push({ icon: '🔬', text: `Your ROAS is at ${roas.toFixed(1)}× — we've audited your campaigns and are reallocating budget away from underperforming ad sets to bring cost per lead down.` })
-  } else if (roas >= 3) {
-    bullets.push({ icon: '📈', text: `Your campaigns are returning ${roas.toFixed(1)}× — above the 3–5× industry benchmark. We're scaling budget into the top-performing ad sets this week.` })
+  } else if (roas >= 8) {
+    bullets.push({ icon: '📈', text: `Your campaigns are returning ${roas.toFixed(1)}× — in line with the 8–15× industry benchmark. We're scaling budget into the top-performing ad sets this week.` })
   } else if (spend > 0) {
     bullets.push({ icon: '📊', text: `Reviewing campaign-level performance to identify which channels to scale. ROAS is positive at ${roas > 0 ? roas.toFixed(1) + '×' : 'building'} — optimizing creative and audience targeting.` })
   } else {

@@ -38,8 +38,8 @@ const CHANNELS = [
 ]
 
 function roasStyle(roas) {
-  if (roas >= 3)   return { bar: 'bg-emerald-500', text: 'text-emerald-600', label: 'Strong' }
-  if (roas >= 1.5) return { bar: 'bg-amber-400',   text: 'text-amber-600',   label: 'OK'     }
+  if (roas >= 8)   return { bar: 'bg-emerald-500', text: 'text-emerald-600', label: 'Strong' }
+  if (roas >= 4)   return { bar: 'bg-amber-400',   text: 'text-amber-600',   label: 'OK'     }
   if (roas > 0)    return { bar: 'bg-rose-500',     text: 'text-rose-600',   label: 'Low'    }
   return               { bar: 'bg-slate-300',       text: 'text-slate-400',  label: '—'     }
 }

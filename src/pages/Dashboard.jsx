@@ -247,8 +247,8 @@ function clientHealthScore(c) {
   const roas      = c.total_spend > 0 ? (c.total_revenue || 0) / c.total_spend : 0
   const closeRate = c.total_leads > 0 ? ((c.total_closed || 0) / c.total_leads) * 100 : 0
   if (!c.total_revenue && !c.total_leads) return 2  // no data — middle
-  if (roas >= 3 && closeRate >= 15)         return 3  // strong — last
-  if (roas >= 1.5 || closeRate >= 10)       return 1  // watch
+  if (roas >= 8 && closeRate >= 15)         return 3  // strong — last
+  if (roas >= 5 || closeRate >= 10)         return 1  // watch
   return 0                                            // at risk — first
 }
 
@@ -279,8 +279,8 @@ function ClientsWidget({ clients, stats, onClientClick }) {
               const roas      = c.total_spend > 0 ? (c.total_revenue || 0) / c.total_spend : 0
               const revShare  = ((c.total_revenue || 0) / totalRev) * 100
 
-              // Health: green = ROAS≥3 AND close≥15%, amber = one weak, red = both weak
-              const roasOk  = roas >= 3
+              // Health: green = ROAS≥8 AND close≥15%, amber = one weak, red = both weak
+              const roasOk  = roas >= 8
               const closeOk = closeRate >= 15
               const health  = roasOk && closeOk
                 ? { dot: 'bg-emerald-500', ring: 'ring-emerald-100', label: 'Strong' }
@@ -328,7 +328,7 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                     )}
                   </td>
                   <td className="px-5 py-3.5">
-                    <span className={`text-sm font-bold ${roas >= 3 ? 'text-emerald-600' : roas >= 1.5 ? 'text-amber-600' : 'text-rose-600'}`}>
+                    <span className={`text-sm font-bold ${roas >= 8 ? 'text-emerald-600' : roas >= 5 ? 'text-amber-600' : 'text-rose-600'}`}>
                       {roas > 0 ? fmtX(roas) : '—'}
                     </span>
                   </td>
