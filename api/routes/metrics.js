@@ -62,7 +62,10 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
            COALESCE(AVG(NULLIF(ga4_engagement_rate,0)),0)              AS ga4_engagement_rate,
            COALESCE(SUM(gbp_calls),0)                                  AS gbp_calls,
            COALESCE(SUM(gbp_directions),0)                             AS gbp_directions,
-           COALESCE(SUM(gbp_website_clicks),0)                         AS gbp_website
+           COALESCE(SUM(gbp_website_clicks),0)                         AS gbp_website,
+           COALESCE(SUM(ads_clicks),0)                                 AS ads_clicks,
+           COALESCE(SUM(meta_leads),0)                                 AS meta_leads,
+           COALESCE(SUM(lsa_calls),0)                                  AS lsa_calls
          FROM weekly_reports
          WHERE client_id = $1 AND week_start >= $2
          GROUP BY week_start
@@ -107,6 +110,10 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
       gbp_calls:      parseFloat(r.gbp_calls)      || 0,
       gbp_directions: parseFloat(r.gbp_directions) || 0,
       gbp_website:    parseFloat(r.gbp_website)    || 0,
+      // Per-channel weekly activity (powers the LeadFunnel channel sparklines)
+      ads_clicks:     parseFloat(r.ads_clicks)     || 0,
+      meta_leads:     parseFloat(r.meta_leads)     || 0,
+      lsa_calls:      parseFloat(r.lsa_calls)      || 0,
     }))
 
     res.json({

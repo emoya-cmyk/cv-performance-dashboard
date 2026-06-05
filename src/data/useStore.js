@@ -18,6 +18,7 @@ function aggregateAll(metricsCache, clients) {
     'closed_won','projected_revenue','ads_leads','lsa_calls','lsa_booked_jobs',
     'meta_leads','gbp_views','gbp_calls','gbp_searches','gbp_directions',
     'gbp_website_clicks','ga4_sessions','ga4_new_users','ga4_conversions',
+    'ads_impressions','meta_impressions','lsa_impressions',
   ]
 
   Object.values(metricsCache).forEach(data => {
@@ -28,11 +29,17 @@ function aggregateAll(metricsCache, clients) {
       aggPrev[f]  = (aggPrev[f]  || 0) + (p[f] || 0)
     })
     ;(data.trend || []).forEach(w => {
-      if (!trendMap[w.week]) trendMap[w.week] = { week: w.week, revenue: 0, leads: 0, jobs: 0, spend: 0 }
-      trendMap[w.week].revenue += w.revenue || 0
-      trendMap[w.week].leads   += w.leads   || 0
-      trendMap[w.week].jobs    += w.jobs    || 0
-      trendMap[w.week].spend   += w.spend   || 0
+      if (!trendMap[w.week]) trendMap[w.week] = {
+        week: w.week, revenue: 0, leads: 0, jobs: 0, spend: 0,
+        ads_clicks: 0, meta_leads: 0, lsa_calls: 0,
+      }
+      trendMap[w.week].revenue    += w.revenue    || 0
+      trendMap[w.week].leads      += w.leads      || 0
+      trendMap[w.week].jobs       += w.jobs       || 0
+      trendMap[w.week].spend      += w.spend      || 0
+      trendMap[w.week].ads_clicks += w.ads_clicks || 0
+      trendMap[w.week].meta_leads += w.meta_leads || 0
+      trendMap[w.week].lsa_calls  += w.lsa_calls  || 0
     })
   })
 
@@ -155,6 +162,7 @@ export function useStore() {
     prevStats,
     weeklyTrend,
     currentGoal,
+    metricsCache,   // raw per-client cache { [clientId]: { stats, prevStats, trend, goal } } — lets a single-client surface re-scope to its OWN row instead of the portfolio aggregate
 
     // Period selector
     selectedPeriod,

@@ -1438,13 +1438,25 @@ export default function ClientView({ store }) {
   const [connNote,     setConnNote]    = useState(null)   // { degraded, severity:'info'|'notice', note } — the ONE leak-proof client-safe degraded-data note (clientConnectionNote); never any feed name/status/count
 
   const {
-    stats = {}, prevStats = {}, weeklyTrend = [],
-    clients = [], selectedClient,
+    stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
+    clients = [], selectedClient, metricsCache = {},
     selectedPeriod, setSelectedPeriod,
   } = store
 
   const clientObj   = clients.find(c => c.id === selectedClient) || clients[0]
   const clientName  = clientObj?.name || 'Your Business'
+
+  // Keep the NUMBERS in agreement with the NAME we're showing. When an agency admin
+  // previews /my-dashboard with no specific client selected, store.stats is the portfolio
+  // AGGREGATE while clientObj falls back to the first client — which would render the whole
+  // book's totals under one client's name. Re-scope to that client's OWN cached row so the
+  // headline, deltas, and trend all describe the same account. A real client login only ever
+  // has its own row (scoped === their data === the aggregate-of-one), so this is a no-op for
+  // them; and no global selection state is mutated, so the agency dashboard is unaffected.
+  const scoped      = (clientObj && metricsCache[clientObj.id]) || null
+  const stats       = scoped?.stats     ?? aggStats
+  const prevStats   = scoped?.prevStats ?? aggPrev
+  const weeklyTrend = scoped?.trend     ?? aggTrend
   const periodLabel = PERIOD_OPTS.find(p => p.value === selectedPeriod)?.label || ''
 
   // Live scope for <ScopeNarrative>: the same window the period selector is showing,
@@ -1542,8 +1554,8 @@ export default function ClientView({ store }) {
   const spend   = stats.total_spend   || 0
   const roas    = spend > 0 ? revenue / spend : (stats.avg_roas || 0)
 
-  const revDelta  = delta(revenue,  prevStats.total_revenue)
-  const jobsDelta = delta(jobs,     prevStats.total_closed)
+  const revDelta  = delta(revenue,  prevStats.total_revenue).pct   // .pct → number|null (null when no prior period); every consumer treats these as a number
+  const jobsDelta = delta(jobs,     prevStats.total_closed).pct
 
   const closeRate = leads > 0 ? (jobs / leads) * 100 : 0
 
@@ -1891,6 +1903,10 @@ export default function ClientView({ store }) {
             const gbpLeads  = stats.gbp_calls    || 0
             const tracked   = adsLeads + lsaLeads + metaLeads + gbpLeads
             const organic   = Math.max(leads - tracked, 0)
+            // Foot the shares to 100%: divide by the sum of the slices we actually render,
+            // not raw_leads — channel counts can exceed raw_leads (one lead may touch several
+            // channels), which otherwise pushes the chip %s past 100.
+            const denom     = tracked + organic
             const channels  = [
               { label: 'Google Ads', leads: adsLeads,  color: 'bg-blue-500',    dot: 'bg-blue-500'    },
               { label: 'Google LSA', leads: lsaLeads,  color: 'bg-cyan-500',    dot: 'bg-cyan-500'    },
@@ -1912,8 +1928,8 @@ export default function ClientView({ store }) {
                     <div
                       key={c.label}
                       className={`h-full ${c.color} transition-all duration-700`}
-                      style={{ flex: c.leads / leads }}
-                      title={`${c.label}: ${fmtN(c.leads)} (${((c.leads / leads) * 100).toFixed(0)}%)`}
+                      style={{ flex: c.leads / denom }}
+                      title={`${c.label}: ${fmtN(c.leads)} (${((c.leads / denom) * 100).toFixed(0)}%)`}
                     />
                   ))}
                 </div>
@@ -1926,7 +1942,7 @@ export default function ClientView({ store }) {
                         {c.label}
                       </span>
                       <span className="text-[11px] text-slate-400">
-                        · {fmtN(c.leads)} leads · {((c.leads / leads) * 100).toFixed(0)}%
+                        · {fmtN(c.leads)} leads · {((c.leads / denom) * 100).toFixed(0)}%
                       </span>
                     </div>
                   ))}

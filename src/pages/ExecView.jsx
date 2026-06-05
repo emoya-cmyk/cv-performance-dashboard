@@ -181,10 +181,19 @@ function verdictFor({ revenue, revDelta, roas, leads, jobs }) {
 // ── KPI block — benchmark is { text, color } or null (Change 4) ─────────────
 // Color-coded: emerald = above industry avg, amber = near it, rose = below
 function KPI({ label, value, sub, pct, big, benchmark }) {
+  // Length-aware sizing: a 7-figure currency value (e.g. "$1,142,638") at text-5xl
+  // overflows its minmax(0,1fr) grid track and collides with the next tile's number.
+  // Step the font down as the string grows so the value always fits its own column.
+  // tabular-nums + tracking-tight + whitespace-nowrap keep the count-up animation from
+  // jittering the width frame-to-frame and stop a long number from wrapping to 2 lines.
+  const len = String(value).length
+  const sizeClass = big
+    ? (len >= 11 ? 'text-3xl' : len >= 9 ? 'text-4xl' : 'text-5xl')
+    : (len >= 11 ? 'text-2xl' : len >= 9 ? 'text-3xl' : 'text-4xl')
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col min-w-0">
       <p className="text-[11px] font-black uppercase tracking-widest text-white/60 mb-2">{label}</p>
-      <p className={`font-black text-white leading-none ${big ? 'text-5xl' : 'text-4xl'}`}>{value}</p>
+      <p className={`font-black text-white leading-none tabular-nums tracking-tight whitespace-nowrap ${sizeClass}`}>{value}</p>
       {sub       && <p className="text-sm text-white/65 mt-1.5 font-medium">{sub}</p>}
       {pct != null && <div className="mt-2"><DeltaTag pct={pct} /></div>}
       {benchmark && (

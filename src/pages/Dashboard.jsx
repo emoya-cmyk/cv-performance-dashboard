@@ -110,13 +110,15 @@ function FunnelWidget({ stats }) {
       dot:       'bg-slate-400',
       color:     'text-slate-600',
     },
-    {
+    // Only show the "Reached / impressions" step when we actually have impression data —
+    // mirrors LeadFunnel's guard so a portfolio with no ad impressions doesn't read "0 Reached"
+    ...(impressions > 0 ? [{
       label:     'Reached',
       value:     fmtN(impressions),
       note:      'impressions',
       dot:       'bg-blue-300',
       color:     'text-blue-500',
-    },
+    }] : []),
     {
       label:     'Leads',
       value:     fmtN(leads),
@@ -382,7 +384,7 @@ export default function Dashboard() {
   // Spark data slices — last 8 weeks mapped per metric
   const sparkWeeks = weeklyTrend.slice(-8)
   const revSpark   = sparkWeeks.map(w => ({ v: Math.round(w.revenue || 0) }))
-  const jobsSpark  = sparkWeeks.map(w => ({ v: Math.round(w.closed  || 0) }))
+  const jobsSpark  = sparkWeeks.map(w => ({ v: Math.round(w.jobs ?? w.closed ?? 0) }))
   const leadsSpark = sparkWeeks.map(w => ({ v: Math.round(w.leads   || 0) }))
   const roasSpark  = sparkWeeks.map(w => ({
     v: w.spend > 0 ? Math.round((w.revenue / w.spend) * 10) : 0,

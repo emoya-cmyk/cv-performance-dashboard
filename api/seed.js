@@ -49,33 +49,42 @@ async function seed() {
   const hash = await bcrypt.hash('admin', 10)
   try {
     await query(
-      `INSERT INTO users (id, email, password_hash, role) VALUES (?,?,?,?)`,
+      `INSERT INTO users (id, email, password_hash, role) VALUES ($1,$2,$3,$4)`,
       [uuid(), 'admin@example.com', hash, 'agency']
     )
     console.log('[seed] created admin@example.com / admin')
   } catch (e) {
-    if (e.message.includes('UNIQUE')) console.log('[seed] admin user already exists')
-    else throw e
+    if (e.message.includes('UNIQUE')) {
+      // Admin row already present — reconcile its password to the documented
+      // credential so `node seed.js` is truly idempotent and the promised login
+      // (admin@example.com / admin) always works, not just on a fresh DB.
+      await query(
+        `UPDATE users SET password_hash = $1, role = $2 WHERE email = $3`,
+        [hash, 'agency', 'admin@example.com']
+      )
+      console.log('[seed] admin user existed — password reset to "admin"')
+    } else throw e
   }
 
   // ── clients ───────────────────────────────────────────────────────────────────
   const clientIds = []
   for (const c of CLIENTS) {
-    const id = uuid()
-    try {
-      await query(
-        `INSERT INTO clients (id, name, industry, location, status) VALUES (?,?,?,?,?)`,
-        [id, c.name, c.industry, c.location, c.status]
-      )
-      clientIds.push(id)
-      console.log('[seed] client:', c.name)
-    } catch (e) {
-      if (e.message.includes('UNIQUE')) {
-        // Already exists — look it up
-        const { rows } = await query(`SELECT id FROM clients WHERE name = ?`, [c.name])
-        clientIds.push(rows[0].id)
-      } else throw e
+    // Idempotent by name: the clients table has no UNIQUE(name) constraint, so we
+    // must look for an existing row rather than rely on catching a UNIQUE error —
+    // otherwise every re-run silently duplicates the entire portfolio.
+    const existing = await query(`SELECT id FROM clients WHERE name = $1 LIMIT 1`, [c.name])
+    if (existing.rows.length) {
+      clientIds.push(existing.rows[0].id)
+      console.log('[seed] client exists:', c.name)
+      continue
     }
+    const id = uuid()
+    await query(
+      `INSERT INTO clients (id, name, industry, location, status) VALUES ($1,$2,$3,$4,$5)`,
+      [id, c.name, c.industry, c.location, c.status]
+    )
+    clientIds.push(id)
+    console.log('[seed] client:', c.name)
   }
 
   // ── weekly reports ────────────────────────────────────────────────────────────
@@ -125,7 +134,7 @@ async function seed() {
             ga4_sessions, ga4_new_users, ga4_organic_sessions, ga4_paid_sessions,
             ga4_direct_sessions, ga4_conversions, ga4_engagement_rate,
             raw_leads, mql, sql_count, closed_won, projected_revenue, avg_ticket
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
           [
             uuid(), clientIds[ci], week,
             ads_spend, ads_impressions, ads_clicks, ads_leads, randF(3.0, 6.5),

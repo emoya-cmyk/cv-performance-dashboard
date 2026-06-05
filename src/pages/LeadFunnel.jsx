@@ -293,7 +293,7 @@ export default function LeadFunnel() {
   const trendData = weeklyTrend.slice(-8).map(w => ({
     week:    weekLabel(w.week),
     leads:   Math.round(w.leads   || 0),
-    jobs:    Math.round(w.closed  || w.lsa_booked || 0),
+    jobs:    Math.round(w.jobs ?? w.closed ?? w.lsa_booked ?? 0),
     revenue: Math.round(w.revenue || 0),
   }))
 

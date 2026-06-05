@@ -6,14 +6,16 @@ import { weekLabel, fmtDollarShort } from '@/lib/utils'
 
 /**
  * SpendAreaChart — weekly spend vs revenue area chart.
- * Expects data array of weekly_reports rows with:
- *   { week_start, total_spend, revenue }
+ * Accepts trend rows from /api/metrics (`{ week, spend, revenue }`) as the primary
+ * shape, with the wide weekly_reports field names kept as fallbacks so the chart
+ * works whether it's fed the aggregated trend or a raw weekly row. `??` (not `||`)
+ * so a legitimately-zero week stays 0 instead of cascading to the next fallback.
  */
 export default function SpendAreaChart({ data = [] }) {
   const chartData = data.map(w => ({
-    week:    w.week_start || w.week,
-    Spend:   Math.round(w.total_spend   || w.ads_spend   || 0),
-    Revenue: Math.round(w.total_revenue || w.projected_revenue || 0),
+    week:    w.week_start ?? w.week,
+    Spend:   Math.round(w.spend   ?? w.total_spend   ?? w.ads_spend         ?? 0),
+    Revenue: Math.round(w.revenue ?? w.total_revenue ?? w.projected_revenue ?? 0),
   }))
 
   if (!chartData.length) {
@@ -34,12 +36,12 @@ export default function SpendAreaChart({ data = [] }) {
           <AreaChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id="spendGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor="#e53935" stopOpacity={0.2} />
+                <stop offset="5%"  stopColor="#e53935" stopOpacity={0.35} />
                 <stop offset="95%" stopColor="#e53935" stopOpacity={0} />
               </linearGradient>
               <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%"  stopColor="#10b981" stopOpacity={0.2} />
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                <stop offset="5%"  stopColor="#10b981" stopOpacity={0.45} />
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
@@ -65,13 +67,15 @@ export default function SpendAreaChart({ data = [] }) {
             <Legend wrapperStyle={{ fontSize: 10 }} />
             <Area
               type="monotone" dataKey="Spend"
-              stroke="#e53935" strokeWidth={1.5}
+              stroke="#e53935" strokeWidth={2}
               fill="url(#spendGrad)" dot={false}
+              isAnimationActive={false}
             />
             <Area
               type="monotone" dataKey="Revenue"
-              stroke="#10b981" strokeWidth={1.5}
+              stroke="#10b981" strokeWidth={2.5}
               fill="url(#revenueGrad)" dot={false}
+              isAnimationActive={false}
             />
           </AreaChart>
         </ResponsiveContainer>
