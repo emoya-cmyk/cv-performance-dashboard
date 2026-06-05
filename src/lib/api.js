@@ -2,7 +2,39 @@ import { getToken, clearToken } from '@/lib/auth'
 
 const BASE = import.meta.env.VITE_API_URL || ''
 
+// ── Demo resolver ─────────────────────────────────────────────────────────────
+// When USE_API is false (no VITE_API_URL at build time) the app is a static
+// showcase — no backend available. Every api.get/post/put/del call routes
+// through demoResolve() first. It lazy-loads /demoFixtures.json once, then
+// returns the baked fixture keyed by "METHOD pathname?query" (falling back to
+// "METHOD pathname" so period variants share one fixture when only one was
+// captured). PUT/DELETE always no-op to { ok: true }. Unknown paths return null
+// so callers get a graceful empty state.
+let _fixturePromise = null
+function loadFixtures() {
+  if (!_fixturePromise) {
+    _fixturePromise = fetch('/demoFixtures.json')
+      .then(r => r.ok ? r.json() : {})
+      .catch(() => ({}))
+  }
+  return _fixturePromise
+}
+
+async function demoResolve(method, path) {
+  const fixtures = await loadFixtures()
+  // Exact match first: "GET /api/metrics/abc?period=last_4w"
+  const exact = `${method} ${path}`
+  if (exact in fixtures) return fixtures[exact]
+  // Path-only fallback: strip query string
+  const bare = `${method} ${path.split('?')[0]}`
+  if (bare in fixtures) return fixtures[bare]
+  // PUT / DELETE always succeed silently in demo
+  if (method === 'PUT' || method === 'DELETE') return { ok: true }
+  return null
+}
+
 async function put(path, body) {
+  if (!USE_API) return demoResolve('PUT', path)
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     method:  'PUT',
@@ -18,6 +50,7 @@ async function put(path, body) {
 }
 
 async function get(path) {
+  if (!USE_API) return demoResolve('GET', path)
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -32,6 +65,7 @@ async function get(path) {
 }
 
 async function del(path) {
+  if (!USE_API) return demoResolve('DELETE', path)
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     method:  'DELETE',
@@ -43,6 +77,7 @@ async function del(path) {
 }
 
 export async function post(path, body) {
+  if (!USE_API) return demoResolve('POST', path)
   const token = getToken()
   const res = await fetch(`${BASE}${path}`, {
     method:  'POST',

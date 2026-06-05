@@ -191,15 +191,24 @@ if (!secretCheck.ok) {
   process.exit(1)
 }
 
-migrate().catch(err => console.error('[db] migration error', err.message))
+// In serverless environments (Vercel) this file is imported as a module;
+// listen() and the scheduler only run when executed directly (local dev / Render).
+if (require.main === module) {
+  migrate().catch(err => console.error('[db] migration error', err.message))
 
-app.listen(PORT, () => {
-  console.log(`[api] http://localhost:${PORT}`)
-  console.log(`[api] GHL webhook:      POST /api/webhooks/ghl`)
-  console.log(`[api] HubSpot webhook:  POST /api/webhooks/hubspot`)
-  console.log(`[api] Supermetrics:     POST /api/webhooks/supermetrics`)
-  console.log(`[api] SSE stream:       GET  /api/realtime`)
-  console.log(`[api] Manual sync all:  POST /api/sync/all`)
+  app.listen(PORT, () => {
+    console.log(`[api] http://localhost:${PORT}`)
+    console.log(`[api] GHL webhook:      POST /api/webhooks/ghl`)
+    console.log(`[api] HubSpot webhook:  POST /api/webhooks/hubspot`)
+    console.log(`[api] Supermetrics:     POST /api/webhooks/supermetrics`)
+    console.log(`[api] SSE stream:       GET  /api/realtime`)
+    console.log(`[api] Manual sync all:  POST /api/sync/all`)
 
-  startScheduler()
-})
+    startScheduler()
+  })
+} else {
+  // Serverless cold-start: run migrations once per instance lifecycle.
+  migrate().catch(err => console.error('[db] migration error', err.message))
+}
+
+module.exports = app

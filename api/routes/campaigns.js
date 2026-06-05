@@ -18,21 +18,22 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT
-         external_id,
-         name,
-         channel,
-         -- take the most recent status
-         (ARRAY_AGG(status ORDER BY week_start DESC))[1] AS status,
-         ROUND(SUM(spend)::numeric,      2) AS total_spend,
-         SUM(impressions)                   AS total_impressions,
-         SUM(clicks)                        AS total_clicks,
-         SUM(leads)                         AS total_leads,
-         ROUND(SUM(revenue)::numeric,   2)  AS total_revenue,
-         MAX(week_start)                    AS latest_week
-       FROM campaigns
-       WHERE client_id = $1 AND week_start >= $2
-       GROUP BY external_id, name, channel
-       ORDER BY SUM(spend) DESC NULLS LAST`,
+         g.external_id,
+         g.name,
+         g.channel,
+         (SELECT status FROM campaigns s
+          WHERE s.client_id = g.client_id AND s.external_id = g.external_id
+          ORDER BY s.week_start DESC LIMIT 1) AS status,
+         ROUND(CAST(SUM(g.spend) AS REAL), 2)   AS total_spend,
+         SUM(g.impressions)                      AS total_impressions,
+         SUM(g.clicks)                           AS total_clicks,
+         SUM(g.leads)                            AS total_leads,
+         ROUND(CAST(SUM(g.revenue) AS REAL), 2)  AS total_revenue,
+         MAX(g.week_start)                       AS latest_week
+       FROM campaigns g
+       WHERE g.client_id = $1 AND g.week_start >= $2
+       GROUP BY g.external_id, g.name, g.channel
+       ORDER BY SUM(g.spend) DESC`,
       [clientId, cutoff(weeks)]
     )
 
