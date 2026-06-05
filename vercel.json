@@ -1,16 +1,25 @@
 {
   "version": 2,
-  "buildCommand": "npm install --include=dev && npm run build",
-  "outputDirectory": "dist",
-  "installCommand": "npm install --include=dev",
-  "functions": {
-    "api/index.js": {
-      "memory": 1024,
-      "maxDuration": 30,
-      "includeFiles": "api/migrations/**"
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    },
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node",
+      "config": {
+        "maxLambdaSize": "50mb",
+        "includeFiles": "api/migrations/**"
+      }
     }
-  },
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.js" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
