@@ -7,6 +7,7 @@ import {
 import { fmt$$, fmtN, fmtX, delta, weekLabel } from '@/lib/utils'
 import { useCountUp } from '@/lib/useCountUp'
 import ImpactBanner from '@/components/ImpactBanner'
+import ExecAutonomyLine from '@/components/ExecAutonomyLine'
 
 const PERIOD_OPTS = [
   { value: 'this_week', label: 'This Week' },
@@ -385,7 +386,15 @@ export default function ExecView({ store }) {
               exec view leads with delivered value. The shared ImpactBanner brings its own brand-
               gradient background (theme-independent), self-fetches the portfolio ledger, and stays
               silent until there's a real headline — so on a fresh portfolio this column is unchanged. */}
-          <ImpactBanner className="mb-10" />
+          <ImpactBanner className="mb-4" />
+
+          {/* Exec-facing autonomy/confidence proof (ops-v2). Reads the same live ops
+              grade as the agency strip but re-toned for the boardroom: it answers "is
+              the engine behind these numbers still running on its own?" Pairs with the
+              ImpactBanner above (what the analyst moved + that it's still on). Self-
+              fetches, USE_API-gated, swallows errors → null, so it's silently absent in
+              the demo build or under a client token — adding no new client-data surface. */}
+          <ExecAutonomyLine className="mb-10" />
 
           {/* ── Health verdict ── */}
           {verdict && (
