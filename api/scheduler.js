@@ -18,7 +18,8 @@ const { listRecentBriefs }      = require('./lib/brief')
 const { summarizeBriefQuality } = require('./lib/briefQuality')
 const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelivery')
 const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
-const { recordHeartbeat, classifyRunStatus } = require('./lib/opsHealth')
+const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = require('./lib/opsHealth')
+const { planJobRecovery } = require('./lib/opsRecovery')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -296,6 +297,20 @@ function startScheduler() {
   if (!cron.validate(WATCHDOG_SCHEDULE)) {
     console.warn('[watchdog] invalid WATCHDOG_CRON, using default */15 * * * *')
   }
+
+  // ── ops-v2 self-heal: the executor-owned job→re-run map ─────────────────────
+  // The ONLY jobs the watchdog may auto-recover, each mapped to its pure, idempotent,
+  // internal re-run. insights is the lone safe target — a heavy nightly sweep with no
+  // recovery organ of its own (sync has the per-connection watchdog below; digest =
+  // external comms and watchdog = circular are HARD-denied inside opsRecovery and can
+  // never be added here). RECOVERABLE_JOBS derives from the map's keys so the allow-list
+  // can never drift from what is actually executable. The cooldown ledger persists across
+  // ticks (a process restart resets it — acceptable, a restart is itself a fresh start) so
+  // a genuinely-failing sweep backs off 2h instead of thrashing every 15 minutes.
+  const RECOVERY_THUNKS  = { insights: () => runInsightsForAll() }
+  const RECOVERABLE_JOBS = Object.keys(RECOVERY_THUNKS)
+  const recoveryCooldown = {}
+
   let watchdogRunning = false
   cron.schedule(WATCHDOG_SCHEDULE, async () => {
     if (watchdogRunning) {
@@ -317,10 +332,80 @@ function startScheduler() {
       watchdogRunning = false
     }
 
+    // ── Self-healing CLOSURE (ops-v2) ─────────────────────────────────────────────
+    // Seeing an overdue/stale job is not healing — this is the HAND that acts on what
+    // opsHealth SEES. Grade the engine off the same ledger the agency strip reads, ask
+    // the pure planner which recoverable jobs are due (allow-list ∩ status ∩ cooldown ∩
+    // cap), then re-run each and STAMP A FRESH heartbeat for it — that heartbeat is what
+    // actually re-grades the job 'live' and clears the overdue condition, so the loop is
+    // genuinely closed, not merely re-run. Fully isolated: a recovery fault can never
+    // crash the tick (its own try), and every attempt — success OR failure — stamps the
+    // cooldown so a broken sweep backs off instead of being hammered every 15 minutes.
+    let recovered = 0
+    let recoveryFailed = 0
+    try {
+      const nowIso     = new Date().toISOString()
+      const runs       = await loadRecentRuns({ query, now: nowIso })
+      const assessment = assessOps({ runs, now: nowIso })
+      const plan = planJobRecovery({
+        assessment,
+        recoverable: RECOVERABLE_JOBS,
+        cooldownLedger: recoveryCooldown,
+        now: Date.now(),
+      })
+
+      for (const item of plan.recover) {
+        const thunk = RECOVERY_THUNKS[item.job]
+        if (typeof thunk !== 'function') continue
+        recoveryCooldown[item.job] = Date.now()   // stamp the ATTEMPT — back off win or lose
+        const recStart = Date.now()
+        try {
+          const res    = await thunk()
+          const status = res ? classifyRunStatus(res.swept, res.failed) : 'error'
+          // Stamp a fresh heartbeat for the recovered job — this is what re-grades it
+          // 'live' (or live+degraded) and closes the overdue condition. Mirrors exactly
+          // what that job's own cron records after a normal run. Its own try so a ledger
+          // write never disturbs the recovery accounting.
+          try {
+            await recordHeartbeat({
+              query,
+              job: item.job,
+              status,
+              durationMs: Date.now() - recStart,
+              detail: res
+                ? { swept: res.swept, clients: res.clients, findings: res.findings, failed: res.failed, recovered_by: 'watchdog' }
+                : { swept: 0, clients: 0, findings: 0, failed: 0, recovered_by: 'watchdog' },
+              now: new Date().toISOString(),
+            })
+          } catch (e) {
+            console.error(`[watchdog] recovery heartbeat failed (${item.job}):`, e.message)
+          }
+          if (status === 'error') {
+            recoveryFailed++
+            console.error(`[watchdog] recovery ${item.job}: re-ran but graded error (was ${item.status})`)
+          } else {
+            recovered++
+            console.log(`[watchdog] recovery ${item.job}: re-ran ${status} — cleared ${item.status}`)
+          }
+        } catch (err) {
+          recoveryFailed++
+          console.error(`[watchdog] recovery ${item.job} threw:`, err.message)
+        }
+      }
+
+      if (plan.skipped.length) {
+        console.log('[watchdog] recovery held:', plan.skipped.map((s) => `${s.job}:${s.reason}`).join(', '))
+      }
+    } catch (err) {
+      console.error('[watchdog] recovery pass failed:', err.message)
+    }
+
     // Heartbeat — record this watchdog sweep for the autonomy-liveness layer. The
     // watchdog is the self-healing organ itself; its 15-min heartbeat is what proves
     // the loop is still actively watching. A throw leaves r=null → recorded 'error'.
-    // detail carries only aggregate machine counters (incl. heals) — never client PII.
+    // detail carries only aggregate machine counters — never client PII. The job
+    // recoveries performed just above FOLD into `healed` (so the existing "N self-heals"
+    // counter surfaces them with no new read path) and are also broken out distinctly.
     try {
       await recordHeartbeat({
         query,
@@ -328,8 +413,8 @@ function startScheduler() {
         status: r ? classifyRunStatus(r.scanned, r.failed) : 'error',
         durationMs: Date.now() - startedAt,
         detail: r
-          ? { scanned: r.scanned, healed: r.healed, failed: r.failed, operator_required: r.operator_required }
-          : { scanned: 0, healed: 0, failed: 0, operator_required: 0 },
+          ? { scanned: r.scanned, healed: (r.healed || 0) + recovered, failed: r.failed, operator_required: r.operator_required, job_recovered: recovered, job_recovery_failed: recoveryFailed }
+          : { scanned: 0, healed: recovered, failed: 0, operator_required: 0, job_recovered: recovered, job_recovery_failed: recoveryFailed },
         now: new Date().toISOString(),
       })
     } catch (err) {
