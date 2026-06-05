@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { RefreshCw, AlertCircle, Wifi } from 'lucide-react'
 import { USE_API } from '@/lib/api'
 import { useLiveStream, LIVE_EVENTS } from '@/lib/useLiveStream'
+import { useNow } from '@/lib/useNow'
 
 const MAX_EVENTS = 12
 
@@ -40,14 +41,17 @@ const MOCK_EVENTS = [
   { id: 5, type: 'live',    label: '',            detail: 'Dashboard connected', dot: '',               ts: new Date(Date.now() - 120 * 60000) },
 ]
 
-function timeAgo(ts) {
-  const s = Math.round((Date.now() - ts) / 1000)
+// Relative age against a supplied `now` so the whole feed re-grounds off ONE shared
+// clock tick (lib/useNow) instead of each row reading Date.now() independently. `ts`
+// is a Date; `now - ts` coerces it to epoch ms, identical to the old Date.now()-ts.
+function timeAgo(ts, now = Date.now()) {
+  const s = Math.round((now - ts) / 1000)
   if (s < 60)   return `${s}s ago`
   if (s < 3600) return `${Math.round(s / 60)}m ago`
   return `${Math.round(s / 3600)}h ago`
 }
 
-function EventRow({ ev }) {
+function EventRow({ ev, now }) {
   const isError = ev.type === 'sync_error'
   const isLive  = ev.type === 'live'
 
@@ -74,7 +78,7 @@ function EventRow({ ev }) {
 
       {/* Timestamp */}
       <p className="text-[9px] text-slate-400 font-medium tabular-nums shrink-0 mt-0.5">
-        {timeAgo(ev.ts)}
+        {timeAgo(ev.ts, now)}
       </p>
     </div>
   )
@@ -92,14 +96,13 @@ function EventRow({ ev }) {
  */
 export default function ActivityFeed() {
   const [events, setEvents] = useState(USE_API ? [] : MOCK_EVENTS)
-  const [ticker, setTicker] = useState(0)
   const idRef = useRef(100)
 
-  // Tick every 15s to refresh the "X ago" labels.
-  useEffect(() => {
-    const id = setInterval(() => setTicker(t => t + 1), 15_000)
-    return () => clearInterval(id)
-  }, [])
+  // Advance the "X ago" labels off the shared low-frequency wall clock (lib/useNow —
+  // paused while the tab is hidden, re-grounds immediately on re-show) instead of a
+  // private setInterval. One tick re-renders the feed; each row reads this same `now`,
+  // so a long-open tab never shows a frozen age and a hidden tab burns no timer.
+  const now = useNow()
 
   // Subscribe to the live stream — one row per real event, payload never read.
   useLiveStream({
@@ -138,7 +141,7 @@ export default function ActivityFeed() {
             <p className="text-[10px] text-slate-300 mt-1">Trigger a sync to see activity here</p>
           </div>
         ) : (
-          events.map(ev => <EventRow key={`${ev.id}-${ticker}`} ev={ev} />)
+          events.map(ev => <EventRow key={ev.id} ev={ev} now={now} />)
         )}
       </div>
     </div>
