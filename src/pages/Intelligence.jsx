@@ -17,6 +17,7 @@ import {
 } from '@/lib/insightMeta'
 import DriverBreakdown from '@/components/DriverBreakdown'
 import ImpactBanner from '@/components/ImpactBanner'
+import OpsHealthStrip from '@/components/OpsHealthStrip'
 import StreamStatus from '@/components/StreamStatus'
 import { useLiveStream } from '@/lib/useLiveStream'
 
@@ -195,6 +196,15 @@ export default function Intelligence() {
           Agency-only by construction (dollars + per-client attribution); the client's vaguer
           "your wins" line is the separate leak-proof B4 seam. */}
       {USE_API && <ImpactBanner />}
+
+      {/* autonomy liveness (ops-v1) — the thin, honest proof the self-healing engine behind
+          every panel below is actually RUNNING on-cadence, not silently dead. Reads the
+          job_heartbeats ledger grade (GET /api/insights/ops) and renders one tone-mapped pill:
+          live · last run Xm ago · N/N on cadence · M self-heals this week. It sits ABOVE pipeline
+          health because it is more foundational — if the scheduler itself stalled, every feed
+          below would silently go stale. Agency-only (no client identifiers; 403s a client token),
+          USE_API-gated, and SILENT on any read error so a ledger fault hides the badge, never the page. */}
+      {USE_API && <OpsHealthStrip />}
 
       {/* pipeline health — the foundation everything else stands on (intel-v11 A3). Every
           panel below is only as true as the feeds behind it, so this watchdog sits at the TOP:

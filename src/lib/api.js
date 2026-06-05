@@ -589,6 +589,17 @@ export const api = {
   // client and the narration is agency-voiced, so (like getReallocation*/getPulse) it NEVER rides
   // getClientInsights() — the client's own degraded note is leak-proof and lives elsewhere. No params.
   getConnectionHealth: ()        => get('/api/insights/connection-health'),
+  // getOpsHealth() → the AUTONOMY-LIVENESS read (ops-v1): the proof the self-healing loop is
+  // actually RUNNING, not silently dead. Reads the job_heartbeats ledger that every scheduled
+  // job-class writes to (sync/watchdog/insights/digest) and grades each one's last-run age against
+  // its own expected cadence (live/overdue/stale/never), plus the count of self-heals in the
+  // trailing window. AGENCY-ONLY operational machinery — it describes the internal scheduler, not
+  // any client's data, so (like getConnectionHealth) it 403s a client token and never rides
+  // getClientInsights(). No params (clock = now, server-side). Returns the assessOps shape
+  // ({ status, headline, total, liveCount, overdueCount, staleCount, neverCount, degradedCount,
+  // healsRecent, healWindowMs, jobs:[{job,status,ageMs,...}], now }); the route soft-degrades to
+  // a 500 the strip swallows, so a ledger fault hides the badge rather than breaking the page.
+  getOpsHealth:       ()         => get('/api/insights/ops'),
   // getImpactLedger(clientId?) → the INFLUENCE LEDGER (intel-v12 B2): the honest, weighted
   // tally of what the intelligence layer has actually DELIVERED — recovered findings plus, at
   // portfolio scope ONLY, the agency reallocation wins — distilled into {scope, as_of, count,
