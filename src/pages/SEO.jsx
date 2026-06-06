@@ -26,21 +26,52 @@ function ConnectState({ domain, onDomainSave }) {
     try { await onDomainSave(val.trim()) } finally { setSaving(false) }
   }
 
+  const STEPS = [
+    { n: '1', text: 'Go to semrush.com → My Profile → API Keys → copy your key' },
+    { n: '2', text: 'Run: vercel env add SEMRUSH_API_KEY production  (then paste key)' },
+    { n: '3', text: 'Run: vercel --prod --yes  to redeploy with the new variable' },
+    { n: '4', text: 'Come back here, enter the client\'s domain, hit Sync Now' },
+  ]
+
   return (
-    <div className="flex flex-col items-center justify-center py-20 px-6 text-center max-w-lg mx-auto">
+    <div className="flex flex-col items-center justify-center py-16 px-6 text-center max-w-xl mx-auto">
       <div className="w-14 h-14 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center mb-5">
         <Search className="w-7 h-7 text-sky-400" />
       </div>
-      <h2 className="text-xl font-black text-slate-100 mb-2">Connect SEMrush</h2>
-      <p className="text-sm text-slate-400 mb-6 leading-relaxed">
-        Add <code className="text-sky-400 bg-sky-500/10 px-1 rounded">SEMRUSH_API_KEY</code> to your
-        Vercel environment to unlock organic keyword rankings, traffic value, and competitor
-        intelligence — alongside your paid channels.
+      <h2 className="text-xl font-black text-slate-100 mb-2">Unlock SEO Intelligence</h2>
+      <p className="text-sm text-slate-400 mb-8 leading-relaxed">
+        Connect SEMrush to see organic keyword rankings, 12-week traffic trends, traffic value,
+        and which competitors are winning the same searches as your clients.
       </p>
 
+      {/* Step-by-step activation */}
+      <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left mb-4">
+        <p className="text-xs font-black uppercase tracking-wider text-sky-400 mb-4">Activate in 4 steps</p>
+        <div className="space-y-3">
+          {STEPS.map(s => (
+            <div key={s.n} className="flex items-start gap-3">
+              <span className="w-5 h-5 rounded-full bg-sky-500/15 text-sky-400 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{s.n}</span>
+              <p className="text-xs text-slate-300 leading-relaxed">{s.text}</p>
+            </div>
+          ))}
+        </div>
+        <a
+          href="https://www.semrush.com/api-analytics/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 mt-4 text-xs font-bold text-sky-400 hover:text-sky-300 transition-colors"
+        >
+          <Globe className="w-3 h-3" /> semrush.com/api-analytics →
+        </a>
+      </div>
+
+      {/* Domain pre-save */}
       <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left">
-        <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-3">
-          Client Website Domain
+        <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-1">
+          Save domain now (optional)
+        </p>
+        <p className="text-[10px] text-slate-500 mb-3">
+          Pre-save the client's domain so the first sync runs automatically once your API key is live.
         </p>
         <form onSubmit={save} className="flex gap-2">
           <input
@@ -58,9 +89,6 @@ function ConnectState({ domain, onDomainSave }) {
             {saving ? 'Saving…' : 'Save'}
           </button>
         </form>
-        <p className="text-[10px] text-slate-600 mt-2">
-          Then add <code>SEMRUSH_API_KEY</code> in Vercel → Settings → Environment Variables and redeploy.
-        </p>
       </div>
     </div>
   )
@@ -183,13 +211,51 @@ export default function SEO() {
         const result = await api.getSEO(clientId)
         setData(result)
       } else {
-        // Mock data for demo/dev
+        // Rich mock data — demo/dev mode shows a fully-populated SEO dashboard
         setData({
-          armed: false,
-          connected: false,
-          domain: null,
-          latest: null,
-          history: [],
+          armed: true,
+          connected: true,
+          domain: 'generationfloors.com',
+          latest: {
+            snapshot_date: '2026-06-06',
+            organic_keywords: 847,
+            organic_traffic: 12340,
+            traffic_value: 18600,
+            domain_rank: 38,
+            top_keywords: [
+              { keyword: 'flooring company near me',          position:  1, volume: 5400, cpc: 12.00, url: 'https://generationfloors.com/' },
+              { keyword: 'hardwood flooring installation',     position:  2, volume: 2400, cpc:  8.50, url: 'https://generationfloors.com/hardwood' },
+              { keyword: 'laminate flooring installation',     position:  3, volume: 1200, cpc:  7.40, url: 'https://generationfloors.com/laminate' },
+              { keyword: 'engineered hardwood floors',         position:  4, volume: 1800, cpc:  6.20, url: 'https://generationfloors.com/engineered' },
+              { keyword: 'wood floor restoration',             position:  5, volume:  590, cpc: 13.40, url: 'https://generationfloors.com/refinishing' },
+              { keyword: 'vinyl plank flooring cost',          position:  7, volume: 3200, cpc:  5.80, url: 'https://generationfloors.com/vinyl' },
+              { keyword: 'floor refinishing service',          position:  8, volume:  720, cpc: 11.20, url: 'https://generationfloors.com/refinishing' },
+              { keyword: 'tile flooring contractors',          position: 12, volume:  880, cpc:  9.10, url: 'https://generationfloors.com/tile' },
+              { keyword: 'best flooring company',              position: 15, volume: 1100, cpc:  4.90, url: 'https://generationfloors.com/' },
+              { keyword: 'carpet installation near me',        position: 22, volume: 4400, cpc:  6.70, url: 'https://generationfloors.com/carpet' },
+            ],
+            competitors: [
+              { domain: 'lowes.com',             organic_keywords: 24800, common_keywords: 312, relevance_score: 0.37 },
+              { domain: 'homedepot.com',          organic_keywords: 31200, common_keywords: 289, relevance_score: 0.34 },
+              { domain: 'flooringamerica.com',    organic_keywords:  4200, common_keywords: 187, relevance_score: 0.22 },
+              { domain: 'carpet-one.com',         organic_keywords:  3100, common_keywords: 143, relevance_score: 0.17 },
+              { domain: 'flooringsuperstore.com', organic_keywords:  1840, common_keywords:  96, relevance_score: 0.11 },
+            ],
+          },
+          history: [
+            { date: '2025-12-09', organic_traffic:  7600, organic_keywords: 692, traffic_value: 13400 },
+            { date: '2025-12-16', organic_traffic:  8400, organic_keywords: 714, traffic_value: 14200 },
+            { date: '2025-12-23', organic_traffic:  7900, organic_keywords: 701, traffic_value: 13800 },
+            { date: '2025-12-30', organic_traffic:  8100, organic_keywords: 718, traffic_value: 14600 },
+            { date: '2026-01-06', organic_traffic:  9200, organic_keywords: 739, traffic_value: 15100 },
+            { date: '2026-01-13', organic_traffic:  9800, organic_keywords: 762, traffic_value: 15800 },
+            { date: '2026-01-20', organic_traffic: 10100, organic_keywords: 778, traffic_value: 16200 },
+            { date: '2026-01-27', organic_traffic: 10400, organic_keywords: 793, traffic_value: 16700 },
+            { date: '2026-02-03', organic_traffic: 10900, organic_keywords: 811, traffic_value: 17200 },
+            { date: '2026-02-10', organic_traffic: 11200, organic_keywords: 824, traffic_value: 17600 },
+            { date: '2026-02-17', organic_traffic: 11800, organic_keywords: 836, traffic_value: 18100 },
+            { date: '2026-03-03', organic_traffic: 12340, organic_keywords: 847, traffic_value: 18600 },
+          ],
         })
       }
     } catch (err) {

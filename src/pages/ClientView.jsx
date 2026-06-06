@@ -1972,23 +1972,19 @@ export default function ClientView({ store }) {
                   </span>
                 </div>
 
-                {/* 3 plain-English stats */}
-                <div className="grid grid-cols-3 gap-0 mb-4">
-                  <div className="flex flex-col">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Monthly Visitors</p>
-                    <p className="text-xl font-black text-slate-900 leading-none">{fmtN(visits)}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">people find you organically</p>
-                  </div>
-                  <div className="flex flex-col border-l border-slate-100 pl-4">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Search Terms</p>
-                    <p className="text-xl font-black text-sky-600 leading-none">{fmtN(kwCount)}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">keywords your site ranks for</p>
-                  </div>
-                  <div className="flex flex-col border-l border-slate-100 pl-4">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Traffic Value</p>
-                    <p className="text-xl font-black text-emerald-600 leading-none">{fmt$$(tv)}</p>
-                    <p className="text-[10px] text-slate-400 mt-1">what this traffic would cost in ads</p>
-                  </div>
+                {/* 3 plain-English stats — stack on very small phones, row on sm+ */}
+                <div className="grid grid-cols-3 gap-2 mb-4 min-w-0">
+                  {[
+                    { label: 'Monthly Visitors', value: fmtN(visits),   sub: 'people find you',   color: 'text-slate-900' },
+                    { label: 'Search Terms',      value: fmtN(kwCount),  sub: 'keywords ranking',  color: 'text-sky-600'   },
+                    { label: 'Traffic Value',     value: fmt$$(tv),      sub: 'in free traffic',   color: 'text-emerald-600' },
+                  ].map((s, i) => (
+                    <div key={s.label} className={`flex flex-col min-w-0 ${i > 0 ? 'border-l border-slate-100 pl-3' : ''}`}>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1 truncate">{s.label}</p>
+                      <p className={`text-lg sm:text-xl font-black ${s.color} leading-none tabular-nums`}>{s.value}</p>
+                      <p className="text-[9px] text-slate-400 mt-1 leading-snug">{s.sub}</p>
+                    </div>
+                  ))}
                 </div>
 
                 {/* Top 3 keywords — friendly labels */}

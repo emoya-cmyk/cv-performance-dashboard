@@ -41,7 +41,38 @@ export default function DailyBriefingCard() {
   }
 
   if (!isAgency || loading) return null
-  if (!brief?.text && !brief?.narrative) return null
+
+  // Empty state: API is live but brief hasn't been generated yet.
+  // Show a compact prompt so the executive doesn't miss the feature — they can generate on demand.
+  if (!brief?.text && !brief?.narrative) {
+    return (
+      <div className="border border-brand-500/10 border-dashed rounded-2xl px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center shrink-0">
+              <Sparkles className="w-4 h-4 text-brand-400/50" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-brand-400/60">Agency Brief</p>
+              <p className="text-xs text-slate-500">
+                {!USE_API ? 'Connect to API to see your morning brief' : 'No brief yet — generate your first one'}
+              </p>
+            </div>
+          </div>
+          {USE_API && (
+            <button
+              onClick={handleRegen}
+              disabled={regen}
+              className="shrink-0 flex items-center gap-2 px-4 py-2 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-xl text-xs font-bold text-brand-400 transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={`w-3 h-3 ${regen ? 'animate-spin' : ''}`} />
+              {regen ? 'Generating…' : 'Generate Brief'}
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   const text = brief.narrative || brief.text || ''
   // Format today as "Monday, June 9"
