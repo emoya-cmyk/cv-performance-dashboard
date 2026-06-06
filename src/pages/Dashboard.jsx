@@ -4,6 +4,8 @@ import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 import TopBar from '@/components/TopBar'
 import AskBox from '@/components/AskBox'
 import AnomalyStrip from '@/components/AnomalyStrip'
+import OpsHealthStrip from '@/components/OpsHealthStrip'
+import DailyBriefingCard from '@/components/DailyBriefingCard'
 import ChannelBreakdown from '@/components/ChannelBreakdown'
 import ActivityFeed from '@/components/ActivityFeed'
 import SpendAreaChart from '@/components/charts/SpendAreaChart'
@@ -37,10 +39,10 @@ function DeltaPill({ value, prev, invert = false }) {
   const good = invert ? !up : up
   return (
     <span className={`inline-flex items-center gap-0.5 text-[11px] font-bold px-2 py-0.5 rounded-full mt-2 ${
-      good ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+      good ? 'bg-emerald-400/15 text-emerald-400' : 'bg-rose-400/15 text-rose-400'
     }`}>
       {up ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}%
-      <span className="text-slate-400 font-normal ml-0.5 text-[10px]">vs prior</span>
+      <span className="text-slate-500 font-normal ml-0.5 text-[10px]">vs prior</span>
     </span>
   )
 }
@@ -79,7 +81,7 @@ function MetricWidget({ label, value, sub, prev, invert, format = fmt$$, sparkDa
     <div className="relative flex flex-col justify-between h-full p-5 overflow-hidden">
       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
       <div className="relative z-10">
-        <p className="text-4xl font-black text-slate-900 leading-none">{format(value)}</p>
+        <p className="text-4xl font-black text-white leading-none">{format(value)}</p>
         {sub && <p className="text-xs text-slate-400 mt-1.5">{sub}</p>}
         <DeltaPill value={value} prev={prev} invert={invert} />
       </div>
@@ -108,7 +110,7 @@ function FunnelWidget({ stats }) {
       label:     'Spend',
       value:     fmt$$(spend),
       dot:       'bg-slate-400',
-      color:     'text-slate-600',
+      color:     'text-slate-300',
     },
     // Only show the "Reached / impressions" step when we actually have impression data —
     // mirrors LeadFunnel's guard so a portfolio with no ad impressions doesn't read "0 Reached"
@@ -117,22 +119,22 @@ function FunnelWidget({ stats }) {
       value:     fmtN(impressions),
       note:      'impressions',
       dot:       'bg-blue-300',
-      color:     'text-blue-500',
+      color:     'text-blue-400',
     }] : []),
     {
       label:     'Leads',
       value:     fmtN(leads),
       dot:       'bg-blue-500',
-      color:     'text-blue-700',
+      color:     'text-blue-400',
     },
     {
       label:     'Followed Up',
       // ← real data or explicit "not tracked" — never a made-up 65%
       value:     mqlTracked ? fmtN(mql) : '—',
-      dot:       !mqlTracked       ? 'bg-slate-200'  :
+      dot:       !mqlTracked       ? 'bg-slate-600'  :
                  mqlRate >= 50     ? 'bg-amber-400'  : 'bg-rose-500',
-      color:     !mqlTracked       ? 'text-slate-300' :
-                 mqlRate >= 50     ? 'text-amber-600' : 'text-rose-600',
+      color:     !mqlTracked       ? 'text-slate-500' :
+                 mqlRate >= 50     ? 'text-amber-400' : 'text-rose-400',
       dropoff:   mqlRate != null ? `${mqlRate.toFixed(0)}%` : null,
       untracked: !mqlTracked && leads > 0,
     },
@@ -140,16 +142,16 @@ function FunnelWidget({ stats }) {
       label:     'Jobs Won',
       value:     fmtN(closed),
       dot:       closeRate >= 15  ? 'bg-emerald-500' :
-                 leads > 0        ? 'bg-rose-500'    : 'bg-slate-300',
-      color:     closeRate >= 15  ? 'text-emerald-700' :
-                 leads > 0        ? 'text-rose-600'    : 'text-slate-400',
+                 leads > 0        ? 'bg-rose-500'    : 'bg-slate-600',
+      color:     closeRate >= 15  ? 'text-emerald-400' :
+                 leads > 0        ? 'text-rose-400'    : 'text-slate-500',
       dropoff:   leads > 0 ? `${closeRate.toFixed(0)}%` : null,
     },
     {
       label:     'Revenue',
       value:     fmt$$(revenue),
-      dot:       revenue > 0 ? 'bg-brand-500' : 'bg-slate-300',
-      color:     revenue > 0 ? 'text-brand-600' : 'text-slate-400',
+      dot:       revenue > 0 ? 'bg-brand-500' : 'bg-slate-600',
+      color:     revenue > 0 ? 'text-brand-400' : 'text-slate-500',
     },
   ]
 
@@ -181,14 +183,14 @@ function FunnelWidget({ stats }) {
               )}
             </div>
             {i < steps.length - 1 && (
-              <ArrowRight className="w-3.5 h-3.5 text-slate-200 shrink-0" />
+              <ArrowRight className="w-3.5 h-3.5 text-white/20 shrink-0" />
             )}
           </div>
         ))}
       </div>
       {/* Reminder if MQL isn't wired up */}
       {!mqlTracked && leads > 0 && (
-        <p className="text-[9px] text-slate-400 mt-3 border-t border-slate-50 pt-2">
+        <p className="text-[9px] text-slate-400 mt-3 border-t border-white/5 pt-2">
           💡 Tag leads "MQL" in GHL to unlock follow-up rate tracking
         </p>
       )}
@@ -203,10 +205,10 @@ function BottleneckWidget({ stats }) {
   if (!bn) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mb-3">
-          <CheckCircle className="w-6 h-6 text-emerald-500" />
+        <div className="w-12 h-12 rounded-full bg-emerald-500/15 flex items-center justify-center mb-3">
+          <CheckCircle className="w-6 h-6 text-emerald-400" />
         </div>
-        <p className="text-sm font-black text-slate-800 mb-1">Performance on Track</p>
+        <p className="text-sm font-black text-white mb-1">Performance on Track</p>
         <p className="text-xs text-slate-400 leading-relaxed">
           No critical issues detected. Close rate, follow-up speed, and ROAS are all within healthy ranges.
         </p>
@@ -215,9 +217,9 @@ function BottleneckWidget({ stats }) {
   }
 
   const colors = {
-    close_rate:   { bg: 'bg-rose-50',   border: 'border-rose-200',   dot: 'bg-rose-500',   text: 'text-rose-700',   label: 'text-rose-600'   },
-    follow_up:    { bg: 'bg-amber-50',  border: 'border-amber-200',  dot: 'bg-amber-500',  text: 'text-amber-700',  label: 'text-amber-600'  },
-    ad_efficiency:{ bg: 'bg-orange-50', border: 'border-orange-200', dot: 'bg-orange-500', text: 'text-orange-700', label: 'text-orange-600' },
+    close_rate:   { bg: 'bg-rose-500/10',   border: 'border-rose-500/25',   dot: 'bg-rose-500',   text: 'text-rose-300',   label: 'text-rose-400'   },
+    follow_up:    { bg: 'bg-amber-500/10',  border: 'border-amber-500/25',  dot: 'bg-amber-500',  text: 'text-amber-300',  label: 'text-amber-400'  },
+    ad_efficiency:{ bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-500', text: 'text-orange-300', label: 'text-orange-400' },
   }
   const c = colors[bn.type] || colors.close_rate
 
@@ -258,14 +260,14 @@ function ClientsWidget({ clients, stats, onClientClick }) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
-        <p className="text-sm font-bold text-slate-700">Client Health</p>
+      <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between flex-shrink-0">
+        <p className="text-sm font-bold text-slate-200">Client Health</p>
         <p className="text-xs text-slate-400">Worst first</p>
       </div>
       <div className="overflow-auto flex-1">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-100 bg-slate-50/60">
+            <tr className="border-b border-white/[0.06] bg-white/[0.03]">
               {['Client', 'Revenue', 'Jobs', 'ROAS', 'Close Rate', 'Rev. Share'].map(h => (
                 <th key={h} className="text-left px-5 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">
                   {h}
@@ -293,7 +295,7 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                 <tr
                   key={c.id}
                   onClick={() => onClientClick && onClientClick(c.id)}
-                  className={`border-b border-slate-50 transition-colors group cursor-pointer ${atRisk ? 'bg-rose-50/40 hover:bg-rose-50/70' : 'hover:bg-slate-50/70'}`}
+                  className={`border-b border-white/[0.04] transition-all duration-150 group cursor-pointer ${atRisk ? 'bg-rose-500/[0.06] hover:bg-rose-500/[0.10]' : 'hover:bg-white/[0.04]'}`}
                 >
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-2.5">
@@ -303,7 +305,7 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                       />
                       <div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold text-slate-800 leading-none group-hover:text-brand-600 transition-colors">{c.name}</p>
+                          <p className="font-semibold text-slate-100 leading-none group-hover:text-brand-400 transition-colors">{c.name}</p>
                           {atRisk && (
                             <span className="text-[9px] font-black uppercase tracking-wide text-rose-500 bg-rose-100 px-1.5 py-0.5 rounded">
                               Needs Attention
@@ -316,13 +318,13 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                     </div>
                   </td>
                   <td className="px-5 py-3.5">
-                    <p className="font-bold text-slate-800">{fmt$$(c.total_revenue)}</p>
+                    <p className="font-bold text-slate-100">{fmt$$(c.total_revenue)}</p>
                     {c.total_spend > 0 && (
                       <p className="text-[10px] text-slate-400">{fmt$$(c.total_spend)} spend</p>
                     )}
                   </td>
                   <td className="px-5 py-3.5">
-                    <p className="font-semibold text-slate-700">{fmtN(c.total_closed)}</p>
+                    <p className="font-semibold text-slate-200">{fmtN(c.total_closed)}</p>
                     {c.total_closed > 0 && c.total_revenue > 0 && (
                       <p className="text-[10px] text-slate-400">{fmt$$(c.total_revenue / c.total_closed)} avg</p>
                     )}
@@ -334,7 +336,7 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                   </td>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-14 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="w-14 h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all"
                           style={{
@@ -350,7 +352,7 @@ function ClientsWidget({ clients, stats, onClientClick }) {
                   </td>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-brand-500 rounded-full"
                           style={{ width: `${Math.min(revShare, 100)}%` }}
@@ -416,50 +418,56 @@ export default function Dashboard() {
           {/* ── Autonomous alert ribbon — engine-driven, silent when clean ── */}
           <AnomalyStrip />
 
+          {/* ── Autonomy liveness proof — scheduler heartbeat + self-heal count ── */}
+          <OpsHealthStrip />
+
+          {/* ── Executive morning brief — AI portfolio pulse (agency-only, silent when no brief yet) ── */}
+          <DailyBriefingCard />
+
           {/* ── Ask your data (Sprint 2 NL query) ── */}
           <AskBox />
 
           {/* ── Row 1: 4 KPI cards ── */}
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {[
               { label: 'Revenue Generated', value: revenue, format: fmt$$,  sub: jobs > 0 ? `Avg ${fmt$$(revenue / jobs)} per job` : 'No closed jobs yet', prev: prevStats.total_revenue, spark: revSpark,   color: '#e53935' },
               { label: 'Jobs Won',           value: jobs,    format: fmtN,   sub: leads > 0 ? `${fmtPct((jobs / leads) * 100)} close rate` : 'No leads yet',  prev: prevStats.total_closed,  spark: jobsSpark,  color: '#10b981' },
               { label: 'Marketing ROAS',     value: roas,    format: fmtX,   sub: 'Per $1 spent on ads',                                                       prev: prevStats.total_spend > 0 ? prevStats.total_revenue / prevStats.total_spend : null, spark: roasSpark, color: '#6366f1' },
               { label: 'New Leads',          value: leads,   format: fmtN,   sub: spend > 0 ? `${fmt$$(spend)} total ad spend` : 'No ad spend recorded',       prev: prevStats.total_leads,   spark: leadsSpark, color: '#3b82f6' },
             ].map(m => (
-              <div key={m.label} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden h-40">
+              <div key={m.label} className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 overflow-hidden min-h-[160px] transition-all duration-200 hover:border-white/[0.13] hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/25">
                 <MetricWidget label={m.label} value={m.value} format={m.format} sub={m.sub} prev={m.prev} sparkData={m.spark} sparkKey="v" sparkColor={m.color} />
               </div>
             ))}
           </div>
 
           {/* ── Row 2: Funnel + Bottleneck ── */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="col-span-2 bg-white rounded-2xl border border-slate-100 shadow-sm h-52">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2 bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 min-h-[208px] transition-all duration-200 hover:border-white/[0.13]">
               <FunnelWidget stats={stats} />
             </div>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm h-52 overflow-hidden">
+            <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 min-h-[208px] overflow-hidden transition-all duration-200 hover:border-white/[0.13]">
               <BottleneckWidget stats={stats} />
             </div>
           </div>
 
           {/* ── Row 3: Trend + Channels + Activity ── */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm h-64 overflow-hidden">
-              <div className="p-5 h-full">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 min-h-[256px] overflow-hidden transition-all duration-200 hover:border-white/[0.13]">
+              <div className="p-5 h-full min-h-[256px]">
                 <SpendAreaChart data={weeklyTrend} />
               </div>
             </div>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm h-64 overflow-hidden">
+            <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 min-h-[256px] overflow-hidden transition-all duration-200 hover:border-white/[0.13]">
               <ChannelBreakdown stats={stats} />
             </div>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm h-64 overflow-hidden">
+            <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 min-h-[256px] overflow-hidden transition-all duration-200 hover:border-white/[0.13]">
               <ActivityFeed />
             </div>
           </div>
 
           {/* ── Row 4: Client health table ── */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 overflow-hidden transition-all duration-200 hover:border-white/[0.13]">
             <ClientsWidget clients={clientSummary} stats={stats} onClientClick={handleClientClick} />
           </div>
 

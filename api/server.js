@@ -20,6 +20,7 @@ const { router: sharesRouter, publicSnapshot } = require('./routes/shares')
 const campaignsRouter    = require('./routes/campaigns')
 const agencyRouter       = require('./routes/agency')
 const aiRouter           = require('./routes/ai')
+const seoRouter          = require('./routes/seo')
 const insightsRouter     = require('./routes/insights')
 const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
@@ -117,6 +118,7 @@ app.get('/api/share/:token', publicSnapshot)             // public snapshot (no 
 app.use('/api/campaigns',  requireAuth, campaignsRouter) // campaign CRUD
 app.use('/api/agency', agencyRouter)                    // GET public, PUT self-guards with requireAuth
 app.use('/api/ai',         requireAuth, aiRouter)        // grounded recap card + ask stub
+app.use('/api/seo',        requireAuth, seoRouter)       // SEMrush organic snapshots + on-demand sync
 app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intelligence feed + lifecycle
 
 // Email digest prefs — GET + PUT /api/clients/:id/email

@@ -1436,6 +1436,7 @@ export default function ClientView({ store }) {
   const [recap,        setRecap]       = useState(null)   // grounded weekly recap row — the same narration that opens this client's Monday email
   const [brief,        setBrief]       = useState(null)   // grounded AI MORNING brief — { brief_text, pack:{period,posture,...} } over THIS client's own intra-week pulse
   const [connNote,     setConnNote]    = useState(null)   // { degraded, severity:'info'|'notice', note } — the ONE leak-proof client-safe degraded-data note (clientConnectionNote); never any feed name/status/count
+  const [seoData,      setSeoData]     = useState(null)   // SEMrush snapshot — null when not armed/connected
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1524,6 +1525,10 @@ export default function ClientView({ store }) {
     api.getClientBrief(clientObj.id)
       .then(b => setBrief(b || null))
       .catch(() => setBrief(null))
+    // SEO organic snapshot — silently omitted when SEMrush is not connected
+    api.getSEO(clientObj.id)
+      .then(d => setSeoData((d?.armed && d?.connected && d?.latest) ? d : null))
+      .catch(() => setSeoData(null))
   }, [clientObj?.id])
 
   // Initial fetch + refetch whenever the selected client changes.
@@ -1947,6 +1952,68 @@ export default function ClientView({ store }) {
                     </div>
                   ))}
                 </div>
+              </div>
+            )
+          })()}
+
+          {/* ── Your Website on Google — organic search presence, zero jargon ── */}
+          {seoData?.latest && (() => {
+            const lat   = seoData.latest
+            const kws   = (lat.top_keywords || []).slice(0, 3)
+            const visits = lat.organic_traffic || 0
+            const tv     = lat.traffic_value   || 0
+            const kwCount= lat.organic_keywords || 0
+            return (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.095s' }}>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Your Website on Google</p>
+                  <span className="text-[9px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
+                    Organic Search
+                  </span>
+                </div>
+
+                {/* 3 plain-English stats */}
+                <div className="grid grid-cols-3 gap-0 mb-4">
+                  <div className="flex flex-col">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Monthly Visitors</p>
+                    <p className="text-xl font-black text-slate-900 leading-none">{fmtN(visits)}</p>
+                    <p className="text-[10px] text-slate-400 mt-1">people find you organically</p>
+                  </div>
+                  <div className="flex flex-col border-l border-slate-100 pl-4">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Search Terms</p>
+                    <p className="text-xl font-black text-sky-600 leading-none">{fmtN(kwCount)}</p>
+                    <p className="text-[10px] text-slate-400 mt-1">keywords your site ranks for</p>
+                  </div>
+                  <div className="flex flex-col border-l border-slate-100 pl-4">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Traffic Value</p>
+                    <p className="text-xl font-black text-emerald-600 leading-none">{fmt$$(tv)}</p>
+                    <p className="text-[10px] text-slate-400 mt-1">what this traffic would cost in ads</p>
+                  </div>
+                </div>
+
+                {/* Top 3 keywords — friendly labels */}
+                {kws.length > 0 && (
+                  <>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Top Searches That Find You</p>
+                    <div className="space-y-1.5">
+                      {kws.map((k, i) => (
+                        <div key={i} className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-slate-700 truncate">{k.keyword}</span>
+                          <span className={`text-[10px] font-black rounded-full px-2 py-0.5 ml-3 shrink-0 ${
+                            k.position === 1 ? 'bg-amber-50 text-amber-700' :
+                            k.position <= 3  ? 'bg-emerald-50 text-emerald-700' :
+                            k.position <= 10 ? 'bg-sky-50 text-sky-700' : 'bg-slate-50 text-slate-500'
+                          }`}>
+                            #{k.position} on Google
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <p className="text-[9px] text-slate-400 mt-3 border-t border-slate-50 pt-2">
+                  Organic rankings from SEMrush · {seoData.domain}
+                </p>
               </div>
             )
           })()}

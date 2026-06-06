@@ -670,6 +670,12 @@ export const api = {
   ackInsight:         (id)       => post(`/api/insights/${id}/ack`, {}),
   resolveInsight:     (id)       => post(`/api/insights/${id}/resolve`, {}),
   runInsights:        (clientId) => post(clientId ? `/api/insights/${clientId}/run` : '/api/insights/run', {}),
+  // SEO organic snapshots (SEMrush). Gracefully absent when SEMRUSH_API_KEY is not set —
+  // the route returns { armed: false } rather than 500, so consumers always get a valid shape.
+  getSEO:         (clientId)         => get(`/api/seo/${clientId}`),
+  getSEOKeywords: (clientId)         => get(`/api/seo/${clientId}/keywords`),
+  setSEODomain:   (clientId, domain) => put(`/api/seo/${clientId}/domain`, { domain }),
+  syncSEO:        (clientId)         => post(`/api/seo/${clientId}/sync`, {}),
 }
 
 // NOTE: the old subscribeRealtime() export was removed in intel-v13 C2. It opened an
