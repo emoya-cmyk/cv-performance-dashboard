@@ -106,16 +106,14 @@ const seeds = {
 
 const WEEKS = Array.from({ length: 12 }, (_, i) => monday(11 - i))
 
-async function seed() {
-  console.log('[seed] running migrations…')
-  await migrate()
-
-  // ── admin user ───────────────────────────────────────────────────────────────
+// Standalone, idempotent admin-user upsert.
+// Called unconditionally on every serverless cold-start (server.js) so the
+// admin password is always correct even when the clients gate (count === 0)
+// has already been cleared by a prior full seed run.
+async function ensureAdmin () {
   const hash = await bcrypt.hash('admin', 10)
-  // Atomic upsert: INSERT on fresh DB, or UPDATE password+role if email already
-  // exists (e.g. created via /api/auth/setup before seed ran). Avoids the
-  // try/catch + e.message.includes('UNIQUE') pattern which silently fails on
-  // Postgres because PG error messages say lowercase "unique", not "UNIQUE".
+  // ON CONFLICT DO UPDATE is safe even on the very first boot — it just
+  // becomes a plain INSERT on a fresh DB and an UPDATE on any subsequent one.
   await query(
     `INSERT INTO users (id, email, password_hash, role)
      VALUES ($1, $2, $3, $4)
@@ -125,6 +123,14 @@ async function seed() {
     [uuid(), 'admin@example.com', hash, 'agency']
   )
   console.log('[seed] admin@example.com upserted — login: admin@example.com / admin')
+}
+
+async function seed() {
+  console.log('[seed] running migrations…')
+  await migrate()
+
+  // ── admin user ───────────────────────────────────────────────────────────────
+  await ensureAdmin()
 
   // ── clients ───────────────────────────────────────────────────────────────────
   const clientIds = []
@@ -399,9 +405,11 @@ async function seed() {
   console.log('[seed] ✅ done — login: admin@example.com / admin')
 }
 
-// Export so server.js can call seed() on first cold-start without process.exit().
+// Export so server.js can call both on cold-start:
+//   ensureAdmin() — unconditionally on every cold-start (safe upsert)
+//   seed()        — only when DB is empty (gated on clients count)
 // When invoked directly (node seed.js), still exits cleanly.
-module.exports = { seed }
+module.exports = { seed, ensureAdmin }
 if (require.main === module) {
   seed().catch(err => { console.error('[seed]', err.message); process.exit(1) })
 }

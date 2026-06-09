@@ -219,14 +219,21 @@ if (require.main === module) {
     startScheduler()
   })
 } else {
-  // Serverless cold-start: run migrations, auto-seed on empty DB, then mark ready.
-  // The seed check is idempotent: it only runs when clients table is empty (first deploy).
+  // Serverless cold-start: run migrations, ensure admin user, then seed demo
+  // data only if the DB is empty.
+  //
+  // ensureAdmin() is called UNCONDITIONALLY so the admin password is always
+  // correct — even when a prior cold-start already seeded clients (which would
+  // block the clients-count gate below). Without this, a pre-existing user row
+  // with a wrong hash (e.g. from /api/auth/setup) would survive indefinitely.
   app.set('_migrationReady', migrate().then(async () => {
     try {
+      const { ensureAdmin, seed } = require('./seed')
+      await ensureAdmin()
+
       const { rows } = await query('SELECT COUNT(*)::int AS n FROM clients')
       if (rows[0].n === 0) {
-        console.log('[boot] empty DB — running seed…')
-        const { seed } = require('./seed')
+        console.log('[boot] empty DB — running full seed…')
         await seed()
         console.log('[boot] seed complete')
       }
