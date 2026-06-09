@@ -190,6 +190,33 @@ if (fs.existsSync(DIST)) {
   })
 }
 
+// ── Temporary diagnostic endpoint (remove after login is verified) ─────────
+// Read-only: shows user email/hash-prefix/role + clients count so we can
+// confirm ensureAdmin() actually wrote to Neon. Gated by a static token.
+app.get('/api/__diag', async (req, res) => {
+  if (req.query.dbg !== 'cv-diag-2026-06') {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  try {
+    const { rows: users } = await query(
+      `SELECT email, role,
+              SUBSTRING(password_hash FROM 1 FOR 7) AS hash_prefix,
+              created_at
+         FROM users ORDER BY created_at`
+    )
+    const { rows: cc } = await query('SELECT COUNT(*)::int AS n FROM clients')
+    res.json({
+      users,
+      clients_count: cc[0].n,
+      ensure_admin_ran: app.get('_ensureAdminRan') || false,
+      ensure_admin_error: app.get('_ensureAdminError') || null,
+      ts: new Date().toISOString(),
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── 404 catch-all ─────────────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: 'not found' }))
 
@@ -230,6 +257,7 @@ if (require.main === module) {
     try {
       const { ensureAdmin, seed } = require('./seed')
       await ensureAdmin()
+      app.set('_ensureAdminRan', true)
 
       const { rows } = await query('SELECT COUNT(*)::int AS n FROM clients')
       if (rows[0].n === 0) {
@@ -239,6 +267,7 @@ if (require.main === module) {
       }
     } catch (e) {
       console.error('[boot] auto-seed error', e.message)
+      app.set('_ensureAdminError', e.message)
       // Don't re-throw — server starts even if seed fails
     }
   }).catch(err => {
