@@ -112,24 +112,19 @@ async function seed() {
 
   // ── admin user ───────────────────────────────────────────────────────────────
   const hash = await bcrypt.hash('admin', 10)
-  try {
-    await query(
-      `INSERT INTO users (id, email, password_hash, role) VALUES ($1,$2,$3,$4)`,
-      [uuid(), 'admin@example.com', hash, 'agency']
-    )
-    console.log('[seed] created admin@example.com / admin')
-  } catch (e) {
-    if (e.message.includes('UNIQUE')) {
-      // Admin row already present — reconcile its password to the documented
-      // credential so `node seed.js` is truly idempotent and the promised login
-      // (admin@example.com / admin) always works, not just on a fresh DB.
-      await query(
-        `UPDATE users SET password_hash = $1, role = $2 WHERE email = $3`,
-        [hash, 'agency', 'admin@example.com']
-      )
-      console.log('[seed] admin user existed — password reset to "admin"')
-    } else throw e
-  }
+  // Atomic upsert: INSERT on fresh DB, or UPDATE password+role if email already
+  // exists (e.g. created via /api/auth/setup before seed ran). Avoids the
+  // try/catch + e.message.includes('UNIQUE') pattern which silently fails on
+  // Postgres because PG error messages say lowercase "unique", not "UNIQUE".
+  await query(
+    `INSERT INTO users (id, email, password_hash, role)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (email) DO UPDATE
+       SET password_hash = EXCLUDED.password_hash,
+           role          = EXCLUDED.role`,
+    [uuid(), 'admin@example.com', hash, 'agency']
+  )
+  console.log('[seed] admin@example.com upserted — login: admin@example.com / admin')
 
   // ── clients ───────────────────────────────────────────────────────────────────
   const clientIds = []
