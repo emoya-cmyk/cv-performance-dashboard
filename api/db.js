@@ -36,13 +36,32 @@ if (!process.env.DATABASE_URL) {
   }
 
   async function migrate(close = false) {
+    // One-time tracking table: each migration file is run exactly once.
+    // This prevents re-running already-applied migrations on every cold-start,
+    // which can fail when a migration has statements that are not fully
+    // idempotent (e.g. RENAME COLUMN guards that depend on prior state).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        filename   TEXT        PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+
     const dir   = path.join(__dirname, 'migrations')
     const files = fs.readdirSync(dir)
       .filter(f => f.endsWith('.sql') && !f.endsWith('.sqlite.sql'))
       .sort()
     for (const f of files) {
+      const { rows: already } = await pool.query(
+        'SELECT 1 FROM _migrations WHERE filename = $1', [f]
+      )
+      if (already.length > 0) {
+        console.log('[db] skip (already applied)', f)
+        continue
+      }
       const sql = fs.readFileSync(path.join(dir, f), 'utf8')
       await pool.query(sql)
+      await pool.query('INSERT INTO _migrations (filename) VALUES ($1)', [f])
       console.log('[db] applied', f)
     }
     if (close) await pool.end()

@@ -210,6 +210,7 @@ app.get('/api/__diag', async (req, res) => {
       clients_count: cc[0].n,
       ensure_admin_ran: app.get('_ensureAdminRan') || false,
       ensure_admin_error: app.get('_ensureAdminError') || null,
+      migrate_error: app.get('_migrateError') || null,
       ts: new Date().toISOString(),
     })
   } catch (err) {
@@ -246,14 +247,29 @@ if (require.main === module) {
     startScheduler()
   })
 } else {
-  // Serverless cold-start: run migrations, ensure admin user, then seed demo
-  // data only if the DB is empty.
-  //
-  // ensureAdmin() is called UNCONDITIONALLY so the admin password is always
-  // correct — even when a prior cold-start already seeded clients (which would
-  // block the clients-count gate below). Without this, a pre-existing user row
-  // with a wrong hash (e.g. from /api/auth/setup) would survive indefinitely.
-  app.set('_migrationReady', migrate().then(async () => {
+  // Serverless cold-start: run migrations, then ensure admin user + seed demo
+  // data. The two steps are DECOUPLED: a migration failure (e.g. an already-
+  // applied migration re-throwing on re-run) must NOT prevent ensureAdmin()
+  // from running. The users table exists from migration 001; the admin upsert
+  // is always safe as long as that table is reachable.
+  app.set('_migrationReady', (async () => {
+    // ── Step 1: migrations ─────────────────────────────────────────────────
+    // db.js now tracks applied files in _migrations and skips already-run
+    // ones. Errors are logged and stored but do NOT abort step 2.
+    try {
+      await migrate()
+      console.log('[boot] migrations complete')
+    } catch (err) {
+      console.error('[db] migration error', err.message)
+      app.set('_migrateError', err.message)
+      // Continue — core tables from prior deploys still exist.
+    }
+
+    // ── Step 2: admin user + seed ──────────────────────────────────────────
+    // ensureAdmin() is called UNCONDITIONALLY so the admin password is always
+    // correct — even when a prior cold-start already seeded clients (which
+    // would block the clients-count gate below). Without this, a pre-existing
+    // user row with a wrong hash survives indefinitely.
     try {
       const { ensureAdmin, seed } = require('./seed')
       await ensureAdmin()
@@ -268,11 +284,8 @@ if (require.main === module) {
     } catch (e) {
       console.error('[boot] auto-seed error', e.message)
       app.set('_ensureAdminError', e.message)
-      // Don't re-throw — server starts even if seed fails
     }
-  }).catch(err => {
-    console.error('[db] migration error', err.message)
-  }))
+  })())
 }
 
 module.exports = app
