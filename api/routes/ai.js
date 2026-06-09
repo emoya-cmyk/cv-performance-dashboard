@@ -74,6 +74,7 @@ const { runAsk, runSuggestions, runExplain } = require('../lib/ask')
 const { runScopeInsight, runScopeFreshness } = require('../lib/scopeNarrative')
 const { scopeClientParam } = require('../middleware/authz')
 const { createAiBudget } = require('../middleware/aiBudget')
+const { generateCallPrep, getOrGenerateCallPrep } = require('../lib/callPrep')
 
 const router = express.Router()
 
@@ -905,6 +906,37 @@ router.post('/ask/scope-freshness', async (req, res) => {
     if (err && err.status === 400) return res.status(400).json({ error: err.message })
     console.error('[ai] POST ask/scope-freshness error', err.message)
     res.status(500).json({ error: 'Failed to probe scope freshness' })
+  }
+})
+
+// ── Call Prep ───────────────────────────────────────────────────────────────
+// GET  /api/ai/call-prep/:clientId  — return stored prep, generate on miss
+// POST /api/ai/call-prep/:clientId  — force-regenerate fresh talking points
+//
+// Agency-only (scopeClientParam enforces the client-token refusal). aiBudget
+// caps LLM spend per caller. Never throws on the AI path — always falls back
+// to a deterministic template grounded in the evidence pack.
+router.get('/call-prep/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
+  const { clientId } = req.params
+  const weekStart    = req.query.week || undefined
+  try {
+    const prep = await getOrGenerateCallPrep(clientId, weekStart)
+    res.json(prep || null)
+  } catch (err) {
+    console.error('[call-prep] GET error', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+router.post('/call-prep/:clientId', aiBudget, scopeClientParam('clientId'), async (req, res) => {
+  const { clientId } = req.params
+  const weekStart    = req.body?.week || req.query.week || undefined
+  try {
+    const prep = await generateCallPrep(clientId, weekStart)
+    res.json(prep)
+  } catch (err) {
+    console.error('[call-prep] POST error', err.message)
+    res.status(500).json({ error: err.message })
   }
 })
 

@@ -91,9 +91,21 @@ export function delta(current, previous) {
   }
 }
 
-/** Format a YYYY-MM-DD week_start as "Mon DD" e.g. "Apr 07" */
+/** Format a YYYY-MM-DD week_start as "Mon DD" e.g. "Apr 07".
+ *  Handles: Date objects (pg returns DATE as Date), full ISO timestamps,
+ *  and plain YYYY-MM-DD strings. Always interprets as UTC midnight so
+ *  the displayed label matches the stored week boundary regardless of
+ *  the viewer's local timezone. */
 export function weekLabel(dateStr) {
   if (!dateStr) return ''
-  const d = new Date(dateStr + 'T00:00:00')
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  let d
+  if (dateStr instanceof Date) {
+    d = dateStr
+  } else {
+    const s = String(dateStr)
+    // Bare YYYY-MM-DD → treat as UTC midnight to avoid timezone roll-back
+    d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + 'T00:00:00Z') : new Date(s)
+  }
+  if (isNaN(d.getTime())) return '?'
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }

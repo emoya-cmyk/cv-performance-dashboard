@@ -380,6 +380,11 @@ export const api = {
   regeneratePortfolioBrief: (asOf)       => post('/api/ai/brief', asOf ? { as_of: asOf } : {}),
   getClientBrief:           (clientId, asOf) => get(`/api/ai/brief/${clientId}${asOf ? `?as_of=${asOf}` : ''}`),
   regenerateClientBrief:    (clientId, asOf) => post(`/api/ai/brief/${clientId}`, asOf ? { as_of: asOf } : {}),
+  // Call prep — structured talking points for a client performance call.
+  // getCallPrep: return stored prep (generates on first access per client-week).
+  // generateCallPrep: force-regenerate fresh talking points.
+  getCallPrep:              (clientId, week) => get(`/api/ai/call-prep/${clientId}${week ? `?week=${week}` : ''}`),
+  generateCallPrep:         (clientId, week) => post(`/api/ai/call-prep/${clientId}`, week ? { week } : {}),
   // getBriefHealth (intel-v7 10): the AI's narration self-grade — over the recent brief
   // history, how many of the NARRATABLE morning briefs the model actually WROTE versus
   // silently fell back to the safe template (read off `model`, never `grounded`), plus the

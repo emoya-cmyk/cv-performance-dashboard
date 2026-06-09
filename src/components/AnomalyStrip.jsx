@@ -44,15 +44,15 @@ export default function AnomalyStrip() {
   const shown    = items.slice(0, 8)
 
   return (
-    <div className="rounded-2xl border border-rose-200 bg-gradient-to-r from-rose-50 to-amber-50/40 overflow-hidden shadow-sm">
+    <div className="rounded-2xl border border-rose-500/30 bg-gradient-to-r from-rose-500/10 to-amber-500/5 overflow-hidden shadow-sm">
       {/* header */}
       <div className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none" onClick={() => setOpen(o => !o)}>
-        <div className="w-7 h-7 rounded-lg bg-rose-100 flex items-center justify-center shrink-0">
-          <AlertTriangle className="w-4 h-4 text-rose-500" />
+        <div className="w-7 h-7 rounded-lg bg-rose-500/20 flex items-center justify-center shrink-0">
+          <AlertTriangle className="w-4 h-4 text-rose-400" />
         </div>
-        <p className="text-xs font-black text-rose-700 flex-1">
+        <p className="text-xs font-black text-rose-300 flex-1">
           Performance Alerts
-          <span className="ml-2 text-[9px] font-black bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded-full">
+          <span className="ml-2 text-[9px] font-black bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full">
             {items.length}
           </span>
           {critical.length > 0 && (
@@ -64,7 +64,7 @@ export default function AnomalyStrip() {
         <Link
           to="/intelligence"
           onClick={e => e.stopPropagation()}
-          className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 transition-colors"
+          className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-400 hover:text-rose-300 transition-colors"
         >
           View all <ArrowRight className="w-3 h-3" />
         </Link>
@@ -80,7 +80,7 @@ export default function AnomalyStrip() {
 
       {/* body */}
       {open && (
-        <div className="border-t border-rose-100 px-4 py-3 flex flex-wrap gap-2">
+        <div className="border-t border-rose-500/20 px-4 py-3 flex flex-wrap gap-2">
           {shown.map(i => {
             const sev = severityMeta(i.severity)
             return (
@@ -99,7 +99,7 @@ export default function AnomalyStrip() {
           {items.length > shown.length && (
             <Link
               to="/intelligence"
-              className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-500 bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-400 bg-white/[0.06] border border-white/[0.10] hover:border-brand-500/40 hover:text-brand-400 transition"
             >
               +{items.length - shown.length} more <ArrowRight className="w-3 h-3" />
             </Link>

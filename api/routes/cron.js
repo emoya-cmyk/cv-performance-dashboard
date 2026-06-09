@@ -66,6 +66,30 @@ router.get('/health', (_req, res) => {
   })
 })
 
+// GET /api/cron/tick — Vercel cron driver (cronAuth-gated).
+// Vercel sends GET requests (not POST) and automatically adds
+//   Authorization: Bearer $CRON_SECRET
+// so the existing cronAuth middleware gates it identically to /heartbeat.
+// Runs all three idempotent jobs (sync → watchdog → insights) on every tick.
+// Schedule is defined in vercel.json "crons"; each invocation is idempotent.
+router.get('/tick', cronAuth, async (_req, res) => {
+  try {
+    const result = await runHeartbeat({
+      query,
+      runSync,
+      runInsightsForAll,
+      runConnectionWatchdog,
+      logger: console,
+    })
+    res.json(result)
+  } catch (err) {
+    if (err.code === 'UNKNOWN_JOB') {
+      return res.status(400).json({ error: err.message, code: 'UNKNOWN_JOB' })
+    }
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // POST /api/cron/heartbeat — the external-cron entry point (cronAuth-gated).
 // Runs the three idempotent internal jobs (sync → watchdog → insights) in
 // canonical order, or the subset named in req.body.jobs, against the SAME

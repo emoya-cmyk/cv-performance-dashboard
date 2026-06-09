@@ -56,7 +56,7 @@ function EventRow({ ev, now }) {
   const isLive  = ev.type === 'live'
 
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-slate-50 last:border-0 fade-in">
+    <div className="flex items-start gap-3 py-2.5 border-b border-white/[0.04] last:border-0 fade-in">
       {/* Icon */}
       <div className="mt-0.5 shrink-0">
         {isError  && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
@@ -68,10 +68,10 @@ function EventRow({ ev, now }) {
 
       {/* Content — a source-level label (never a client name) + a neutral detail line */}
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-slate-700 leading-snug">
+        <p className="text-xs font-semibold text-slate-200 leading-snug">
           {isLive
-            ? <span className="text-slate-600">Live dashboard connected</span>
-            : <span className="text-slate-900">{ev.label}</span>}
+            ? <span className="text-slate-400">Live dashboard connected</span>
+            : <span className="text-slate-100">{ev.label}</span>}
         </p>
         <p className="text-[10px] text-slate-400 mt-0.5">{ev.detail}</p>
       </div>
@@ -119,9 +119,9 @@ export default function ActivityFeed() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+      <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-bold text-slate-700">Live Activity</p>
+          <p className="text-sm font-bold text-slate-200">Live Activity</p>
           {USE_API && (
             <span className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-emerald-500">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -136,9 +136,9 @@ export default function ActivityFeed() {
       <div className="flex-1 overflow-y-auto px-5 py-1">
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-8">
-            <RefreshCw className="w-6 h-6 text-slate-200 mb-2" />
+            <RefreshCw className="w-6 h-6 text-slate-600 mb-2" />
             <p className="text-xs text-slate-400">Waiting for sync events…</p>
-            <p className="text-[10px] text-slate-300 mt-1">Trigger a sync to see activity here</p>
+            <p className="text-[10px] text-slate-500 mt-1">Trigger a sync to see activity here</p>
           </div>
         ) : (
           events.map(ev => <EventRow key={ev.id} ev={ev} now={now} />)

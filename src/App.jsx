@@ -26,6 +26,8 @@ const Settings       = lazy(() => import('@/pages/Settings'))
 const Explore        = lazy(() => import('@/pages/Explore'))
 const Intelligence   = lazy(() => import('@/pages/Intelligence'))
 const SEO            = lazy(() => import('@/pages/SEO'))
+const CallPrep       = lazy(() => import('@/pages/CallPrep'))
+const Goals          = lazy(() => import('@/pages/Goals'))
 const PulseDiagnosisPreview = lazy(() => import('@/pages/PulseDiagnosisPreview'))   // design preview only — /pulse-preview, no auth
 
 // Full-viewport fallback for full-bleed routes (login-adjacent surfaces with no chrome)
@@ -68,6 +70,8 @@ function AuthenticatedApp() {
         <Route path="/clients"        element={<Clients />} />
         <Route path="/connections"    element={<Connections />} />
         <Route path="/seo"            element={<SEO />} />
+        <Route path="/call-prep"      element={<CallPrep />} />
+        <Route path="/goals"          element={<Goals />} />
         <Route path="/settings"       element={<Settings />} />
         <Route path="*"               element={<Navigate to="/" replace />} />
       </Route>

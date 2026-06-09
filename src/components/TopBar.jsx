@@ -18,10 +18,10 @@ export default function TopBar({
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
       <div>
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-black text-slate-900">{title}</h1>
+          <h1 className="text-2xl font-black text-white">{title}</h1>
           <LiveBadge loading={loading} lastRefresh={lastRefresh} />
         </div>
-        {subtitle && <p className="text-sm text-slate-500 mt-0.5">{subtitle}</p>}
+        {subtitle && <p className="text-sm text-slate-400 mt-0.5">{subtitle}</p>}
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -30,7 +30,7 @@ export default function TopBar({
           <select
             value={selectedClient}
             onChange={e => onClientChange(e.target.value)}
-            className="appearance-none pl-3 pr-8 py-2 text-sm font-medium bg-white border border-slate-200 rounded-xl text-slate-700 shadow-sm cursor-pointer hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+            className="appearance-none pl-3 pr-8 py-2 text-sm font-medium bg-surface-2 border border-white/[0.08] rounded-xl text-slate-200 shadow-sm cursor-pointer hover:border-white/20 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
           >
             <option value="all">All Clients</option>
             {(clients || []).map(c => (
@@ -41,7 +41,7 @@ export default function TopBar({
         </div>
 
         {/* Period tabs */}
-        <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+        <div className="flex items-center bg-surface-2 border border-white/[0.08] rounded-xl p-1 shadow-sm">
           {PERIODS.map(p => (
             <button
               key={p.value}
@@ -49,7 +49,7 @@ export default function TopBar({
               className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
                 selectedPeriod === p.value
                   ? 'bg-brand-500 text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-800'
+                  : 'text-slate-400 hover:text-white'
               }`}
             >
               {p.label}

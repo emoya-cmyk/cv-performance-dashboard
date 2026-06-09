@@ -34,10 +34,10 @@ import { useOpsHealth } from '@/lib/useOpsHealth'
 // ▸ warming). Each carries the soft pill background, ring, text, leading icon, and
 // whether the live-dot pulses (alive states pulse; a stalled engine holds steady).
 const TONE = {
-  live:    { dot: 'bg-emerald-400', ring: 'ring-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-700', Icon: ShieldCheck,   label: 'Live',         pulse: true  },
-  overdue: { dot: 'bg-amber-400',   ring: 'ring-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-700',   Icon: Activity,      label: 'Running late', pulse: true  },
-  stale:   { dot: 'bg-rose-400',    ring: 'ring-rose-200',    bg: 'bg-rose-50',    text: 'text-rose-700',    Icon: AlertTriangle, label: 'Degraded',     pulse: false },
-  warming: { dot: 'bg-sky-400',     ring: 'ring-sky-200',     bg: 'bg-sky-50',     text: 'text-sky-700',     Icon: Activity,      label: 'Warming up',   pulse: true  },
+  live:    { dot: 'bg-emerald-400', ring: 'ring-emerald-500/30', bg: 'bg-emerald-500/10', text: 'text-emerald-400', Icon: ShieldCheck,   label: 'Live',         pulse: true  },
+  overdue: { dot: 'bg-amber-400',   ring: 'ring-amber-500/30',   bg: 'bg-amber-500/10',   text: 'text-amber-400',   Icon: Activity,      label: 'Running late', pulse: true  },
+  stale:   { dot: 'bg-rose-400',    ring: 'ring-rose-500/30',    bg: 'bg-rose-500/10',    text: 'text-rose-400',    Icon: AlertTriangle, label: 'Degraded',     pulse: false },
+  warming: { dot: 'bg-sky-400',     ring: 'ring-sky-500/30',     bg: 'bg-sky-500/10',     text: 'text-sky-400',     Icon: Activity,      label: 'Warming up',   pulse: true  },
 }
 
 // Compact, honest "X ago" for the freshest heartbeat. Null-safe — a missing age
@@ -83,8 +83,8 @@ export default function OpsHealthStrip({ className = '' }) {
   const facts = [
     lastBeat     ? { text: `last run ${lastBeat}`,                         tone: 'text-slate-400'  } : null,
     !warming     ? { text: `${onCadence}/${total} on cadence`,             tone: 'text-slate-400'  } : null,
-    heals > 0    ? { text: `${heals} self-heal${heals === 1 ? '' : 's'}`,  tone: 'text-emerald-600', icon: Wrench } : null,
-    degraded > 0 ? { text: `${degraded} flagged`,                          tone: 'text-amber-600'  } : null,
+    heals > 0    ? { text: `${heals} self-heal${heals === 1 ? '' : 's'}`,  tone: 'text-emerald-400', icon: Wrench } : null,
+    degraded > 0 ? { text: `${degraded} flagged`,                          tone: 'text-amber-400'  } : null,
   ].filter(Boolean)
 
   return (

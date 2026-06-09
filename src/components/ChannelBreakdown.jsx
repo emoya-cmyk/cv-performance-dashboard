@@ -10,7 +10,7 @@ const CHANNELS = [
     volume:      s => s.ads_leads  || 0,
     volumeLabel: 'leads',
     cpl:         s => (s.ads_leads  || 0) > 0 ? (s.ads_spend  || 0) / s.ads_leads  : 0,
-    roas:        s => s.avg_roas   || 0,
+    roas:        s => s.ads_roas   || 0,
     hasRoas:     true,
   },
   {
@@ -38,10 +38,10 @@ const CHANNELS = [
 ]
 
 function roasStyle(roas) {
-  if (roas >= 8)   return { bar: 'bg-emerald-500', text: 'text-emerald-600', label: 'Strong' }
-  if (roas >= 4)   return { bar: 'bg-amber-400',   text: 'text-amber-600',   label: 'OK'     }
-  if (roas > 0)    return { bar: 'bg-rose-500',     text: 'text-rose-600',   label: 'Low'    }
-  return               { bar: 'bg-slate-300',       text: 'text-slate-400',  label: '—'     }
+  if (roas >= 8)   return { bar: 'bg-emerald-500', text: 'text-emerald-400', label: 'Strong' }
+  if (roas >= 4)   return { bar: 'bg-amber-400',   text: 'text-amber-400',   label: 'OK'     }
+  if (roas > 0)    return { bar: 'bg-rose-500',     text: 'text-rose-400',   label: 'Low'    }
+  return               { bar: 'bg-slate-400',       text: 'text-slate-400',  label: '—'     }
 }
 
 export default function ChannelBreakdown({ stats = {} }) {
@@ -66,8 +66,8 @@ export default function ChannelBreakdown({ stats = {} }) {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-slate-100 flex-shrink-0">
-        <p className="text-sm font-bold text-slate-700">Channels at a Glance</p>
+      <div className="px-5 py-4 border-b border-white/[0.06] flex-shrink-0">
+        <p className="text-sm font-bold text-slate-200">Channels at a Glance</p>
         <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-0.5">
           Spend · Volume · Return
         </p>
@@ -86,21 +86,21 @@ export default function ChannelBreakdown({ stats = {} }) {
           const style  = roasStyle(roas)
 
           return (
-            <div key={ch.key} className="py-3.5 border-b border-slate-50 last:border-0">
+            <div key={ch.key} className="py-3.5 border-b border-white/[0.04] last:border-0">
 
               {/* Top row: label + spend + volume */}
               <div className="flex items-start justify-between mb-2.5">
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full shrink-0 mt-0.5 ${ch.dot}`} />
-                  <span className="text-sm font-bold text-slate-700">{ch.label}</span>
+                  <span className="text-sm font-bold text-slate-200">{ch.label}</span>
                 </div>
                 <div className="flex items-start gap-5 text-right">
                   <div>
-                    <p className="text-sm font-black text-slate-800 leading-none">{fmt$$(spend)}</p>
+                    <p className="text-sm font-black text-slate-100 leading-none">{fmt$$(spend)}</p>
                     <p className="text-[9px] text-slate-400 uppercase tracking-wide mt-0.5">spend</p>
                   </div>
                   <div>
-                    <p className="text-sm font-black text-slate-800 leading-none">{fmtN(volume)}</p>
+                    <p className="text-sm font-black text-slate-100 leading-none">{fmtN(volume)}</p>
                     <p className="text-[9px] text-slate-400 uppercase tracking-wide mt-0.5">
                       {ch.volumeLabel}
                       {cpl > 0 ? <> · {fmt$$(cpl)} ea</> : ''}
@@ -112,7 +112,7 @@ export default function ChannelBreakdown({ stats = {} }) {
               {/* ROAS bar — only for channels that have ROAS */}
               {ch.hasRoas ? (
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                     <div
                       className={`h-full ${style.bar} rounded-full transition-all duration-700`}
                       style={{ width: `${barPct}%` }}
@@ -126,13 +126,13 @@ export default function ChannelBreakdown({ stats = {} }) {
               ) : (
                 /* LSA: show CPL bar against a fixed $150 scale */
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-emerald-400 rounded-full"
                       style={{ width: cpl > 0 ? `${Math.min((cpl / 150) * 100, 100)}%` : '0%' }}
                     />
                   </div>
-                  <span className="text-xs font-black w-10 text-right text-slate-600 tabular-nums">
+                  <span className="text-xs font-black w-10 text-right text-slate-200 tabular-nums">
                     {cpl > 0 ? fmt$$(cpl) : '—'}
                   </span>
                   <span className="text-[9px] text-slate-400 w-9">/ call</span>

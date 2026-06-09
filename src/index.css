@@ -110,3 +110,35 @@ input:focus, select:focus, textarea:focus {
 .fade-in {
   animation: fadeIn 0.3s ease forwards;
 }
+
+/* ── Slide-up card entrance (staggered via nth-child delay) ─── */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.slide-up {
+  animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ── Shimmer for number emphasis ────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ── Focus ring polish ──────────────────────────────────────── */
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid rgba(var(--brand-500), 0.5);
+  outline-offset: 2px;
+}
+
+/* ── Smooth page transitions ────────────────────────────────── */
+main, [role="main"] {
+  animation: fadeIn 0.25s ease forwards;
+}
+
+/* ── Recharts legend text ───────────────────────────────────── */
+.recharts-legend-item-text {
+  color: #94a3b8 !important;
+  font-size: 11px !important;
+}

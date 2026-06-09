@@ -44,7 +44,7 @@ export default function SpendAreaChart({ data = [] }) {
                 <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
             <XAxis
               dataKey="week"
               tickFormatter={weekLabel}
@@ -62,7 +62,7 @@ export default function SpendAreaChart({ data = [] }) {
             <Tooltip
               formatter={(v, name) => [fmtDollarShort(v), name]}
               labelFormatter={weekLabel}
-              contentStyle={{ fontSize: 11, borderRadius: 8 }}
+              contentStyle={{ fontSize: 11, borderRadius: 8, background: '#22263a', border: '1px solid rgba(255,255,255,0.08)', color: '#f1f5f9' }}
             />
             <Legend wrapperStyle={{ fontSize: 10 }} />
             <Area

@@ -93,7 +93,9 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
       : null
 
     const trend = trendR.rows.map(r => ({
-      week:    r.week,
+      // pg returns DATE columns as JS Date objects; normalise to YYYY-MM-DD string
+      // so downstream consumers (weekLabel, trendMap keying) get a predictable format.
+      week:    r.week instanceof Date ? r.week.toISOString().split('T')[0] : String(r.week).slice(0, 10),
       revenue: parseFloat(r.revenue) || 0,
       leads:   parseFloat(r.leads)   || 0,
       jobs:    parseFloat(r.jobs)    || 0,

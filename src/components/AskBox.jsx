@@ -29,14 +29,14 @@ function friendlyError(err) {
     case 'NO_AI':
       return {
         tone: 'info',
-        title: 'Natural-language questions aren’t turned on yet',
-        body: 'This feature needs an Anthropic API key. Add ANTHROPIC_API_KEY to the server environment to enable it — everything else on the dashboard keeps working without it.',
+        title: "Natural-language questions aren't turned on yet",
+        body: "This feature needs an Anthropic API key. Add ANTHROPIC_API_KEY to the server environment to enable it — everything else on the dashboard keeps working without it.",
       }
     case 'UNPARSEABLE':
       return {
         tone: 'warn',
-        title: 'I couldn’t map that to your data',
-        body: 'Try naming a metric — revenue, leads, jobs, spend, ROAS, cost per lead, or close rate — plus an optional client or timeframe. e.g. “Top clients by revenue this month”.',
+        title: "I couldn't map that to your data",
+        body: 'Try naming a metric — revenue, leads, jobs, spend, ROAS, cost per lead, or close rate — plus an optional client or timeframe. e.g. "Top clients by revenue this month".',
       }
     case 'PARSE_TRANSPORT':
       return {
@@ -47,7 +47,7 @@ function friendlyError(err) {
     default:
       return {
         tone: 'warn',
-        title: 'Couldn’t answer that one',
+        title: "Couldn't answer that one",
         body: err?.message || 'Something went wrong. Please try again.',
       }
   }
@@ -66,7 +66,7 @@ function prettyBucket(bucket, groupBy) {
 
 function Chip({ children }) {
   return (
-    <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 rounded-full px-2.5 py-0.5 capitalize">
+    <span className="text-[11px] font-semibold text-slate-400 bg-white/[0.08] rounded-full px-2.5 py-0.5 capitalize">
       {children}
     </span>
   )
@@ -84,9 +84,9 @@ function DeltaChip({ comparison }) {
   const flat = direction === 'flat'
   const Icon = flat ? Minus : direction === 'down' ? TrendingDown : TrendingUp
   const tone =
-    improved === true  ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
-    : improved === false ? 'text-rose-700 bg-rose-50 border-rose-100'
-    :                      'text-slate-500 bg-slate-100 border-slate-200'
+    improved === true  ? 'text-emerald-400 bg-emerald-400/15 border-emerald-400/25'
+    : improved === false ? 'text-rose-400 bg-rose-400/15 border-rose-400/25'
+    :                      'text-slate-400 bg-white/[0.06] border-white/[0.10]'
   const magnitude = flat ? 'unchanged' : (pct_display || delta_display)
   return (
     <span
@@ -111,9 +111,9 @@ function DeltaChip({ comparison }) {
 function MoverChip({ mover, onPick }) {
   const Icon = mover.direction === 'down' ? TrendingDown : mover.direction === 'up' ? TrendingUp : Minus
   const tone =
-    mover.improved === true  ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100'
-    : mover.improved === false ? 'text-rose-700 bg-rose-50 border-rose-100 hover:bg-rose-100'
-    :                            'text-slate-600 bg-slate-50 border-slate-200 hover:bg-slate-100'
+    mover.improved === true  ? 'text-emerald-400 bg-emerald-400/15 border-emerald-400/25 hover:bg-emerald-400/25'
+    : mover.improved === false ? 'text-rose-400 bg-rose-400/15 border-rose-400/25 hover:bg-rose-400/25'
+    :                            'text-slate-300 bg-white/[0.06] border-white/[0.10] hover:bg-white/[0.10]'
   return (
     <button
       onClick={() => onPick(mover.question)}
@@ -150,7 +150,7 @@ function FollowupChip({ followup, onPick }) {
     <button
       onClick={() => onPick(followup.question)}
       title={followup.question}
-      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-600 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600 transition"
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.10] bg-white/[0.05] px-3 py-1 text-[11px] font-semibold text-slate-300 hover:border-brand-500/40 hover:bg-brand-500/15 hover:text-brand-400 transition"
     >
       <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
       {followup.label}
@@ -187,9 +187,9 @@ function WhyPanel({ explain }) {
   // the change is "good".
   const kind = (share) => (share > 1e-9 ? 'driver' : share < -1e-9 ? 'drag' : 'flat')
   const TONE = {
-    driver: { bar: 'bg-emerald-400', text: 'text-emerald-700' },
-    drag:   { bar: 'bg-rose-300',    text: 'text-rose-600' },
-    flat:   { bar: 'bg-slate-200',   text: 'text-slate-400' },
+    driver: { bar: 'bg-emerald-400', text: 'text-emerald-400' },
+    drag:   { bar: 'bg-rose-400',    text: 'text-rose-400' },
+    flat:   { bar: 'bg-white/20',    text: 'text-slate-400' },
   }
 
   // Bars normalise to the largest |share| so the biggest mover reads full-width and
@@ -202,8 +202,8 @@ function WhyPanel({ explain }) {
     const tone = TONE[kind(share)]
     return (
       <div className="flex items-center gap-2.5 py-1">
-        <span className={`w-24 sm:w-28 shrink-0 truncate text-xs ${emphasis ? 'font-extrabold text-slate-800' : 'font-semibold text-slate-600'}`} title={label}>{label}</span>
-        <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+        <span className={`w-24 sm:w-28 shrink-0 truncate text-xs ${emphasis ? 'font-extrabold text-white' : 'font-semibold text-slate-300'}`} title={label}>{label}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
           <div className={`h-full rounded-full ${tone.bar}`} style={{ width: barW(share) }} />
         </div>
         <span className={`w-20 shrink-0 text-right text-xs font-bold tabular-nums ${tone.text}`}>{deltaText}</span>
@@ -213,11 +213,11 @@ function WhyPanel({ explain }) {
   }
 
   return (
-    <div className="mt-2 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
-      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5 mb-2">
+    <div className="mt-2 rounded-xl bg-white/[0.04] border border-white/[0.06] p-3.5 fade-in">
+      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-400 bg-emerald-400/15 rounded-full px-2 py-0.5 mb-2">
         <ShieldCheck className="w-3 h-3" /> Exact attribution
       </span>
-      <p className="text-sm font-semibold text-slate-800 leading-relaxed mb-2.5">{narration}</p>
+      <p className="text-sm font-semibold text-white leading-relaxed mb-2.5">{narration}</p>
       <div className="flex flex-col">
         {contributors.map((c) => (
           <Row key={c.key} label={c.label} deltaText={c.delta_display} share={c.share} share_pct={c.share_pct}
@@ -232,8 +232,8 @@ function WhyPanel({ explain }) {
                share={unattributed.share} share_pct={unattributed.share_pct} />
         )}
       </div>
-      <p className="mt-2.5 text-[10px] text-slate-400">
-        {basis === 'driver' ? 'Each lever’s share of the move' : 'Each client’s share of the total change'} · <span className="text-emerald-600 font-semibold">drivers</span> pushed it, <span className="text-rose-500 font-semibold">drags</span> held it back
+      <p className="mt-2.5 text-[10px] text-slate-500">
+        {basis === 'driver' ? "Each lever's share of the move" : "Each client's share of the total change"} · <span className="text-emerald-400 font-semibold">drivers</span> pushed it, <span className="text-rose-400 font-semibold">drags</span> held it back
       </p>
     </div>
   )
@@ -264,9 +264,9 @@ function ForecastPanel({ forecast, rows, timeLabel }) {
   const HEX     = { emerald: '#10b981', rose: '#f43f5e', slate: '#94a3b8' }
   const stroke  = HEX[accent]
   const dirTone =
-    accent === 'emerald' ? 'text-emerald-700 bg-emerald-50 border-emerald-100'
-    : accent === 'rose'  ? 'text-rose-700 bg-rose-50 border-rose-100'
-    :                      'text-slate-600 bg-slate-100 border-slate-200'
+    accent === 'emerald' ? 'text-emerald-400 bg-emerald-400/15 border-emerald-400/25'
+    : accent === 'rose'  ? 'text-rose-400 bg-rose-400/15 border-rose-400/25'
+    :                      'text-slate-400 bg-white/[0.06] border-white/[0.10]'
 
   // ── Fan geometry. COSMETIC ONLY: every figure shown as text comes from the server's
   // display strings; only the pixel coordinates are derived here, from the raw
@@ -288,18 +288,18 @@ function ForecastPanel({ forecast, rows, timeLabel }) {
     lo.map((_, i) => `L${X(n - i).toFixed(1)},${Y(lo[n - i]).toFixed(1)}`).join('') + 'Z'
 
   return (
-    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+    <div className="mt-3 rounded-xl bg-white/[0.04] border border-white/[0.06] p-3.5 fade-in">
       {/* Trust + direction chips — scannable honesty before the picture */}
       <div className="flex items-center gap-2 flex-wrap mb-2.5">
         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${dirTone}`}>
           <DirIcon className="w-3.5 h-3.5" /> {dirText}
         </span>
         {trustworthy && confidence != null ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-brand-100 bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-600">
+          <span className="inline-flex items-center gap-1 rounded-full border border-brand-500/30 bg-brand-500/15 px-2 py-0.5 text-xs font-bold text-brand-400">
             <ShieldCheck className="w-3.5 h-3.5" /> {Math.round(confidence * 100)}% model fit
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700">
+          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-xs font-bold text-amber-400">
             <AlertTriangle className="w-3.5 h-3.5" />
             {caveat === 'poor_fit' ? 'Too volatile — directional only' : 'Thin history — directional only'}
           </span>
@@ -335,9 +335,9 @@ function ForecastPanel({ forecast, rows, timeLabel }) {
             {rows.map((r) => {
               const last = r.step === n
               return (
-                <tr key={r.step} className="border-t border-slate-100">
-                  <td className={`py-1 ${last ? 'font-extrabold text-slate-800' : 'font-semibold text-slate-500'}`}>+{r.step} wk</td>
-                  <td className={`py-1 text-right tabular-nums ${last ? 'font-extrabold text-slate-900' : 'font-bold text-slate-700'}`}>{r.display}</td>
+                <tr key={r.step} className="border-t border-white/[0.06]">
+                  <td className={`py-1 ${last ? 'font-extrabold text-white' : 'font-semibold text-slate-400'}`}>+{r.step} wk</td>
+                  <td className={`py-1 text-right tabular-nums ${last ? 'font-extrabold text-white' : 'font-bold text-slate-300'}`}>{r.display}</td>
                   <td className="py-1 text-right tabular-nums text-slate-400">{r.lo_display} – {r.hi_display}</td>
                 </tr>
               )
@@ -357,9 +357,9 @@ function ForecastPanel({ forecast, rows, timeLabel }) {
 // string (never recomputed), so it can't disagree with the rest of the dashboard.
 function PaceStat({ label, value, accent }) {
   return (
-    <div className="rounded-lg bg-white border border-slate-100 px-2.5 py-1.5 text-center">
+    <div className="rounded-lg bg-white/[0.06] border border-white/[0.08] px-2.5 py-1.5 text-center">
       <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</p>
-      <p className={`text-sm font-extrabold tabular-nums ${accent || 'text-slate-900'}`}>{value}</p>
+      <p className={`text-sm font-extrabold tabular-nums ${accent || 'text-white'}`}>{value}</p>
     </div>
   )
 }
@@ -372,11 +372,11 @@ const PACE_BAND = {
   early:    { tone: 'slate',   Icon: Minus,         label: 'Too early to call' },
 }
 const PACE_TONE = {
-  emerald: { badge: 'text-emerald-700 bg-emerald-50 border-emerald-100', bar: 'bg-emerald-400', ghost: 'bg-emerald-400/30', text: 'text-emerald-700' },
-  brand:   { badge: 'text-brand-600 bg-brand-50 border-brand-100',       bar: 'bg-brand-500',   ghost: 'bg-brand-500/25',   text: 'text-brand-600' },
-  amber:   { badge: 'text-amber-700 bg-amber-50 border-amber-200',       bar: 'bg-amber-400',   ghost: 'bg-amber-400/30',   text: 'text-amber-700' },
-  rose:    { badge: 'text-rose-700 bg-rose-50 border-rose-100',          bar: 'bg-rose-400',    ghost: 'bg-rose-400/30',    text: 'text-rose-700' },
-  slate:   { badge: 'text-slate-600 bg-slate-100 border-slate-200',      bar: 'bg-slate-300',   ghost: 'bg-slate-300/40',   text: 'text-slate-500' },
+  emerald: { badge: 'text-emerald-400 bg-emerald-400/15 border-emerald-400/25', bar: 'bg-emerald-400', ghost: 'bg-emerald-400/20', text: 'text-emerald-400' },
+  brand:   { badge: 'text-brand-400 bg-brand-500/15 border-brand-500/25',       bar: 'bg-brand-500',   ghost: 'bg-brand-500/15',   text: 'text-brand-400' },
+  amber:   { badge: 'text-amber-400 bg-amber-500/15 border-amber-500/25',       bar: 'bg-amber-400',   ghost: 'bg-amber-400/20',   text: 'text-amber-400' },
+  rose:    { badge: 'text-rose-400 bg-rose-400/15 border-rose-400/25',          bar: 'bg-rose-400',    ghost: 'bg-rose-400/20',    text: 'text-rose-400' },
+  slate:   { badge: 'text-slate-400 bg-white/[0.06] border-white/[0.10]',       bar: 'bg-slate-400',   ghost: 'bg-white/10',       text: 'text-slate-400' },
 }
 
 // intel-v6 (8): the grounded GOAL answer — "are we on track to hit our number?". The Ask
@@ -416,7 +416,7 @@ function PacingPanel({ pacing }) {
   const projectedW = px(pacing.projected)             // ≥ actualW (run-rate ≥ booked-to-date)
 
   return (
-    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+    <div className="mt-3 rounded-xl bg-white/[0.04] border border-white/[0.06] p-3.5 fade-in">
       {/* Status band + attainment headline — the scannable verdict before the bar */}
       <div className="flex items-center justify-between gap-2 flex-wrap mb-2.5">
         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-bold ${tone.badge}`}>
@@ -432,13 +432,13 @@ function PacingPanel({ pacing }) {
       {/* The pace bar: solid = booked to date, ghosted = projected on the current run-rate;
           a dashed marker pins the 100%-of-goal line. Muted/dashed when 'early' so a month
           that has barely begun never reads as a confident call. */}
-      <div className="relative h-3 rounded-full bg-slate-100 overflow-hidden">
+      <div className="relative h-3 rounded-full bg-white/10 overflow-hidden">
         <div className={`absolute inset-y-0 left-0 ${tone.ghost} ${early ? 'opacity-60' : ''}`} style={{ width: `${projectedW}%` }} />
         <div className={`absolute inset-y-0 left-0 ${tone.bar} ${early ? 'opacity-70' : ''}`} style={{ width: `${actualW}%` }} />
       </div>
       <div className="relative h-4 mt-0.5">
         <div className="absolute top-0 -translate-x-1/2 flex flex-col items-center" style={{ left: `${GOAL_X}%` }}>
-          <div className="h-1.5 w-px bg-slate-300" />
+          <div className="h-1.5 w-px bg-white/30" />
           <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">goal</span>
         </div>
       </div>
@@ -451,7 +451,7 @@ function PacingPanel({ pacing }) {
       </div>
 
       {/* Context: where in the month we are, plus the honest caveat for this band */}
-      <p className="mt-2.5 text-[11px] text-slate-500 leading-relaxed">
+      <p className="mt-2.5 text-[11px] text-slate-400 leading-relaxed">
         Day {pacing.days_elapsed} of {pacing.days_in_month}
         {pacing.days_remaining > 0
           ? ` · ${pacing.days_remaining} ${pacing.days_remaining === 1 ? 'day' : 'days'} left`
@@ -465,7 +465,7 @@ function PacingPanel({ pacing }) {
       </p>
 
       <p className="mt-2 text-[10px] text-slate-400">
-        Run-rate pacing — the solid bar is booked so far, the lighter bar is where today’s pace lands you by month-end against the goal line.
+        Run-rate pacing — the solid bar is booked so far, the lighter bar is where today's pace lands you by month-end against the goal line.
       </p>
     </div>
   )
@@ -489,11 +489,11 @@ const ADVICE_URGENCY = {
   monitor: { tone: 'slate', Icon: Eye,           label: 'Monitor' },
 }
 const ADVICE_TONE = {
-  rose:  { badge: 'text-rose-700 bg-rose-50 border-rose-100',     accent: 'border-l-rose-300' },
-  amber: { badge: 'text-amber-700 bg-amber-50 border-amber-200',  accent: 'border-l-amber-300' },
-  slate: { badge: 'text-slate-600 bg-slate-100 border-slate-200', accent: 'border-l-slate-200' },
+  rose:  { badge: 'text-rose-400 bg-rose-400/15 border-rose-400/25',     accent: 'border-l-rose-400' },
+  amber: { badge: 'text-amber-400 bg-amber-500/15 border-amber-500/25',  accent: 'border-l-amber-400' },
+  slate: { badge: 'text-slate-400 bg-white/[0.06] border-white/[0.10]',  accent: 'border-l-white/20' },
 }
-const ADVICE_EFF_BAND = { high: 'text-emerald-600', medium: 'text-slate-500', low: 'text-amber-600' }
+const ADVICE_EFF_BAND = { high: 'text-emerald-400', medium: 'text-slate-400', low: 'text-amber-400' }
 
 // The "what should I do?" to-do list. Renders the server's ranked, decorated feed verbatim:
 // one card per recommended action, urgency-coded by a left rail + chip, with the play's own
@@ -509,7 +509,7 @@ function AdvicePanel({ advice }) {
   // "Escalated" for the agency. Either way the action text below is the server's verbatim choice.
   const escalatedLabel = advice.audience === 'client' ? 'New approach' : 'Escalated'
   return (
-    <div className="mt-3 rounded-xl bg-slate-50/70 border border-slate-100 p-3.5 fade-in">
+    <div className="mt-3 rounded-xl bg-white/[0.04] border border-white/[0.06] p-3.5 fade-in">
       <div className="flex flex-col gap-2">
         {advice.actions.map((a) => {
           const band = ADVICE_URGENCY[a.urgency] || ADVICE_URGENCY.monitor
@@ -517,19 +517,19 @@ function AdvicePanel({ advice }) {
           const Icon = band.Icon
           const note = a.efficacy_note
           return (
-            <div key={a.id} className={`rounded-lg bg-white border border-slate-100 border-l-4 ${tone.accent} p-3`}>
+            <div key={a.id} className={`rounded-lg bg-white/[0.05] border border-white/[0.07] border-l-4 ${tone.accent} p-3`}>
               <div className="flex items-center gap-2 flex-wrap mb-1.5">
                 <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${tone.badge}`}>
                   <Icon className="w-3 h-3" /> {band.label}
                 </span>
                 {a.escalated && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-600">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-indigo-500/30 bg-indigo-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-indigo-400">
                     <ArrowUpCircle className="w-3 h-3" /> {escalatedLabel}
                   </span>
                 )}
                 {a.title && <span className="text-[11px] font-semibold text-slate-400 truncate">{a.title}</span>}
               </div>
-              <p className="text-sm font-semibold text-slate-800 leading-relaxed">{a.action}</p>
+              <p className="text-sm font-semibold text-white leading-relaxed">{a.action}</p>
               {note && note.text && (
                 <p className={`mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium ${ADVICE_EFF_BAND[note.band] || 'text-slate-500'}`}>
                   <Activity className="w-3 h-3 shrink-0" /> {note.text}
@@ -545,7 +545,7 @@ function AdvicePanel({ advice }) {
         </p>
       )}
       <p className="mt-2 text-[10px] text-slate-400">
-        Pulled straight from this client’s open findings, sharpest first — each step and its track record come from the system’s own results, not AI guesswork.
+        Pulled straight from this client's open findings, sharpest first — each step and its track record come from the system's own results, not AI guesswork.
       </p>
     </div>
   )
@@ -604,7 +604,7 @@ function AskResult({ result, clientId, onClear, onPick }) {
   }
 
   return (
-    <div className="mt-4 border-t border-slate-100 pt-4 fade-in">
+    <div className="mt-4 border-t border-white/[0.06] pt-4 fade-in">
       {/* Context chips · trust signals · clear */}
       <div className="flex items-center justify-between gap-2 mb-2.5 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -613,11 +613,11 @@ function AskResult({ result, clientId, onClear, onPick }) {
           <Chip>{meta.time_label}</Chip>
         </div>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-400 bg-emerald-400/15 rounded-full px-2 py-0.5">
             <ShieldCheck className="w-3 h-3" /> Verified figures
           </span>
           {narrated && (
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-indigo-400 bg-indigo-400/15 rounded-full px-2 py-0.5">
               <Sparkles className="w-3 h-3" /> AI-written
             </span>
           )}
@@ -628,23 +628,23 @@ function AskResult({ result, clientId, onClear, onPick }) {
       </div>
 
       {/* The grounded one-line answer */}
-      <p className="text-base font-semibold text-slate-800 leading-relaxed">{answer}</p>
+      <p className="text-base font-semibold text-white leading-relaxed">{answer}</p>
 
       {/* Deterministic breakdown table (client / week / month) */}
       {rows.length > 0 && hasBucket && (
-        <div className="mt-3 overflow-x-auto rounded-xl border border-slate-100">
+        <div className="mt-3 overflow-x-auto rounded-xl border border-white/[0.07]">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-slate-50/70 border-b border-slate-100">
+              <tr className="bg-white/[0.03] border-b border-white/[0.06]">
                 <th className="text-left px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400">{bucketHeader}</th>
                 <th className="text-right px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-400">{meta.metric}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={`${r.bucket}-${i}`} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition-colors">
-                  <td className="px-4 py-2.5 font-semibold text-slate-700">{prettyBucket(r.bucket, meta.group_by)}</td>
-                  <td className="px-4 py-2.5 text-right font-bold text-slate-900 tabular-nums">{r.display}</td>
+                <tr key={`${r.bucket}-${i}`} className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.03] transition-colors">
+                  <td className="px-4 py-2.5 font-semibold text-slate-300">{prettyBucket(r.bucket, meta.group_by)}</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-white tabular-nums">{r.display}</td>
                 </tr>
               ))}
             </tbody>
@@ -658,9 +658,9 @@ function AskResult({ result, clientId, onClear, onPick }) {
           pacing verdict is likewise no-bucket but 3-row, so it's excluded (!isPacing) and
           drawn as the pace bar below rather than collapsing to its first row's $figure. */}
       {rows.length > 0 && !hasBucket && !isForecast && !isPacing && !isAdvice && (
-        <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+        <div className="mt-3 inline-flex flex-col gap-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <span className="text-2xl font-black text-slate-900 tabular-nums">{rows[0].display}</span>
+            <span className="text-2xl font-black text-white tabular-nums">{rows[0].display}</span>
             {meta.comparison && <DeltaChip comparison={meta.comparison} />}
           </div>
           <span className="text-xs text-slate-400">{meta.metric} · {meta.time_label}</span>
@@ -702,7 +702,7 @@ function AskResult({ result, clientId, onClear, onPick }) {
             <button
               onClick={runWhy}
               disabled={whyStatus === 'loading'}
-              className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-bold text-amber-700 hover:bg-amber-100 disabled:opacity-60 transition"
+              className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/15 px-3 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/25 disabled:opacity-60 transition"
             >
               {whyStatus === 'loading'
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -711,8 +711,8 @@ function AskResult({ result, clientId, onClear, onPick }) {
             </button>
           )}
           {whyStatus === 'error' && (
-            <p className="text-xs text-amber-700">
-              {whyErr?.body || 'Couldn’t break that down right now.'}{' '}
+            <p className="text-xs text-amber-400">
+              {whyErr?.body || "Couldn't break that down right now."}{' '}
               <button onClick={runWhy} className="font-semibold underline hover:no-underline">Try again</button>
             </p>
           )}
@@ -733,7 +733,7 @@ function AskResult({ result, clientId, onClear, onPick }) {
           just another verified answer — never a dead end at a single number. Hidden
           when none were proposed (e.g. an unknown metric) so it never renders empty. */}
       {Array.isArray(followups) && followups.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-slate-50">
+        <div className="mt-4 pt-3 border-t border-white/[0.04]">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Ask next</p>
           <div className="flex flex-wrap gap-1.5">
             {followups.map((f) => <FollowupChip key={f.question} followup={f} onPick={onPick} />)}
@@ -808,10 +808,10 @@ export default function AskBox({
   const busy = status === 'loading'
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+    <div className="bg-surface rounded-2xl border border-white/[0.07] shadow-lg shadow-black/20 p-5 transition-all duration-200 hover:border-white/[0.13]">
       {/* Header */}
       <div className="flex items-center gap-2.5 mb-3">
-        <div className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+        <div className="w-7 h-7 rounded-lg bg-brand-500/20 flex items-center justify-center shrink-0">
           <Sparkles className="w-4 h-4 text-brand-500" />
         </div>
         <div className="leading-tight">
@@ -828,7 +828,7 @@ export default function AskBox({
           onChange={(e) => setQuestion(e.target.value)}
           placeholder={placeholder}
           disabled={busy}
-          className="flex-1 rounded-xl border border-slate-200 bg-slate-50/60 px-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 disabled:opacity-60 transition"
+          className="flex-1 rounded-xl border border-white/[0.08] bg-white/[0.05] px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/60 disabled:opacity-60 transition"
         />
         <button
           type="submit"
@@ -863,7 +863,7 @@ export default function AskBox({
               <button
                 key={s}
                 onClick={() => run(s)}
-                className="text-[11px] font-medium text-slate-500 bg-slate-50 hover:bg-brand-50 hover:text-brand-600 border border-slate-100 rounded-full px-3 py-1 transition"
+                className="text-[11px] font-medium text-slate-400 bg-white/[0.05] hover:bg-brand-500/15 hover:text-brand-400 border border-white/[0.08] rounded-full px-3 py-1 transition"
               >
                 {s}
               </button>
@@ -876,18 +876,18 @@ export default function AskBox({
       {busy && (
         <div className="mt-4 flex items-center gap-2 text-sm text-slate-400">
           <Loader2 className="w-4 h-4 animate-spin text-brand-500" />
-          <span>Computing exact figures for “<span className="text-slate-600">{question}</span>”…</span>
+          <span>Computing exact figures for "<span className="text-slate-300">{question}</span>"…</span>
         </div>
       )}
 
       {/* Error / config state */}
       {status === 'error' && error && (
-        <div className={`mt-4 rounded-xl border p-4 fade-in ${error.tone === 'info' ? 'bg-blue-50/60 border-blue-100' : 'bg-amber-50/60 border-amber-100'}`}>
+        <div className={`mt-4 rounded-xl border p-4 fade-in ${error.tone === 'info' ? 'bg-blue-500/10 border-blue-500/25' : 'bg-amber-500/10 border-amber-500/25'}`}>
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${error.tone === 'info' ? 'text-blue-500' : 'text-amber-500'}`} />
+            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${error.tone === 'info' ? 'text-blue-400' : 'text-amber-400'}`} />
             <div>
-              <p className={`text-sm font-bold ${error.tone === 'info' ? 'text-blue-800' : 'text-amber-800'}`}>{error.title}</p>
-              <p className={`text-xs mt-1 leading-relaxed ${error.tone === 'info' ? 'text-blue-600' : 'text-amber-700'}`}>{error.body}</p>
+              <p className={`text-sm font-bold ${error.tone === 'info' ? 'text-blue-300' : 'text-amber-300'}`}>{error.title}</p>
+              <p className={`text-xs mt-1 leading-relaxed ${error.tone === 'info' ? 'text-blue-400' : 'text-amber-400'}`}>{error.body}</p>
             </div>
           </div>
         </div>
