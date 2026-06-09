@@ -219,9 +219,22 @@ if (require.main === module) {
     startScheduler()
   })
 } else {
-  // Serverless cold-start: run migrations and store the promise so the
-  // readiness middleware (registered above) can block requests until done.
-  app.set('_migrationReady', migrate().catch(err => {
+  // Serverless cold-start: run migrations, auto-seed on empty DB, then mark ready.
+  // The seed check is idempotent: it only runs when clients table is empty (first deploy).
+  app.set('_migrationReady', migrate().then(async () => {
+    try {
+      const { rows } = await query('SELECT COUNT(*)::int AS n FROM clients')
+      if (rows[0].n === 0) {
+        console.log('[boot] empty DB — running seed…')
+        const { seed } = require('./seed')
+        await seed()
+        console.log('[boot] seed complete')
+      }
+    } catch (e) {
+      console.error('[boot] auto-seed error', e.message)
+      // Don't re-throw — server starts even if seed fails
+    }
+  }).catch(err => {
     console.error('[db] migration error', err.message)
   }))
 }

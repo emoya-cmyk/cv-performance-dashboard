@@ -402,7 +402,11 @@ async function seed() {
   }
 
   console.log('[seed] ✅ done — login: admin@example.com / admin')
-  process.exit(0)
 }
 
-seed().catch(err => { console.error('[seed]', err.message); process.exit(1) })
+// Export so server.js can call seed() on first cold-start without process.exit().
+// When invoked directly (node seed.js), still exits cleanly.
+module.exports = { seed }
+if (require.main === module) {
+  seed().catch(err => { console.error('[seed]', err.message); process.exit(1) })
+}
