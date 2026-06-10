@@ -1,7 +1,7 @@
 import { NavLink, Link } from 'react-router-dom'
 import {
   LayoutDashboard, Megaphone, MapPin, Filter,
-  Users, Plug, ChevronLeft, ChevronRight, TrendingUp, Facebook, Search, Smartphone, Presentation, Settings, Globe, Compass, Brain, BarChart2, PhoneCall, Target,
+  Users, Plug, ChevronLeft, ChevronRight, TrendingUp, Facebook, Search, Smartphone, Presentation, Settings, Globe, Compass, Brain, BarChart2, PhoneCall, Target, Briefcase, MonitorPlay,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAgency } from '@/lib/agencySettings'
@@ -18,6 +18,9 @@ const NAV = [
   { to: '/intelligence', icon: Brain,          label: 'Intelligence' },
   { to: '/seo',          icon: BarChart2,       label: 'SEO' },
   { to: '/call-prep',   icon: PhoneCall,       label: 'Call Prep' },
+  { to: '/phone-calls',  icon: PhoneCall,       label: 'Phone Calls' },
+  { to: '/jobs',         icon: Briefcase,       label: 'Jobs' },
+  { to: '/bing-ads',     icon: MonitorPlay,     label: 'Bing Ads' },
   { to: '/goals',       icon: Target,          label: 'Goals' },
   { to: '/clients',     icon: Users,           label: 'Clients' },
   { to: '/connections', icon: Plug,            label: 'Connections' },

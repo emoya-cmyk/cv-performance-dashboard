@@ -13,12 +13,16 @@ router.use(requireAgency)
 // Lazily load connectors — they may not all be implemented
 function getConnector(channel) {
   const map = {
-    google_ads: '../connectors/googleAds',
-    meta:       '../connectors/meta',
-    ghl:        '../connectors/ghl',
-    gbp:        '../connectors/gbp',
-    ga4:        '../connectors/ga4',
-    lsa:        '../connectors/lsa',
+    google_ads:   '../connectors/googleAds',
+    meta:         '../connectors/meta',
+    ghl:          '../connectors/ghl',
+    gbp:          '../connectors/gbp',
+    ga4:          '../connectors/ga4',
+    lsa:          '../connectors/lsa',
+    callrail:     '../connectors/callrail',
+    housecallpro: '../connectors/housecallpro',
+    bing_ads:     '../connectors/bingAds',
+    youtube:      '../connectors/youtube',
   }
   if (!map[channel]) return null
   try { return require(map[channel]) } catch { return null }
@@ -43,7 +47,8 @@ router.put('/:clientId/:channel', async (req, res) => {
   const { clientId, channel } = req.params
   const { credentials = {}, is_active = true } = req.body
 
-  const KNOWN_CHANNELS = ['google_ads', 'meta', 'ghl', 'gbp', 'ga4', 'lsa']
+  const KNOWN_CHANNELS = ['google_ads', 'meta', 'ghl', 'gbp', 'ga4', 'lsa',
+                          'callrail', 'housecallpro', 'bing_ads', 'youtube']
   if (!KNOWN_CHANNELS.includes(channel)) {
     return res.status(400).json({ error: `Unknown channel: ${channel}` })
   }

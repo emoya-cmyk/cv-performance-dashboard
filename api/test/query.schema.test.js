@@ -60,16 +60,16 @@ test('catalog: dimensions and date grains mirror the registry', () => {
 
 test('catalog: channels are the modelled set, id-ordered, fully labelled', () => {
   const channels = catalog().channels
-  // the six channels we actually carry facts for (COLUMNS_BY_CHANNEL)
-  assert.equal(channels.length, 6)
-  assert.deepEqual(channels.map(c => c.key), ['google_ads', 'meta', 'lsa', 'gbp', 'ga4', 'ghl'])
-  assert.deepEqual(channels.map(c => c.id),  [1, 2, 3, 4, 5, 6])   // stable, sorted, == migration 011
+  assert.equal(channels.length, 11)
+  assert.deepEqual(channels.map(c => c.key), [
+    'google_ads', 'meta', 'lsa', 'gbp', 'ga4', 'ghl', 'organic',
+    'callrail', 'housecallpro', 'bing_ads', 'youtube',
+  ])
+  assert.deepEqual(channels.map(c => c.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
   for (const c of channels) {
     assert.equal(typeof c.label, 'string')
     assert.ok(c.label.length > 0, `channel ${c.key} missing a label`)
   }
-  // 'organic' (id 7) has no fact columns yet → not advertised as queryable
-  assert.ok(!channels.some(c => c.key === 'organic'))
 })
 
 test('catalog ↔ compiler: every advertised metric actually validates', () => {

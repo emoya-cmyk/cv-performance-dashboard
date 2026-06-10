@@ -61,18 +61,36 @@ const METRICS = {
   projected_revenue: { kind: 'sum', metric_key: 'projected_revenue', label: 'Projected Revenue', format: 'currency' },
   appointments:      { kind: 'sum', metric_key: 'appointments',      label: 'Appointments',      format: 'number' },
 
+  // CallRail — phone call tracking
+  answered_calls:    { kind: 'sum', metric_key: 'answered_calls',    label: 'Answered Calls',     format: 'number' },
+  first_time_callers:{ kind: 'sum', metric_key: 'first_time_callers',label: 'First-Time Callers', format: 'number' },
+  missed_calls:      { kind: 'sum', metric_key: 'missed_calls',      label: 'Missed Calls',       format: 'number' },
+  // HouseCall Pro — job management
+  jobs_created:      { kind: 'sum', metric_key: 'jobs_created',      label: 'Jobs Created',       format: 'number' },
+  jobs_completed:    { kind: 'sum', metric_key: 'jobs_completed',    label: 'Jobs Completed',     format: 'number' },
+  job_revenue:       { kind: 'sum', metric_key: 'job_revenue',       label: 'Job Revenue',        format: 'currency' },
+  // YouTube
+  watch_time:        { kind: 'sum', metric_key: 'watch_time',        label: 'Watch Time (min)',   format: 'number' },
+  subscriptions:     { kind: 'sum', metric_key: 'subscriptions',     label: 'New Subscribers',    format: 'number' },
+
   // —— rate metrics stored per period (averaged, never summed) ——
   engagement_rate:   { kind: 'avg', metric_key: 'engagement_rate',   label: 'Engagement Rate',   format: 'percent' },
   avg_ticket:        { kind: 'avg', metric_key: 'avg_ticket',        label: 'Avg Ticket',        format: 'currency' },
 
   // —— derived ratios (computed post-aggregation as SUM(num)/SUM(den)) ——
-  roas:              { kind: 'ratio', num: 'revenue',    den: 'spend',       dp: 2, label: 'ROAS',            format: 'multiple' },
-  cpl:               { kind: 'ratio', num: 'spend',      den: 'leads',       dp: 2, label: 'Cost / Lead',     format: 'currency' },
-  cpc:               { kind: 'ratio', num: 'spend',      den: 'clicks',      dp: 2, label: 'Cost / Click',    format: 'currency' },
-  cpa:               { kind: 'ratio', num: 'spend',      den: 'conversions', dp: 2, label: 'Cost / Acq.',     format: 'currency' },
-  ctr:               { kind: 'ratio', num: 'clicks',     den: 'impressions', dp: 2, scale: 100, label: 'CTR',            format: 'percent' },
-  close_rate:        { kind: 'ratio', num: 'closed_won', den: 'raw_leads',   dp: 2, scale: 100, label: 'Close Rate',     format: 'percent' },
-  conversion_rate:   { kind: 'ratio', num: 'conversions',den: 'sessions',    dp: 2, scale: 100, label: 'Conversion Rate',format: 'percent' },
+  roas:              { kind: 'ratio', num: 'revenue',       den: 'spend',         dp: 2,           label: 'ROAS',               format: 'multiple' },
+  cpl:               { kind: 'ratio', num: 'spend',         den: 'leads',         dp: 2,           label: 'Cost / Lead',        format: 'currency' },
+  cpc:               { kind: 'ratio', num: 'spend',         den: 'clicks',        dp: 2,           label: 'Cost / Click',       format: 'currency' },
+  cpa:               { kind: 'ratio', num: 'spend',         den: 'conversions',   dp: 2,           label: 'Cost / Acq.',        format: 'currency' },
+  ctr:               { kind: 'ratio', num: 'clicks',        den: 'impressions',   dp: 2, scale: 100, label: 'CTR',              format: 'percent' },
+  close_rate:        { kind: 'ratio', num: 'closed_won',    den: 'raw_leads',     dp: 2, scale: 100, label: 'Close Rate',       format: 'percent' },
+  conversion_rate:   { kind: 'ratio', num: 'conversions',   den: 'sessions',      dp: 2, scale: 100, label: 'Conversion Rate', format: 'percent' },
+  // CallRail derived
+  answer_rate:       { kind: 'ratio', num: 'answered_calls',den: 'calls',         dp: 1, scale: 100, label: 'Answer Rate',      format: 'percent' },
+  missed_rate:       { kind: 'ratio', num: 'missed_calls',  den: 'calls',         dp: 1, scale: 100, label: 'Missed Call Rate', format: 'percent' },
+  // HouseCall Pro derived
+  job_completion_rate:{ kind: 'ratio', num: 'jobs_completed',den: 'jobs_created', dp: 1, scale: 100, label: 'Completion Rate',  format: 'percent' },
+  revenue_per_job:   { kind: 'ratio', num: 'job_revenue',   den: 'jobs_completed',dp: 2,            label: 'Revenue / Job',    format: 'currency' },
 }
 
 // The set of base metric_keys a metric depends on (what the compiler must fetch).
@@ -113,13 +131,17 @@ function dimOutputKey(dim) {
 // for (the keys present in COLUMNS_BY_CHANNEL). Anything missing falls back to
 // the raw key, so adding a channel never crashes the catalog.
 const CHANNEL_LABELS = {
-  google_ads: 'Google Ads',
-  meta:       'Meta Ads',
-  lsa:        'Local Services',
-  gbp:        'Google Business',
-  ga4:        'GA4 / Web',
-  ghl:        'CRM / Funnel',
-  organic:    'Organic',
+  google_ads:   'Google Ads',
+  meta:         'Meta Ads',
+  lsa:          'Local Services',
+  gbp:          'Google Business',
+  ga4:          'GA4 / Web',
+  ghl:          'CRM / Funnel',
+  organic:      'Organic',
+  callrail:     'CallRail',
+  housecallpro: 'HouseCall Pro',
+  bing_ads:     'Bing / Microsoft Ads',
+  youtube:      'YouTube Ads',
 }
 
 // catalog() is the exact public vocabulary POST /api/query will accept, shaped
@@ -137,8 +159,11 @@ function catalog() {
   }))
   const dimensions = Object.entries(DIMENSIONS).map(([id, d]) => ({ id, label: d.label }))
   const dateGrains = [...DATE_GRAINS]
-  const channels = Object.keys(facts.COLUMNS_BY_CHANNEL)
-    .map(key => ({ key, id: facts.channelId(key), label: CHANNEL_LABELS[key] || key }))
+  // Derive channels from the full CHANNEL_ID map so new channels (callrail,
+  // housecallpro, bing_ads, youtube) appear even though they have no
+  // COLUMN_FACT_MAP entry (they write directly to fact_metric).
+  const channels = Object.entries(facts.CHANNEL_ID)
+    .map(([key, id]) => ({ key, id, label: CHANNEL_LABELS[key] || key }))
     .sort((a, b) => a.id - b.id)
   return { metrics, dimensions, dateGrains, channels }
 }

@@ -72,14 +72,15 @@ async function weeklyRow(clientId, weekStart) {
 const ALL_CHANNELS = ['google_ads', 'meta', 'lsa', 'gbp', 'ga4', 'ghl']
 
 // ── tests ─────────────────────────────────────────────────────────────────
-test('migration seeds the 7 channels and the fact grain dedupes account rows', async () => {
+test('migration seeds the 11 channels and the fact grain dedupes account rows', async () => {
   await ready()
 
   const ch = await db.query('SELECT id, key FROM dim_channel ORDER BY id')
-  assert.equal(ch.rows.length, 7)
+  assert.equal(ch.rows.length, 11)
   assert.deepEqual(
     ch.rows.map(r => r.key),
-    ['google_ads', 'meta', 'lsa', 'gbp', 'ga4', 'ghl', 'organic']
+    ['google_ads', 'meta', 'lsa', 'gbp', 'ga4', 'ghl', 'organic',
+     'callrail', 'housecallpro', 'bing_ads', 'youtube']
   )
 
   const c = await freshClient('Grain Co')

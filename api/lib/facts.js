@@ -12,13 +12,18 @@
 // ============================================================
 
 const CHANNEL_ID = {
-  google_ads: 1,
-  meta:       2,
-  lsa:        3,
-  gbp:        4,
-  ga4:        5,
-  ghl:        6,
-  organic:    7,
+  google_ads:   1,
+  meta:         2,
+  lsa:          3,
+  gbp:          4,
+  ga4:          5,
+  ghl:          6,
+  organic:      7,
+  // New channels — IDs match migration 023_new_channels. Never renumber; only append.
+  callrail:     8,
+  housecallpro: 9,
+  bing_ads:     10,
+  youtube:      11,
 }
 const CHANNEL_KEY = Object.fromEntries(
   Object.entries(CHANNEL_ID).map(([k, v]) => [v, k])
@@ -42,6 +47,12 @@ const METRIC_KEYS = new Set([
   // crm / funnel
   'raw_leads', 'mql', 'sql_count', 'closed_won', 'projected_revenue',
   'avg_ticket', 'appointments',
+  // callrail — phone tracking
+  'answered_calls', 'first_time_callers', 'missed_calls',
+  // housecallpro — job management
+  'jobs_created', 'jobs_completed', 'job_revenue',
+  // youtube
+  'watch_time', 'subscriptions',
 ])
 const isKnownMetric = (k) => METRIC_KEYS.has(k)
 
