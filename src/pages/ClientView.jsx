@@ -1445,6 +1445,8 @@ export default function ClientView({ store }) {
   const [eventForm,    setEventForm]    = useState(null)   // null=hidden, obj=open
   const [goalHistory,  setGoalHistory]  = useState([])     // Build B: prior goal snapshots
   const [showGoalHist, setShowGoalHist] = useState(false)  // collapsible history toggle
+  const [lastLoadedAt, setLastLoadedAt] = useState(null)   // Build F: timestamp of last completed load
+  const [nowTick,      setNowTick]      = useState(0)      // increments every 30s to recompute age label
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1486,6 +1488,7 @@ export default function ClientView({ store }) {
   // a refetch can never pull a peer's data; the whole load is leak-proof by construction.
   const load = useCallback(() => {
     if (!USE_API || !clientObj?.id) return
+    setLastLoadedAt(Date.now())
     const thisMonth = new Date().toISOString().slice(0, 7)
     api.getGoal(clientObj.id, thisMonth)
       .then(g => setGoal(g))
@@ -1568,6 +1571,18 @@ export default function ClientView({ store }) {
   })
   useEffect(() => () => { if (refetchTimer.current) clearTimeout(refetchTimer.current) }, [])
 
+  // Build F: 5-minute auto-refresh — safety net when SSE is slow or disconnected
+  useEffect(() => {
+    if (!USE_API) return
+    const t = setInterval(load, 5 * 60 * 1000)
+    return () => clearInterval(t)
+  }, [load])
+  // Build F: 30-second tick so the "X min ago" recency chip stays current
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(n => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
   const revenue = stats.total_revenue || 0
   const jobs    = stats.total_closed  || 0
   const leads   = stats.total_leads   || 0
@@ -1616,6 +1631,9 @@ export default function ClientView({ store }) {
   }))
 
   function handleSignOut() { clearToken(); navigate('/login', { replace: true }) }
+
+  // Build F: age of the last completed data load; re-evaluated every 30s via nowTick re-render
+  const ageMinCV = lastLoadedAt != null ? Math.floor((Date.now() - lastLoadedAt) / 60_000) : null
 
   // Verdict color map
   const verdictColors = {
@@ -1672,6 +1690,11 @@ export default function ClientView({ store }) {
               )}
               {/* Live-stream verdict (intel-v13 C2): SSE transport + data recency, age-only
                   and leak-safe by construction. Hidden in demo mode (no API → no socket). */}
+              {USE_API && ageMinCV != null && (
+                <span className={`hidden sm:inline text-[10px] font-medium px-2 py-0.5 rounded-full ${ageMinCV >= 10 ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>
+                  {ageMinCV < 1 ? 'Just updated' : `${ageMinCV}m ago`}
+                </span>
+              )}
               {USE_API && <StreamStatus connected={liveConnected} lastEventAt={liveLastEventAt} showDetail={false} />}
               <div className="relative">
                 <select

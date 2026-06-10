@@ -49,6 +49,8 @@ export default function Intelligence() {
   const [reallocationEfficacy, setReallocationEfficacy] = useState(null) // { calibration, overall, ranked[], by_strength[], by_pair[], by_client[] } — reallocation feedback loop / calibration (agency-only)
   const [reallocationEfficacyHealth, setReallocationEfficacyHealth] = useState(null) // { status, recommended_action, stability_score, applied_factor, raw_factor, distrust, narration, calibration:{flips,high_run,low_run,settled_run,series[]} } — stability watchdog over the calibration tuner (agency-only)
   const [firedAlerts, setFiredAlerts] = useState([])   // alert inventory — last 100 fired alerts (agency-only)
+  const [lastLoadedAt, setLastLoadedAt] = useState(null)   // Build F: recency chip + auto-refresh
+  const [nowTick,      setNowTick]      = useState(0)      // increments every 30s to refresh age label
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -91,6 +93,7 @@ export default function Intelligence() {
       setReallocationEfficacyHealth(realloEffHealth.status === 'fulfilled' && realloEffHealth.value?.status ? realloEffHealth.value : null)
       setFiredAlerts(alertLog.status === 'fulfilled' && Array.isArray(alertLog.value?.alerts) ? alertLog.value.alerts : [])
       setStatus('done')
+      setLastLoadedAt(Date.now())   // Build F: stamp recency for the stale chip
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
       setStatus('error')
@@ -112,6 +115,17 @@ export default function Intelligence() {
   const { connected: liveConnected, lastEventAt: liveLastEventAt } =
     useLiveStream({ enabled: USE_API, onActivity: onLiveActivity })
   useEffect(() => () => { if (refetchTimer.current) clearTimeout(refetchTimer.current) }, [])
+  // Build F: 5-minute auto-refresh — safety net when SSE is slow or disconnected
+  useEffect(() => {
+    if (!USE_API) return
+    const t = setInterval(load, 5 * 60 * 1000)
+    return () => clearInterval(t)
+  }, [load])
+  // Build F: 30-second tick to keep the "X min ago" recency chip live
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(n => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
 
   async function runSweep() {
     setRunning(true); setError(null)
@@ -187,7 +201,7 @@ export default function Intelligence() {
 
   return (
     <div className="space-y-4">
-      <Hero running={running} onRun={runSweep} connected={liveConnected} lastEventAt={liveLastEventAt} />
+      <Hero running={running} onRun={runSweep} connected={liveConnected} lastEventAt={liveLastEventAt} ageMin={lastLoadedAt != null ? Math.floor((Date.now() - lastLoadedAt) / 60_000) : null} />
 
       {/* influence hero (intel-v12 B3) — the honest, weighted tally of what the autonomous
           analyst actually MOVED: leads recovered, jobs protected, dollars defended (risk-
@@ -572,7 +586,7 @@ function FiredAlertsPanel({ alerts }) {
 }
 
 /* ── hero ───────────────────────────────────────────────────────────────────── */
-function Hero({ running, onRun, disabled, connected, lastEventAt }) {
+function Hero({ running, onRun, disabled, connected, lastEventAt, ageMin }) {
   return (
     <div className="flex items-start gap-3">
       <div className="w-10 h-10 rounded-xl bg-brand-50 flex items-center justify-center shrink-0">
@@ -586,6 +600,11 @@ function Hero({ running, onRun, disabled, connected, lastEventAt }) {
       </div>
       {!disabled && (
         <div className="flex items-center gap-3 shrink-0">
+          {ageMin != null && (
+            <span className={`hidden sm:inline text-[10px] font-medium px-2 py-0.5 rounded-full ${ageMin >= 10 ? 'bg-amber-50 text-amber-600' : 'bg-slate-100 text-slate-400'}`}>
+              {ageMin < 1 ? 'Just updated' : `${ageMin}m ago`}
+            </span>
+          )}
           {/* Live-stream verdict (intel-v13 C2): transport + recency, age-only and leak-safe. */}
           <StreamStatus connected={connected} lastEventAt={lastEventAt} />
           <button
