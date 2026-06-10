@@ -86,11 +86,11 @@ function spreadFactAcrossWeek(f) {
 
 // ── data ──────────────────────────────────────────────────────────────────────
 const CLIENTS = [
-  { name: 'Apex Roofing',        industry: 'Roofing',     location: 'Phoenix, AZ',    status: 'active' },
-  { name: 'Blue Sky HVAC',        industry: 'HVAC',        location: 'Dallas, TX',     status: 'active' },
-  { name: 'Cornerstone Plumbing', industry: 'Plumbing',    location: 'Denver, CO',     status: 'active' },
-  { name: 'Precision Electric',   industry: 'Electrical',  location: 'Atlanta, GA',    status: 'active' },
-  { name: 'Summit Solar',         industry: 'Solar',       location: 'Las Vegas, NV',  status: 'active' },
+  { name: 'Apex Roofing',        industry: 'Roofing',     location: 'Phoenix, AZ',    status: 'active', am_owner: 'Sarah K.'  },
+  { name: 'Blue Sky HVAC',        industry: 'HVAC',        location: 'Dallas, TX',     status: 'active', am_owner: 'Mike T.'   },
+  { name: 'Cornerstone Plumbing', industry: 'Plumbing',    location: 'Denver, CO',     status: 'active', am_owner: 'Sarah K.'  },
+  { name: 'Precision Electric',   industry: 'Electrical',  location: 'Atlanta, GA',    status: 'active', am_owner: 'Jordan R.' },
+  { name: 'Summit Solar',         industry: 'Solar',       location: 'Las Vegas, NV',  status: 'active', am_owner: 'Mike T.'   },
 ]
 
 const seeds = {
@@ -141,13 +141,14 @@ async function seed() {
     const existing = await query(`SELECT id FROM clients WHERE name = $1 LIMIT 1`, [c.name])
     if (existing.rows.length) {
       clientIds.push(existing.rows[0].id)
+      await query(`UPDATE clients SET am_owner = $1 WHERE id = $2`, [c.am_owner, existing.rows[0].id])
       console.log('[seed] client exists:', c.name)
       continue
     }
     const id = uuid()
     await query(
-      `INSERT INTO clients (id, name, industry, location, status) VALUES ($1,$2,$3,$4,$5)`,
-      [id, c.name, c.industry, c.location, c.status]
+      `INSERT INTO clients (id, name, industry, location, status, am_owner) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, c.name, c.industry, c.location, c.status, c.am_owner]
     )
     clientIds.push(id)
     console.log('[seed] client:', c.name)
@@ -292,6 +293,114 @@ async function seed() {
     factRows += slice.length
   }
   console.log(`[seed] inserted ${factRows} fact_metric rows (daily atomic grain from ${wrRows.length} weekly rows)`)
+
+  // ── channel 8-11 direct fact_metric seeds (callrail/hcp/bing/youtube) ─────────
+  // These channels have no weekly_reports columns so factsFromWeeklyRow never
+  // produces facts for them. Insert directly using DOW spreading + chunked upsert.
+  function arcMult(arc, wi) {
+    if (arc === 'recovery') return 0.55 + wi * 0.04
+    if (arc === 'growth')   return 0.70 + wi * 0.026
+    if (arc === 'steady')   return 0.90 + (wi % 3) * 0.03
+    if (arc === 'early')    return 0.35 + wi * 0.055
+    return 1
+  }
+  // [callrail, hcp, bing, youtube] arc per client (CLIENTS order)
+  const CH_ARCS = [
+    ['growth',   'growth',   'steady',   'early'],    // 0 Apex Roofing
+    ['steady',   'recovery', 'early',    'growth'],   // 1 Blue Sky HVAC
+    ['growth',   'growth',   'steady',   'steady'],   // 2 Cornerstone Plumbing
+    ['recovery', 'early',    'recovery', 'early'],    // 3 Precision Electric
+    ['early',    'steady',   'growth',   'growth'],   // 4 Summit Solar
+  ]
+  const newChTuples = []
+  for (let ci = 0; ci < clientIds.length; ci++) {
+    const [crArc, hcpArc, bingArc, ytArc] = CH_ARCS[ci]
+    for (let wi = 0; wi < WEEKS.length; wi++) {
+      const week = WEEKS[wi]
+      const crM  = arcMult(crArc,  wi)
+      const hcpM = arcMult(hcpArc, wi)
+      const bM   = arcMult(bingArc, wi)
+      const ytM  = arcMult(ytArc,  wi)
+
+      // CallRail (channel 8)
+      const crCalls  = Math.max(1, Math.round(rand(30, 65) * crM))
+      const crAns    = Math.round(crCalls * randF(0.74, 0.84))
+      const crMissed = crCalls - crAns
+      const crFirst  = Math.round(crCalls * randF(0.38, 0.52))
+      for (const [key, val] of [
+        ['calls', crCalls], ['answered_calls', crAns],
+        ['missed_calls', crMissed], ['first_time_callers', crFirst],
+      ]) {
+        for (const day of spreadFactAcrossWeek({ date: week, metric_key: key, value: val })) {
+          if (day.value == null || !Number.isFinite(Number(day.value))) continue
+          newChTuples.push([clientIds[ci], day.date, 8, null, key, Number(day.value)])
+        }
+      }
+
+      // HouseCallPro (channel 9)
+      const hcpJobs   = Math.max(1, Math.round(rand(8, 22) * hcpM))
+      const hcpComp   = Math.round(hcpJobs * randF(0.82, 0.92))
+      const hcpTicket = rand(2800, 6500)
+      const hcpRev    = hcpComp * hcpTicket
+      const hcpBooked = Math.round(hcpJobs * randF(0.85, 0.96))
+      for (const [key, val] of [
+        ['jobs_created', hcpJobs], ['jobs_completed', hcpComp],
+        ['job_revenue', hcpRev], ['avg_ticket', hcpTicket], ['booked_jobs', hcpBooked],
+      ]) {
+        for (const day of spreadFactAcrossWeek({ date: week, metric_key: key, value: val })) {
+          if (day.value == null || !Number.isFinite(Number(day.value))) continue
+          newChTuples.push([clientIds[ci], day.date, 9, null, key, Number(day.value)])
+        }
+      }
+
+      // Bing Ads (channel 10)
+      const bSpend  = round2(Math.max(1, Math.round(rand(500, 1400) * bM)))
+      const bImpr   = Math.max(1, Math.round(rand(3000, 9000) * bM))
+      const bClicks = Math.max(1, Math.round(rand(50, 180) * bM))
+      const bConv   = Math.max(0, Math.round(rand(3, 15) * bM))
+      const bRev    = round2(bConv * rand(2800, 6500))
+      for (const [key, val] of [
+        ['spend', bSpend], ['impressions', bImpr], ['clicks', bClicks],
+        ['conversions', bConv], ['revenue', bRev],
+      ]) {
+        for (const day of spreadFactAcrossWeek({ date: week, metric_key: key, value: val })) {
+          if (day.value == null || !Number.isFinite(Number(day.value))) continue
+          newChTuples.push([clientIds[ci], day.date, 10, null, key, Number(day.value)])
+        }
+      }
+
+      // YouTube (channel 11)
+      const ytViews = Math.max(1, Math.round(rand(600, 3500) * ytM))
+      const ytWatch = Math.round(ytViews * randF(3, 8))
+      const ytSubs  = Math.max(0, Math.round(rand(2, 12) * ytM))
+      const ytClk   = Math.max(1, Math.round(rand(15, 60) * ytM))
+      const ytImpr  = Math.round(ytViews * randF(1.5, 2.5))
+      for (const [key, val] of [
+        ['views', ytViews], ['watch_time', ytWatch], ['subscriptions', ytSubs],
+        ['clicks', ytClk], ['impressions', ytImpr],
+      ]) {
+        for (const day of spreadFactAcrossWeek({ date: week, metric_key: key, value: val })) {
+          if (day.value == null || !Number.isFinite(Number(day.value))) continue
+          newChTuples.push([clientIds[ci], day.date, 11, null, key, Number(day.value)])
+        }
+      }
+    }
+  }
+  let newChRows = 0
+  for (let i = 0; i < newChTuples.length; i += FACT_CHUNK) {
+    const slice = newChTuples.slice(i, i + FACT_CHUNK)
+    const placeholders = slice
+      .map((_, r) => `($${r * 6 + 1},$${r * 6 + 2},$${r * 6 + 3},$${r * 6 + 4},$${r * 6 + 5},$${r * 6 + 6})`)
+      .join(',')
+    await query(
+      `INSERT OR REPLACE INTO fact_metric
+         (client_id, date, channel_id, entity_id, metric_key, metric_value)
+       VALUES ${placeholders}`,
+      slice.flat()
+    )
+    newChRows += slice.length
+  }
+  console.log(`[seed] inserted ${newChRows} new-channel fact_metric rows (channels 8-11: callrail/hcp/bing/youtube)`)
 
   // ── agency settings ───────────────────────────────────────────────────────────
   await query(

@@ -11,6 +11,7 @@ import ActivityFeed from '@/components/ActivityFeed'
 import SpendAreaChart from '@/components/charts/SpendAreaChart'
 import { SkeletonGrid } from '@/components/SkeletonCard'
 import { fmt$$, fmtN, fmtPct, fmtX, delta } from '@/lib/utils'
+import { useCountUp } from '@/lib/useCountUp'
 
 /* ── Bottleneck detection logic ── */
 function bottleneck(stats) {
@@ -382,6 +383,21 @@ export default function Dashboard() {
   const leads   = stats.total_leads   || 0
   const spend   = stats.total_spend   || 0
   const roas    = spend > 0 ? revenue / spend : (stats.avg_roas || 0)
+  const closeRate = leads > 0 ? (jobs / leads) * 100 : 0
+
+  const healthScore = Math.min(100, Math.round(
+    (roas >= 8 ? 60 : roas > 0 ? (roas / 8) * 60 : 0) +
+    (closeRate !== null && closeRate > 0 ? Math.min(40, closeRate * 1.1) : 20)
+  ))
+  const healthVerdict = healthScore >= 85 ? 'Strong Performance'
+    : healthScore >= 65 ? 'Healthy Portfolio'
+    : healthScore >= 45 ? 'Developing'
+    : 'Needs Attention'
+  const healthColor = healthScore >= 85 ? '#10b981'
+    : healthScore >= 65 ? '#3b82f6'
+    : healthScore >= 45 ? '#f59e0b'
+    : '#ef4444'
+  const animScore = useCountUp(healthScore, { duration: 1400, delay: 200, enabled: !loading })
 
   // Spark data slices — last 8 weeks mapped per metric
   const sparkWeeks = weeklyTrend.slice(-8)
@@ -426,6 +442,56 @@ export default function Dashboard() {
 
           {/* ── Ask your data (Sprint 2 NL query) ── */}
           <AskBox />
+
+          {/* ── Portfolio health hero ── */}
+          {!loading && (
+            <div className="bg-slate-900 rounded-2xl border border-white/[0.07] shadow-xl shadow-black/30 overflow-hidden">
+              <div className="flex items-center justify-between px-8 py-6">
+                <div className="flex items-center gap-6">
+                  <div className="relative flex items-center justify-center">
+                    <svg className="w-28 h-28 -rotate-90" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="8" />
+                      <circle
+                        cx="50" cy="50" r="40" fill="none"
+                        stroke={healthColor} strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray={`${2 * Math.PI * 40}`}
+                        strokeDashoffset={`${2 * Math.PI * 40 * (1 - animScore / 100)}`}
+                        style={{ transition: 'stroke-dashoffset 1.2s ease-out' }}
+                      />
+                    </svg>
+                    <div className="absolute flex flex-col items-center">
+                      <span className="text-4xl font-black text-white leading-none" style={{ color: healthColor }}>{animScore}</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">/ 100</span>
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Portfolio Health</p>
+                    <h2 className="text-2xl font-black text-white leading-tight">{healthVerdict}</h2>
+                    <p className="text-xs text-slate-400 mt-1">{clientSummary.length} active clients · {fmtX(roas)} avg ROAS · {fmtPct(closeRate)} close rate</p>
+                  </div>
+                </div>
+                <div className="hidden md:grid grid-cols-2 gap-x-10 gap-y-3 text-right">
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Revenue</p>
+                    <p className="text-lg font-black text-white">{fmt$$(revenue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Jobs Won</p>
+                    <p className="text-lg font-black text-white">{fmtN(jobs)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Leads</p>
+                    <p className="text-lg font-black text-white">{fmtN(leads)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Ad Spend</p>
+                    <p className="text-lg font-black text-white">{fmt$$(spend)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Row 1: 4 KPI cards ── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

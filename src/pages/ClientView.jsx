@@ -1725,6 +1725,14 @@ export default function ClientView({ store }) {
             </div>
           </div>
 
+          {/* ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──
+              The agency's "Off goal pace" roster (insights/pacing) reduced to ONLY this
+              account's own numbers — no peers, no book share — and widened to show EVERY
+              goal, the ahead and on-track ones too, not just the misses. Same activity gate
+              as the health badge so a brand-new account doesn't open on a wall of "behind";
+              the card also self-hides when there's no goal set or it's too early to call. */}
+          {(revenue > 0 || leads > 0 || spend > 0) && <GoalPace pacing={pacing} />}
+
           {/* ── Data-freshness note — the ONE client-safe egress of the self-healing pipeline ──
               Deliberately UNGATED (no revenue/leads/spend gate): a brand-new account whose very
               first sync is still in flight is exactly when the reassuring info-tone note matters
@@ -1825,14 +1833,6 @@ export default function ClientView({ store }) {
               />
             </div>
           )}
-
-          {/* ── Will You Hit Your Goal? — this client's own pace to each monthly goal ──
-              The agency's "Off goal pace" roster (insights/pacing) reduced to ONLY this
-              account's own numbers — no peers, no book share — and widened to show EVERY
-              goal, the ahead and on-track ones too, not just the misses. Same activity gate
-              as the health badge so a brand-new account doesn't open on a wall of "behind";
-              the card also self-hides when there's no goal set or it's too early to call. */}
-          {(revenue > 0 || leads > 0 || spend > 0) && <GoalPace pacing={pacing} />}
 
           {/* ── How You Compare — this client's own anonymized peer standing ──
               The cross-client benchmark reduced to this account's placement only

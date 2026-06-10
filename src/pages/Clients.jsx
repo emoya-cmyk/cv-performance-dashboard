@@ -877,7 +877,11 @@ export default function Clients() {
   const [showModal,    setShowModal]    = useState(false)
   const [editClient,   setEditClient]   = useState(null)   // ClientUpdateModal target
   const [deleteTarget, setDeleteTarget] = useState(null)   // DeleteClientModal target
+  const [amFilter,     setAmFilter]     = useState('')
   const user = getUser()
+
+  const amOwners = [...new Set(clientSummary.map(c => c.am_owner).filter(Boolean))].sort()
+  const filtered = amFilter ? clientSummary.filter(c => c.am_owner === amFilter) : clientSummary
 
   function handleSignOut() {
     clearToken()
@@ -910,9 +914,20 @@ export default function Clients() {
       {/* Action bar */}
       <div className="flex items-center justify-between mb-5">
         <p className="text-sm text-slate-500">
-          <span className="font-black text-slate-900">{clientSummary.length}</span> active accounts
+          <span className="font-black text-slate-900">{filtered.length}</span> active accounts
         </p>
         <div className="flex items-center gap-3">
+          {/* AM owner filter */}
+          {amOwners.length > 0 && (!USE_API || isAgency()) && (
+            <select
+              value={amFilter}
+              onChange={e => setAmFilter(e.target.value)}
+              className="text-xs font-semibold text-slate-600 border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white hover:border-brand-300 focus:outline-none focus:ring-2 focus:ring-brand-200 transition-colors"
+            >
+              <option value="">All AMs</option>
+              {amOwners.map(am => <option key={am} value={am}>{am}</option>)}
+            </select>
+          )}
           {/* Sign out — always visible */}
           {USE_API && (
             <button
@@ -938,7 +953,7 @@ export default function Clients() {
 
       {/* Client grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {clientSummary.map(c => {
+        {filtered.map(c => {
           const s = STATUS_STYLE[c.status] || STATUS_STYLE.paused
           // ROI and Win rate are derived from the card's own figures so they never read
           // "—" when the summary endpoint omits the pre-aggregated avg_roas / mql_rate.
@@ -966,6 +981,12 @@ export default function Clients() {
                     <MapPin className="w-3 h-3" />
                     {c.location}
                   </div>
+                  {c.am_owner && (
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">AM</span>
+                      <span className="text-[9px] font-bold text-brand-500 bg-brand-50 px-1.5 py-0.5 rounded-md border border-brand-100">{c.am_owner}</span>
+                    </div>
+                  )}
                 </div>
                 <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded-lg shrink-0">
                   {c.industry || c.type}
@@ -1016,6 +1037,22 @@ export default function Clients() {
                   )}
                 </div>
               </div>
+              {(!USE_API || isAgency()) && (
+                <div className="flex items-center gap-2 pt-2 mt-2 border-t border-slate-50">
+                  <button
+                    onClick={e => { e.stopPropagation(); store.setSelectedClient(c.id); navigate('/my-dashboard') }}
+                    className="flex-1 text-center text-[10px] font-bold text-brand-500 hover:text-brand-700 hover:bg-brand-50 py-1.5 rounded-lg transition-colors border border-brand-100"
+                  >
+                    Call Prep →
+                  </button>
+                  <button
+                    onClick={e => { e.stopPropagation(); navigate('/intelligence') }}
+                    className="flex-1 text-center text-[10px] font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-50 py-1.5 rounded-lg transition-colors border border-slate-100"
+                  >
+                    Intel →
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}
