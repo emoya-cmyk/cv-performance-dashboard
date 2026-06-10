@@ -20,11 +20,13 @@ const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelive
 const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
 const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = require('./lib/opsHealth')
 const { planJobRecovery } = require('./lib/opsRecovery')
+const { fireAlert }       = require('./lib/alertDelivery')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
 const INSIGHTS_SCHEDULE = process.env.INSIGHTS_CRON || '0 7 * * *'    // daily 7am UTC
-const WATCHDOG_SCHEDULE = process.env.WATCHDOG_CRON || '*/15 * * * *' // every 15 minutes
+const WATCHDOG_SCHEDULE   = process.env.WATCHDOG_CRON   || '*/15 * * * *' // every 15 minutes
+const THRESHOLD_SCHEDULE  = process.env.THRESHOLD_CRON  || '30 7 * * *'   // daily 7:30am UTC
 
 // Minimal stats builder for digest (mirrors deriveStats in metrics.js)
 function digestStats(row) {
@@ -282,6 +284,66 @@ function startScheduler() {
   })
 
   console.log(`[scheduler] insights on schedule: ${INSIGHTS_SCHEDULE}`)
+
+  // ── WoW threshold alerts — daily 7:30am UTC ───────────────────────────────────
+  // Compares the two most recent weekly_reports rows per client. Fires a warning
+  // for revenue or lead drops >20% WoW and a critical for >40% drops. Skips any
+  // client with fewer than 2 weeks of data. Prior-week baseline must be non-zero
+  // to avoid false alarms on clients with no data in a given week.
+  cron.schedule(THRESHOLD_SCHEDULE, async () => {
+    console.log('[threshold] starting WoW check', new Date().toISOString())
+    try {
+      const cutoff = new Date()
+      cutoff.setUTCDate(cutoff.getUTCDate() - 21)
+      const cutoffStr = cutoff.toISOString().slice(0, 10)
+
+      const { rows } = await query(
+        `SELECT wr.client_id, c.name AS client_name, wr.week_start,
+                COALESCE(wr.projected_revenue, 0) AS revenue,
+                COALESCE(wr.raw_leads, 0)         AS leads
+           FROM weekly_reports wr
+           JOIN clients c ON c.id = wr.client_id
+          WHERE wr.week_start >= $1
+          ORDER BY wr.client_id, wr.week_start DESC`,
+        [cutoffStr]
+      )
+
+      const byClient = {}
+      for (const row of rows) {
+        if (!byClient[row.client_id]) byClient[row.client_id] = { name: row.client_name, weeks: [] }
+        if (byClient[row.client_id].weeks.length < 2) byClient[row.client_id].weeks.push(row)
+      }
+
+      for (const [, data] of Object.entries(byClient)) {
+        const [curr, prev] = data.weeks
+        if (!curr || !prev) continue
+
+        const checks = [
+          { metric: 'Revenue', curr: Number(curr.revenue), prev: Number(prev.revenue) },
+          { metric: 'Leads',   curr: Number(curr.leads),   prev: Number(prev.leads)   },
+        ]
+        for (const c of checks) {
+          if (c.prev <= 0) continue
+          const drop = (c.prev - c.curr) / c.prev
+          if (drop <= 0.2) continue
+          const pct      = Math.round(drop * 100)
+          const severity = drop >= 0.4 ? 'critical' : 'warning'
+          fireAlert({
+            title:      `${data.name} — ${c.metric} down ${pct}% WoW`,
+            body:       `${data.name} ${c.metric.toLowerCase()} fell from ${c.prev.toFixed(0)} to ${c.curr.toFixed(0)} (−${pct}%) vs the prior week.`,
+            severity,
+            clientName: data.name,
+            metric:     c.metric,
+            value:      `-${pct}%`,
+          })
+          console.log(`[threshold] ${severity.toUpperCase()}: ${data.name} ${c.metric} −${pct}%`)
+        }
+      }
+    } catch (err) {
+      console.error('[threshold] fatal:', err.message)
+    }
+  })
+  console.log(`[scheduler] threshold alerts on schedule: ${THRESHOLD_SCHEDULE}`)
 
   // ── Self-healing pipeline watchdog — every 15 minutes (intel-v11) ─────────────
   // The 6-hour sync sweep above is the bulk heartbeat; this is the tight, SELECTIVE,

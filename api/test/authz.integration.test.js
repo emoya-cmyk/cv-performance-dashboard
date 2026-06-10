@@ -229,7 +229,6 @@ const AGENCY_ONLY = [
   ['GET',    `/api/shares/${A}`],        // blanket router.use(requireAgency)
   ['POST',   `/api/sync/${A}/all`],      // blanket router.use(requireAgency)
   ['POST',   `/api/reports/${A}`],
-  ['PUT',    `/api/goals/${A}`],
   ['PUT',    `/api/updates/${A}`],
   ['POST',   `/api/campaigns/${A}`],
   ['POST',   `/api/clients/`],

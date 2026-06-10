@@ -23,7 +23,7 @@ router.get('/', async (req, res) => {
     }
     const { rows } = await query(
       `SELECT id, name, location, industry, status, ghl_location_id, hubspot_portal_id,
-              contact_email, calendar_url
+              contact_email, calendar_url, am_owner
        FROM clients ORDER BY name`
     )
     res.json(rows)
@@ -34,19 +34,20 @@ router.get('/', async (req, res) => {
 
 // POST /api/clients  (create/onboard a new client) — agency only
 router.post('/', requireAgency, async (req, res) => {
-  const { name, location, industry, ghl_location_id, hubspot_portal_id, contact_email, calendar_url } = req.body
+  const { name, location, industry, ghl_location_id, hubspot_portal_id, contact_email, calendar_url, am_owner } = req.body
   if (!name) return res.status(400).json({ error: 'name is required' })
   try {
     const { rows } = await query(
-      `INSERT INTO clients (name, location, industry, ghl_location_id, hubspot_portal_id, contact_email, calendar_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO clients (name, location, industry, ghl_location_id, hubspot_portal_id, contact_email, calendar_url, am_owner)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (ghl_location_id) DO UPDATE
          SET name = EXCLUDED.name, location = EXCLUDED.location,
              industry = EXCLUDED.industry, hubspot_portal_id = EXCLUDED.hubspot_portal_id,
-             contact_email = EXCLUDED.contact_email, calendar_url = EXCLUDED.calendar_url
+             contact_email = EXCLUDED.contact_email, calendar_url = EXCLUDED.calendar_url,
+             am_owner = EXCLUDED.am_owner
        RETURNING *`,
       [name, location, industry, ghl_location_id || null, hubspot_portal_id || null,
-       contact_email || null, calendar_url || null]
+       contact_email || null, calendar_url || null, am_owner || null]
     )
     res.status(201).json(rows[0])
   } catch (err) {
@@ -72,7 +73,7 @@ router.get('/:id', scopeClientParam('id'), async (req, res) => {
 
 // PUT /api/clients/:id — agency only
 router.put('/:id', requireAgency, async (req, res) => {
-  const { name, location, industry, status, ghl_location_id, hubspot_portal_id, contact_email, calendar_url } = req.body
+  const { name, location, industry, status, ghl_location_id, hubspot_portal_id, contact_email, calendar_url, am_owner } = req.body
   try {
     const { rows } = await query(
       `UPDATE clients
@@ -84,11 +85,12 @@ router.put('/:id', requireAgency, async (req, res) => {
               hubspot_portal_id  = COALESCE($7, hubspot_portal_id),
               contact_email      = COALESCE($8, contact_email),
               calendar_url       = COALESCE($9, calendar_url),
+              am_owner           = COALESCE($10, am_owner),
               updated_at         = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *`,
       [req.params.id, name, location, industry, status, ghl_location_id, hubspot_portal_id,
-       contact_email, calendar_url]
+       contact_email, calendar_url, am_owner]
     )
     if (!rows.length) return res.status(404).json({ error: 'not found' })
     res.json(rows[0])

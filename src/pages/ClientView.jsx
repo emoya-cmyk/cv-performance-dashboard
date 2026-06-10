@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
   Award, Minus, ArrowUpRight, RefreshCw, ShieldCheck,
-  AlertTriangle, Crosshair, Eye, Radar, ThumbsUp, ThumbsDown,
+  AlertTriangle, Crosshair, Eye, Radar, ThumbsUp, ThumbsDown, Pencil,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -1437,6 +1437,11 @@ export default function ClientView({ store }) {
   const [brief,        setBrief]       = useState(null)   // grounded AI MORNING brief — { brief_text, pack:{period,posture,...} } over THIS client's own intra-week pulse
   const [connNote,     setConnNote]    = useState(null)   // { degraded, severity:'info'|'notice', note } — the ONE leak-proof client-safe degraded-data note (clientConnectionNote); never any feed name/status/count
   const [seoData,      setSeoData]     = useState(null)   // SEMrush snapshot — null when not armed/connected
+  const [goalsEdit,   setGoalsEdit]   = useState(false)  // goal ring edit mode
+  const [goalDraft,   setGoalDraft]   = useState({})     // draft fields while editing
+  const [goalSaving,  setGoalSaving]  = useState(false)  // save in-flight
+  const [events,      setEvents]      = useState([])     // campaign timeline annotations
+  const [eventForm,   setEventForm]   = useState(null)   // null=hidden, obj=open
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1529,6 +1534,10 @@ export default function ClientView({ store }) {
     api.getSEO(clientObj.id)
       .then(d => setSeoData((d?.armed && d?.connected && d?.latest) ? d : null))
       .catch(() => setSeoData(null))
+    // Campaign timeline annotations — load latest 50 events for this client
+    api.getEvents(clientObj.id, 50)
+      .then(evs => setEvents(Array.isArray(evs) ? evs : []))
+      .catch(() => setEvents([]))
   }, [clientObj?.id])
 
   // Initial fetch + refetch whenever the selected client changes.
@@ -1741,14 +1750,165 @@ export default function ClientView({ store }) {
               count, or any recovery machinery. */}
           <DataFreshnessNote note={connNote} />
 
-          {/* ── Goal Progress Ring ── */}
-          <GoalRing
-            revenue={revenue}
-            leads={leads}
-            jobs={jobs}
-            goal={goal}
-            periodLabel={periodLabel}
-          />
+          {/* ── Goal Progress Ring + edit overlay ── */}
+          <div className="relative">
+            <GoalRing
+              revenue={revenue}
+              leads={leads}
+              jobs={jobs}
+              goal={goal}
+              periodLabel={periodLabel}
+            />
+            {!goalsEdit && (
+              <button
+                onClick={() => {
+                  setGoalDraft({
+                    revenue_target: goal?.revenue_target ?? '',
+                    leads_target:   goal?.leads_target   ?? '',
+                    jobs_target:    goal?.jobs_target     ?? '',
+                  })
+                  setGoalsEdit(true)
+                }}
+                className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                title="Edit goals"
+              >
+                <Pencil size={14} />
+              </button>
+            )}
+            {goalsEdit && (
+              <div className="mt-3 border-t border-slate-100 pt-3 px-4 pb-3">
+                <div className="grid grid-cols-3 gap-3 mb-3">
+                  {[
+                    { key: 'revenue_target', label: 'Revenue $' },
+                    { key: 'leads_target',   label: 'Leads' },
+                    { key: 'jobs_target',    label: 'Jobs' },
+                  ].map(({ key, label }) => (
+                    <div key={key}>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">{label}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={goalDraft[key] ?? ''}
+                        onChange={e => setGoalDraft(d => ({ ...d, [key]: e.target.value }))}
+                        className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        placeholder="–"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setGoalsEdit(false)}
+                    className="text-xs px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                  >Cancel</button>
+                  <button
+                    disabled={goalSaving}
+                    onClick={async () => {
+                      setGoalSaving(true)
+                      const month = new Date().toISOString().slice(0, 7)
+                      try {
+                        const saved = await api.saveGoal(clientObj.id, {
+                          month,
+                          revenue_target: goalDraft.revenue_target !== '' ? Number(goalDraft.revenue_target) : null,
+                          leads_target:   goalDraft.leads_target   !== '' ? Number(goalDraft.leads_target)   : null,
+                          jobs_target:    goalDraft.jobs_target     !== '' ? Number(goalDraft.jobs_target)    : null,
+                        })
+                        setGoal(saved)
+                      } catch (_) {}
+                      setGoalsEdit(false)
+                      setGoalSaving(false)
+                    }}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                  >{goalSaving ? 'Saving…' : 'Save Goals'}</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Campaign Timeline Annotations ── */}
+          {USE_API && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Timeline</h3>
+                {user?.role !== 'client' && (
+                  <button
+                    onClick={() => setEventForm(f => f ? null : { event_date: '', label: '', note: '' })}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium transition-colors"
+                  >+ Event</button>
+                )}
+              </div>
+              {user?.role !== 'client' && eventForm && (
+                <div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <div>
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Date</label>
+                      <input type="date" value={eventForm.event_date}
+                        onChange={e => setEventForm(f => ({ ...f, event_date: e.target.value }))}
+                        className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Label</label>
+                      <input type="text" value={eventForm.label} maxLength={80}
+                        onChange={e => setEventForm(f => ({ ...f, label: e.target.value }))}
+                        placeholder="e.g. Campaign launched"
+                        className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                    </div>
+                  </div>
+                  <div className="mb-2">
+                    <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Note (optional)</label>
+                    <input type="text" value={eventForm.note} maxLength={200}
+                      onChange={e => setEventForm(f => ({ ...f, note: e.target.value }))}
+                      placeholder="Additional context…"
+                      className="w-full text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={() => setEventForm(null)}
+                      className="text-xs px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors">Cancel</button>
+                    <button
+                      disabled={!eventForm.event_date || !eventForm.label}
+                      onClick={async () => {
+                        try {
+                          const ev = await api.createEvent(clientObj.id, eventForm)
+                          setEvents(prev => [ev, ...prev])
+                          setEventForm(null)
+                        } catch (_) {}
+                      }}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                    >Add</button>
+                  </div>
+                </div>
+              )}
+              {events.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-3">No timeline events yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {events.map(ev => (
+                    <li key={ev.id} className="flex items-start gap-3 group">
+                      <div className="mt-1 w-2 h-2 rounded-full bg-indigo-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span className="text-[11px] font-semibold text-slate-700">{ev.label}</span>
+                          <span className="text-[10px] text-slate-400">{ev.event_date}</span>
+                        </div>
+                        {ev.note && <p className="text-[11px] text-slate-500 mt-0.5">{ev.note}</p>}
+                      </div>
+                      {user?.role !== 'client' && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await api.deleteEvent(clientObj.id, ev.id)
+                              setEvents(prev => prev.filter(e => e.id !== ev.id))
+                            } catch (_) {}
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-rose-400 text-xs transition-all flex-shrink-0"
+                        >✕</button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {/* ── Data Source Setup Checklist — hidden when data is present or 4+ connected ── */}
           {USE_API && revenue === 0 && leads === 0 && (

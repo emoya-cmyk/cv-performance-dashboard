@@ -291,6 +291,10 @@ export const api = {
   // Goals
   getGoal:       (clientId, month) => get(`/api/goals/${clientId}${month ? `?month=${month}` : ''}`),
   saveGoal:      (clientId, body)  => put(`/api/goals/${clientId}`, body),
+  // Campaign events (timeline annotations)
+  getEvents:   (clientId, limit) => get(`/api/events/${clientId}${limit ? `?limit=${limit}` : ''}`),
+  createEvent: (clientId, body)  => post(`/api/events/${clientId}`, body),
+  deleteEvent: (clientId, id)    => del(`/api/events/${clientId}/${id}`),
   // Weekly updates
   getUpdates:    (clientId, weeks) => get(`/api/updates/${clientId}?weeks=${weeks || 4}`),
   saveUpdate:    (clientId, body)  => put(`/api/updates/${clientId}`, body),

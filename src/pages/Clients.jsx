@@ -696,19 +696,22 @@ function DeleteClientModal({ client, onClose, onDeleted }) {
   )
 }
 
-// ── Add Client — 3-step onboarding wizard ─────────────────────────────────────
+// ── Add Client — 4-step onboarding wizard ─────────────────────────────────────
 const WIZARD_STEPS = [
   { n: 1, label: 'Business Info'  },
   { n: 2, label: 'Platform IDs'   },
-  { n: 3, label: 'Contact Links'  },
+  { n: 3, label: 'Goals'          },
+  { n: 4, label: 'Contact Links'  },
 ]
 
-function AddClientModal({ onClose, onCreated }) {
+function AddClientModal({ onClose, onCreated, amOwners = [] }) {
   const [step,    setStep]    = useState(1)
   const [form,    setForm]    = useState({
     name: '', location: '', industry: 'HVAC',
     ghl_location_id: '', hubspot_portal_id: '',
     contact_email: '', calendar_url: '',
+    am_owner: '',
+    revenue_target: '', leads_target: '', jobs_target: '',
   })
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
@@ -730,6 +733,15 @@ function AddClientModal({ onClose, onCreated }) {
     setLoading(true)
     try {
       const client = await api.createClient(form)
+      if (form.revenue_target || form.leads_target || form.jobs_target) {
+        const thisMonth = new Date().toISOString().slice(0, 7)
+        await api.saveGoal(client.id, {
+          month:          thisMonth,
+          revenue_target: form.revenue_target ? Number(form.revenue_target) : null,
+          leads_target:   form.leads_target   ? Number(form.leads_target)   : null,
+          jobs_target:    form.jobs_target     ? Number(form.jobs_target)    : null,
+        }).catch(() => {})
+      }
       onCreated(client)
       onClose()
     } catch (err) {
@@ -745,7 +757,7 @@ function AddClientModal({ onClose, onCreated }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div>
             <h2 className="text-base font-black text-slate-900">Add New Client</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Step {step} of 3 — {WIZARD_STEPS[step - 1].label}</p>
+            <p className="text-xs text-slate-400 mt-0.5">Step {step} of 4 — {WIZARD_STEPS[step - 1].label}</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors">
             <X className="w-4 h-4 text-slate-500" />
@@ -759,14 +771,14 @@ function AddClientModal({ onClose, onCreated }) {
               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-colors shrink-0 ${
                 step >= s.n ? 'bg-brand-500 text-white' : 'bg-slate-100 text-slate-400'
               }`}>{s.n}</div>
-              {i < 2 && (
+              {i < 3 && (
                 <div className={`flex-1 h-px transition-colors ${step > s.n ? 'bg-brand-500' : 'bg-slate-100'}`} />
               )}
             </div>
           ))}
         </div>
 
-        <form onSubmit={step < 3 ? goNext : handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={step < 4 ? goNext : handleSubmit} className="p-6 space-y-4">
 
           {/* ── Step 1: Business Info ── */}
           {step === 1 && (
@@ -795,6 +807,15 @@ function AddClientModal({ onClose, onCreated }) {
                   <input value={form.location} onChange={set('location')} className={ic} placeholder="Atlanta, GA" />
                 </div>
               </div>
+              {amOwners.length > 0 && (
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Account Manager</label>
+                  <select value={form.am_owner} onChange={set('am_owner')} className={`${ic} bg-white`}>
+                    <option value="">Unassigned</option>
+                    {amOwners.map(am => <option key={am} value={am}>{am}</option>)}
+                  </select>
+                </div>
+              )}
             </>
           )}
 
@@ -820,8 +841,34 @@ function AddClientModal({ onClose, onCreated }) {
             </>
           )}
 
-          {/* ── Step 3: Contact Links ── */}
+          {/* ── Step 3: Goals ── */}
           {step === 3 && (
+            <>
+              <p className="text-xs text-slate-500 bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                Set monthly targets for this client. You can update these any time from the client dashboard.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Revenue</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                    <input type="number" min="0" value={form.revenue_target} onChange={set('revenue_target')} className={`${ic} pl-6`} placeholder="50000" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Leads</label>
+                  <input type="number" min="0" value={form.leads_target} onChange={set('leads_target')} className={ic} placeholder="20" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Jobs</label>
+                  <input type="number" min="0" value={form.jobs_target} onChange={set('jobs_target')} className={ic} placeholder="15" />
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ── Step 4: Contact Links ── */}
+          {step === 4 && (
             <>
               <p className="text-xs text-slate-500 bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                 These override the agency-wide defaults on this client's review page and shared report. Leave blank to use agency defaults.
@@ -860,7 +907,7 @@ function AddClientModal({ onClose, onCreated }) {
               disabled={loading}
               className="flex-1 bg-brand-500 hover:bg-brand-600 text-white font-black text-sm py-2.5 rounded-xl transition-colors disabled:opacity-50"
             >
-              {loading ? 'Saving…' : step < 3 ? 'Next →' : 'Add Client →'}
+              {loading ? 'Saving…' : step < 4 ? 'Next →' : 'Add Client →'}
             </button>
           </div>
         </form>
@@ -1078,6 +1125,7 @@ export default function Clients() {
         <AddClientModal
           onClose={() => setShowModal(false)}
           onCreated={handleCreated}
+          amOwners={amOwners}
         />
       )}
 

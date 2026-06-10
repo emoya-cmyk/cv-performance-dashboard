@@ -22,6 +22,7 @@ const agencyRouter       = require('./routes/agency')
 const aiRouter           = require('./routes/ai')
 const seoRouter          = require('./routes/seo')
 const insightsRouter     = require('./routes/insights')
+const eventsRouter       = require('./routes/events')
 const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
@@ -120,6 +121,7 @@ app.use('/api/agency', agencyRouter)                    // GET public, PUT self-
 app.use('/api/ai',         requireAuth, aiRouter)        // grounded recap card + ask stub
 app.use('/api/seo',        requireAuth, seoRouter)       // SEMrush organic snapshots + on-demand sync
 app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intelligence feed + lifecycle
+app.use('/api/events',    requireAuth, eventsRouter)     // campaign timeline annotations
 
 // Email digest prefs — GET + PUT /api/clients/:id/email
 // Defined before the clients router so this specific path wins

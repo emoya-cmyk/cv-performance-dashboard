@@ -30,7 +30,7 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
 
 // PUT /api/goals/:clientId — upsert monthly goal (agency only)
 // Body: { month: '2026-05' | '2026-05-01', revenue_target|revenue_goal, leads_target|leads_goal, jobs_target|jobs_goal }
-router.put('/:clientId', requireAgency, async (req, res) => {
+router.put('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const { clientId } = req.params
   const body = req.body
   const month          = body.month
