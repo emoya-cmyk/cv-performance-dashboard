@@ -1,6 +1,6 @@
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  ResponsiveContainer, Legend, ReferenceLine,
 } from 'recharts'
 import { weekLabel, fmtDollarShort } from '@/lib/utils'
 
@@ -10,13 +10,26 @@ import { weekLabel, fmtDollarShort } from '@/lib/utils'
  * shape, with the wide weekly_reports field names kept as fallbacks so the chart
  * works whether it's fed the aggregated trend or a raw weekly row. `??` (not `||`)
  * so a legitimately-zero week stays 0 instead of cascading to the next fallback.
+ *
+ * Optional `events` prop: array of campaign event objects `{ event_date, label }`.
+ * Each event is matched to the nearest chart week (within ±7 days) and rendered
+ * as a dashed vertical ReferenceLine marker.
  */
-export default function SpendAreaChart({ data = [] }) {
+export default function SpendAreaChart({ data = [], events = [] }) {
   const chartData = data.map(w => ({
     week:    w.week_start ?? w.week,
     Spend:   Math.round(w.spend   ?? w.total_spend   ?? w.ads_spend         ?? 0),
     Revenue: Math.round(w.revenue ?? w.total_revenue ?? w.projected_revenue ?? 0),
   }))
+
+  // Match each event to the nearest chart week (within ±7 days)
+  const eventMarkers = events.flatMap(ev => {
+    const evMs = new Date(ev.event_date).getTime()
+    if (isNaN(evMs)) return []
+    const sevenDays = 7 * 24 * 3600 * 1000
+    const match = chartData.find(d => Math.abs(new Date(d.week).getTime() - evMs) <= sevenDays)
+    return match ? [{ x: match.week, label: ev.label }] : []
+  })
 
   if (!chartData.length) {
     return (
@@ -77,6 +90,16 @@ export default function SpendAreaChart({ data = [] }) {
               fill="url(#revenueGrad)" dot={false}
               isAnimationActive={false}
             />
+            {eventMarkers.map((m, i) => (
+              <ReferenceLine
+                key={i}
+                x={m.x}
+                stroke="#6366f1"
+                strokeDasharray="4 3"
+                strokeWidth={1.5}
+                label={{ value: m.label, position: 'top', fontSize: 9, fill: '#6366f1', offset: 4 }}
+              />
+            ))}
           </AreaChart>
         </ResponsiveContainer>
       </div>

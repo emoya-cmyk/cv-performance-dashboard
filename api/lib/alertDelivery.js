@@ -1,5 +1,7 @@
 'use strict'
 
+const { query } = require('../db')
+
 // ============================================================================
 // lib/alertDelivery.js — Slack webhook + Resend email alert delivery
 //
@@ -180,6 +182,21 @@ async function sendDigest({ to, subject, html, from }) {
  * should never be blocked by delivery failure (e.g. the intelligence sweep).
  */
 function fireAlert(alert) {
+  query(
+    `INSERT INTO fired_alerts (severity, title, body, client_id, client_name, metric, value, channel)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      alert.severity   || null,
+      alert.title      || null,
+      alert.body       || null,
+      alert.clientId   || null,
+      alert.clientName || null,
+      alert.metric     || null,
+      alert.value != null ? String(alert.value) : null,
+      alert.channel    || null,
+    ]
+  ).catch(err => console.error('[alertDelivery] fired_alerts insert error:', err.message))
+
   sendAlert(alert).catch(err => console.error('[alertDelivery] fireAlert error:', err.message))
 }
 

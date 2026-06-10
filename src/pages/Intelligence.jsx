@@ -48,6 +48,7 @@ export default function Intelligence() {
   const [reallocation, setReallocation] = useState(null) // { roster[], as_of } — channel-reallocation roster (agency-only, prescriptive)
   const [reallocationEfficacy, setReallocationEfficacy] = useState(null) // { calibration, overall, ranked[], by_strength[], by_pair[], by_client[] } — reallocation feedback loop / calibration (agency-only)
   const [reallocationEfficacyHealth, setReallocationEfficacyHealth] = useState(null) // { status, recommended_action, stability_score, applied_factor, raw_factor, distrust, narration, calibration:{flips,high_run,low_run,settled_run,series[]} } — stability watchdog over the calibration tuner (agency-only)
+  const [firedAlerts, setFiredAlerts] = useState([])   // alert inventory — last 100 fired alerts (agency-only)
   const [error, setError]     = useState(null)
   const [running, setRunning] = useState(false)
   const [busyIds, setBusyIds] = useState(() => new Set())
@@ -72,8 +73,8 @@ export default function Intelligence() {
       // allSettled — not Promise.all — so a synthesis hiccup never blanks the feed. If any
       // of the ten synthesis reads stumbles its panel simply hides and the page degrades to
       // exactly what it showed before that layer existed; only a feed failure is fatal.
-      const [feed, roster, bench, recov, sys, traj, pace, eff, pls, realloc, realloEff, realloEffHealth] = await Promise.allSettled([
-        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(), api.getReallocation(), api.getReallocationEfficacy(), api.getReallocationEfficacyHealth(),
+      const [feed, roster, bench, recov, sys, traj, pace, eff, pls, realloc, realloEff, realloEffHealth, alertLog] = await Promise.allSettled([
+        api.getInsights(), api.getPortfolioHealth(), api.getBenchmarks(), api.getRecoveries(), api.getSystemic(), api.getTrajectory(), api.getPacing(), api.getEfficacy(), api.getPulse(), api.getReallocation(), api.getReallocationEfficacy(), api.getReallocationEfficacyHealth(), api.getFiredAlerts(100),
       ])
       if (feed.status !== 'fulfilled') throw feed.reason || new Error('Failed to load insights')
       setInsights(Array.isArray(feed.value?.insights) ? feed.value.insights : [])
@@ -88,6 +89,7 @@ export default function Intelligence() {
       setReallocation(realloc.status === 'fulfilled' && Array.isArray(realloc.value?.roster) ? realloc.value : null)
       setReallocationEfficacy(realloEff.status === 'fulfilled' && realloEff.value?.calibration ? realloEff.value : null)
       setReallocationEfficacyHealth(realloEffHealth.status === 'fulfilled' && realloEffHealth.value?.status ? realloEffHealth.value : null)
+      setFiredAlerts(alertLog.status === 'fulfilled' && Array.isArray(alertLog.value?.alerts) ? alertLog.value.alerts : [])
       setStatus('done')
     } catch (e) {
       setError(e?.message || 'Failed to load insights')
@@ -535,6 +537,35 @@ export default function Intelligence() {
             swept nightly · resolved items drop off automatically when reality clears
           </p>
         </>
+      )}
+      {firedAlerts.length > 0 && <FiredAlertsPanel alerts={firedAlerts} />}
+    </div>
+  )
+}
+
+/* ── alert inventory ─────────────────────────────────────────────────────────── */
+function FiredAlertsPanel({ alerts }) {
+  const sevColor = s =>
+    s === 'critical' ? 'text-red-600' :
+    s === 'warning'  ? 'text-amber-600' :
+    s === 'success'  ? 'text-emerald-600' :
+    'text-slate-400'
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mt-4">
+      <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-3">Alert Log</h3>
+      <div className="space-y-1.5">
+        {alerts.slice(0, 20).map(a => (
+          <div key={a.id} className="flex items-start gap-2 text-xs">
+            <span className={`shrink-0 mt-0.5 font-bold uppercase text-[10px] w-14 ${sevColor(a.severity)}`}>{a.severity || 'info'}</span>
+            <span className="text-slate-700 flex-1 min-w-0 truncate">{a.title}</span>
+            {a.client_name && <span className="text-slate-400 shrink-0">{a.client_name}</span>}
+            <span className="text-slate-300 shrink-0">{new Date(a.fired_at).toLocaleDateString()}</span>
+          </div>
+        ))}
+      </div>
+      {alerts.length > 20 && (
+        <p className="text-[10px] text-slate-400 mt-2 text-center">Showing 20 of {alerts.length}</p>
       )}
     </div>
   )

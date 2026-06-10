@@ -3,6 +3,27 @@ const { query } = require('../db')
 const { requireAgency, scopeClientParam } = require('../middleware/authz')
 const router = express.Router()
 
+// GET /api/goals/:clientId/history — last N goal changes for the client
+// Must be declared BEFORE /:clientId so Express doesn't match 'history' as clientId
+router.get('/:clientId/history', scopeClientParam('clientId'), async (req, res) => {
+  const { clientId } = req.params
+  const limit = Math.min(parseInt(req.query.limit) || 20, 50)
+  try {
+    const { rows } = await query(
+      `SELECT id, month, revenue_target, leads_target, jobs_target, changed_by, changed_at
+         FROM client_goal_history
+        WHERE client_id = $1
+        ORDER BY changed_at DESC
+        LIMIT $2`,
+      [clientId, limit]
+    )
+    res.json(rows)
+  } catch (err) {
+    console.error('[goals] history GET error', err.message)
+    res.status(500).json({ error: 'Failed to load goal history' })
+  }
+})
+
 // GET /api/goals/:clientId — return goals for the current month (and optionally next)
 // Query: ?month=2026-05  (defaults to current month)
 router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
@@ -45,6 +66,19 @@ router.put('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   const targetMonth = `${monthBase}-01`
 
   try {
+    // Snapshot existing value before overwrite (if it exists)
+    const { rows: existing } = await query(
+      `SELECT revenue_target, leads_target, jobs_target FROM client_goals WHERE client_id = $1 AND month = $2`,
+      [clientId, targetMonth]
+    )
+    if (existing.length) {
+      await query(
+        `INSERT INTO client_goal_history (client_id, month, revenue_target, leads_target, jobs_target, changed_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [clientId, targetMonth, existing[0].revenue_target, existing[0].leads_target, existing[0].jobs_target, req.user?.id || null]
+      )
+    }
+
     await query(
       `INSERT INTO client_goals (client_id, month, revenue_target, leads_target, jobs_target, created_by, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)

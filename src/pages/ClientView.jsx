@@ -22,6 +22,7 @@ import AskBox from '@/components/AskBox'
 import ScopeNarrative from '@/components/ScopeNarrative'
 import DriverBreakdown from '@/components/DriverBreakdown'
 import StreamStatus from '@/components/StreamStatus'
+import SpendAreaChart from '@/components/charts/SpendAreaChart'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { useAgency } from '@/lib/agencySettings'
 
@@ -1440,8 +1441,10 @@ export default function ClientView({ store }) {
   const [goalsEdit,   setGoalsEdit]   = useState(false)  // goal ring edit mode
   const [goalDraft,   setGoalDraft]   = useState({})     // draft fields while editing
   const [goalSaving,  setGoalSaving]  = useState(false)  // save in-flight
-  const [events,      setEvents]      = useState([])     // campaign timeline annotations
-  const [eventForm,   setEventForm]   = useState(null)   // null=hidden, obj=open
+  const [events,       setEvents]       = useState([])     // campaign timeline annotations
+  const [eventForm,    setEventForm]    = useState(null)   // null=hidden, obj=open
+  const [goalHistory,  setGoalHistory]  = useState([])     // Build B: prior goal snapshots
+  const [showGoalHist, setShowGoalHist] = useState(false)  // collapsible history toggle
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1538,6 +1541,10 @@ export default function ClientView({ store }) {
     api.getEvents(clientObj.id, 50)
       .then(evs => setEvents(Array.isArray(evs) ? evs : []))
       .catch(() => setEvents([]))
+    // Goal history — last 20 snapshots before each overwrite (Build B)
+    api.getGoalHistory(clientObj.id)
+      .then(rows => setGoalHistory(Array.isArray(rows) ? rows : []))
+      .catch(() => setGoalHistory([]))
   }, [clientObj?.id])
 
   // Initial fetch + refetch whenever the selected client changes.
@@ -1708,7 +1715,7 @@ export default function ClientView({ store }) {
               </p>
 
               {/* Three supporting numbers — animated counters roll up on load */}
-              <div className="grid grid-cols-3 gap-0 border-t border-white/10 pt-4 mb-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-0 border-t border-white/10 pt-4 mb-1">
                 <div className="flex flex-col">
                   <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mb-1">Revenue</p>
                   <p className="text-xl sm:text-2xl font-black text-white leading-none tabular-nums">
@@ -1824,6 +1831,34 @@ export default function ClientView({ store }) {
               </div>
             )}
           </div>
+
+          {/* ── Goal History — collapsible log of prior goal values ── */}
+          {goalHistory.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-3">
+              <button
+                onClick={() => setShowGoalHist(s => !s)}
+                className="w-full flex items-center justify-between"
+              >
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Goal History</span>
+                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showGoalHist ? 'rotate-180' : ''}`} />
+              </button>
+              {showGoalHist && (
+                <div className="mt-3 space-y-1.5">
+                  {goalHistory.map(h => (
+                    <div key={h.id} className="flex items-center justify-between text-xs gap-2">
+                      <span className="text-slate-500 shrink-0">{new Date(h.month).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</span>
+                      <div className="flex gap-3 text-slate-700 flex-1 justify-end">
+                        {h.revenue_target != null && <span>Rev {fmt$$(h.revenue_target)}</span>}
+                        {h.leads_target   != null && <span>Leads {fmtN(h.leads_target)}</span>}
+                        {h.jobs_target    != null && <span>Jobs {fmtN(h.jobs_target)}</span>}
+                      </div>
+                      <span className="text-slate-300 shrink-0 text-[10px]">{new Date(h.changed_at).toLocaleDateString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Campaign Timeline Annotations ── */}
           {USE_API && (
@@ -2009,7 +2044,7 @@ export default function ClientView({ store }) {
                 </p>
                 {/* 3-step if MQL tracked, 2-step otherwise — never fabricate a number */}
                 {mql > 0 ? (
-                  <div className="grid grid-cols-3 gap-0">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-0">
                     {[
                       { label: 'Leads In',     dot: 'bg-blue-500',    val: fmtN(leads), sub: 'people contacted you',                  color: 'text-slate-800' },
                       { label: 'Followed Up',  dot: (mql/leads)>=0.5 ? 'bg-amber-400' : 'bg-rose-500', val: fmtN(mql), sub: 'team responded', color: (mql/leads)>=0.5 ? 'text-amber-600':'text-rose-600' },
@@ -2027,7 +2062,7 @@ export default function ClientView({ store }) {
                   </div>
                 ) : (
                   /* 2-step when follow-up isn't tracked — clean, no fabrication */
-                  <div className="grid grid-cols-2 gap-0">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
                     {[
                       { label: 'Leads In',  dot: 'bg-blue-500',    val: fmtN(leads), sub: 'people contacted you',         color: 'text-slate-800' },
                       { label: 'Jobs Won',  dot: closeRate>=20 ? 'bg-emerald-500' : closeRate>=10 ? 'bg-amber-400':'bg-rose-500', val: fmtN(jobs), sub: `${closeRate.toFixed(0)}% became jobs`, color: closeRate>=20?'text-emerald-600':closeRate>=10?'text-amber-600':'text-rose-600' },
@@ -2133,7 +2168,7 @@ export default function ClientView({ store }) {
                 </div>
 
                 {/* 3 plain-English stats — stack on very small phones, row on sm+ */}
-                <div className="grid grid-cols-3 gap-2 mb-4 min-w-0">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4 min-w-0">
                   {[
                     { label: 'Monthly Visitors', value: fmtN(visits),   sub: 'people find you',   color: 'text-slate-900' },
                     { label: 'Search Terms',      value: fmtN(kwCount),  sub: 'keywords ranking',  color: 'text-sky-600'   },
@@ -2179,8 +2214,8 @@ export default function ClientView({ store }) {
             <CampaignList clientId={clientObj.id} hideWhenEmpty />
           )}
 
-          {/* ── Revenue trend — full width ── */}
-          {mounted && sparkData.length > 1 && (
+          {/* ── Revenue trend — full width (Build A: SpendAreaChart with event markers) ── */}
+          {mounted && weeklyTrend.length > 1 && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-4 fade-up" style={{ animationDelay: '.1s' }}>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Revenue Trend</p>
@@ -2192,9 +2227,9 @@ export default function ClientView({ store }) {
                   </span>
                 )}
               </div>
-              <p className="text-2xl font-black text-slate-900 mb-3">{fmt$$(revenue)}</p>
-              <Sparkline data={sparkData} />
-              <p className="text-[10px] text-slate-400 mt-2">Weekly revenue — last 8 weeks</p>
+              <div className="h-52">
+                <SpendAreaChart data={weeklyTrend} events={events} />
+              </div>
             </div>
           )}
 
