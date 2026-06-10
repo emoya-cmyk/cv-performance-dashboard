@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Smartphone, BarChart2, Zap,
   CheckCircle, AlertCircle, Clock, Sparkles, Target, SlidersHorizontal, Activity,
   Award, Minus, ArrowUpRight, RefreshCw, ShieldCheck,
-  AlertTriangle, Crosshair, Eye, Radar, ThumbsUp, ThumbsDown, Pencil,
+  AlertTriangle, Crosshair, Eye, Radar, ThumbsUp, ThumbsDown, Pencil, FileDown,
 } from 'lucide-react'
 import { fmt$$, fmtN, fmtPct, delta, weekLabel } from '@/lib/utils'
 import { clearToken, getUser } from '@/lib/auth'
@@ -1696,6 +1696,15 @@ export default function ClientView({ store }) {
                 </span>
               )}
               {USE_API && <StreamStatus connected={liveConnected} lastEventAt={liveLastEventAt} showDetail={false} />}
+              {/* Build E: PDF export — no-print so the button itself doesn't appear on the report */}
+              <button
+                onClick={() => window.print()}
+                className="no-print hidden sm:flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl px-2.5 py-1.5 transition-colors"
+                title="Save as PDF"
+              >
+                <FileDown className="w-3 h-3" />
+                <span>PDF</span>
+              </button>
               <div className="relative">
                 <select
                   value={selectedPeriod}
@@ -1711,6 +1720,12 @@ export default function ClientView({ store }) {
         </header>
 
         <div className="max-w-4xl mx-auto px-5">
+
+          {/* Build E: print-only report header — hidden on screen, visible only when printing */}
+          <div className="print-only mb-6 pb-4 border-b border-slate-200">
+            <p className="text-xs font-black tracking-[.2em] uppercase text-slate-400 mb-1">{clientName} · Performance Report</p>
+            <p className="text-[11px] text-slate-500">{periodLabel}</p>
+          </div>
 
           {/* ── Hero ── */}
           <div
@@ -1770,7 +1785,7 @@ export default function ClientView({ store }) {
               goal, the ahead and on-track ones too, not just the misses. Same activity gate
               as the health badge so a brand-new account doesn't open on a wall of "behind";
               the card also self-hides when there's no goal set or it's too early to call. */}
-          {(revenue > 0 || leads > 0 || spend > 0) && <GoalPace pacing={pacing} />}
+          {(revenue > 0 || leads > 0 || spend > 0) && <div className="no-print"><GoalPace pacing={pacing} /></div>}
 
           {/* ── Data-freshness note — the ONE client-safe egress of the self-healing pipeline ──
               Deliberately UNGATED (no revenue/leads/spend gate): a brand-new account whose very
@@ -1778,7 +1793,7 @@ export default function ClientView({ store }) {
               most. Self-gates internally on note.degraded, so a healthy/disabled portfolio renders
               nothing. Carries only the server-authored sentence — never a feed name, status,
               count, or any recovery machinery. */}
-          <DataFreshnessNote note={connNote} />
+          <div className="no-print"><DataFreshnessNote note={connNote} /></div>
 
           {/* ── Goal Progress Ring + edit overlay ── */}
           <div className="relative">
@@ -1799,7 +1814,7 @@ export default function ClientView({ store }) {
                   })
                   setGoalsEdit(true)
                 }}
-                className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                className="no-print absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
                 title="Edit goals"
               >
                 <Pencil size={14} />
@@ -1857,7 +1872,7 @@ export default function ClientView({ store }) {
 
           {/* ── Goal History — collapsible log of prior goal values ── */}
           {goalHistory.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-3">
+            <div className="no-print bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-3">
               <button
                 onClick={() => setShowGoalHist(s => !s)}
                 className="w-full flex items-center justify-between"
@@ -1885,7 +1900,7 @@ export default function ClientView({ store }) {
 
           {/* ── Campaign Timeline Annotations ── */}
           {USE_API && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4">
+            <div className="no-print bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Timeline</h3>
                 {user?.role !== 'client' && (
@@ -1989,7 +2004,7 @@ export default function ClientView({ store }) {
               intelligence digest (counts and area names only — never a severity statistic
               or another client). Same activity gate as the health badge; self-hides when
               there's no recap text yet. */}
-          {(revenue > 0 || leads > 0 || spend > 0) && <WeeklyRecap recap={recap} />}
+          {(revenue > 0 || leads > 0 || spend > 0) && <div className="no-print"><WeeklyRecap recap={recap} /></div>}
 
           {/* ── Your Morning Brief — the grounded AI read of THIS morning, in plain English ──
               WeeklyRecap above tells how LAST week CLOSED; this is today's fresh read on the week
@@ -1998,7 +2013,7 @@ export default function ClientView({ store }) {
               period/posture/focus and strips every peer, severity statistic, and machinery key;
               no regenerate, model name, confidence chip, or badge reaches this surface. Same
               activity gate as the cards around it; self-hides when there's no brief text yet. */}
-          {(revenue > 0 || leads > 0 || spend > 0) && <ClientMorningBrief brief={brief} />}
+          {(revenue > 0 || leads > 0 || spend > 0) && <div className="no-print"><ClientMorningBrief brief={brief} /></div>}
 
           {/* ── This Week So Far — the intra-week daily pulse, client-framed ──
               The recap above tells how LAST week CLOSED; this is the live read on the week
@@ -2008,7 +2023,7 @@ export default function ClientView({ store }) {
               of this client's OWN usual range — a dip days before the next recap, or a stretch
               running ahead. Own numbers only (server-computed client_message, names no peer);
               self-hides when nothing's out of band. Same activity gate as the cards above. */}
-          {(revenue > 0 || leads > 0 || spend > 0) && <ClientPulse pulse={pulse} />}
+          {(revenue > 0 || leads > 0 || spend > 0) && <div className="no-print"><ClientPulse pulse={pulse} /></div>}
 
           {/* ── What's happening right now — the live narrated read of THIS scope ──
               intel-v13 C3: the SAME <ScopeNarrative> the agency Explore view uses, here
@@ -2022,7 +2037,7 @@ export default function ClientView({ store }) {
               no other account's data; tone="client" re-voices copy only. USE_API-gated (live
               server call) and held to the same activity gate as the cards above. */}
           {USE_API && clientObj?.id && (revenue > 0 || leads > 0 || spend > 0) && (
-            <div className="mb-4 fade-up" style={{ animationDelay: '.065s' }}>
+            <div className="no-print mb-4 fade-up" style={{ animationDelay: '.065s' }}>
               <ScopeNarrative
                 input={scopeInsightBody}
                 clientId={clientObj.id}
@@ -2041,7 +2056,7 @@ export default function ClientView({ store }) {
               client") and first-person starter prompts. Same activity gate as the cards
               above so an empty account doesn't invite questions it has no data to answer. */}
           {(revenue > 0 || leads > 0 || spend > 0) && clientObj?.id && (
-            <div className="mb-4 fade-up" style={{ animationDelay: '.075s' }}>
+            <div className="no-print mb-4 fade-up" style={{ animationDelay: '.075s' }}>
               <AskBox
                 clientId={clientObj.id}
                 title="Ask about your results"

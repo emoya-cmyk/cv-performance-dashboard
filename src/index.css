@@ -142,3 +142,24 @@ main, [role="main"] {
   color: #94a3b8 !important;
   font-size: 11px !important;
 }
+
+/* ── Print / PDF export (Build E) ──────────────────────────────── */
+.print-only { display: none; }
+
+@media print {
+  @page { margin: 15mm 12mm; }
+
+  body { background: white !important; }
+
+  .cv-nav, .no-print { display: none !important; }
+
+  .print-only { display: revert !important; }
+
+  /* Preserve dark/brand backgrounds (hero, brand bar) */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .card, .card-sm { page-break-inside: avoid; break-inside: avoid; }
+}
