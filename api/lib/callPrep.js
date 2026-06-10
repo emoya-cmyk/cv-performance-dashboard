@@ -35,6 +35,29 @@ function fmtX(n) { return Number.isFinite(+n) && +n > 0 ? `${(+n).toFixed(1)}×`
 function fmtN(n) { return n != null && +n > 0 ? (+n).toLocaleString() : '0' }
 function sign(n) { return +n >= 0 ? '+' : '' }
 
+// ── Table guard (self-healing: ensure 022 schema exists on first use) ────────
+// Runs CREATE TABLE IF NOT EXISTS once per Lambda instance so call-prep works
+// even if the cold-start migration runner hasn't applied 022 yet (e.g. warm
+// instances from a prior deployment that ran the TEXT-FK broken version).
+let _tableReady = false
+async function ensureTable () {
+  if (_tableReady) return
+  await query(`
+    CREATE TABLE IF NOT EXISTS ai_call_preps (
+      id         SERIAL      PRIMARY KEY,
+      client_id  UUID        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      week_start DATE        NOT NULL,
+      call_prep  JSONB       NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(client_id, week_start)
+    )
+  `)
+  await query(`CREATE INDEX IF NOT EXISTS idx_ai_call_preps_client_week
+    ON ai_call_preps(client_id, week_start DESC)`)
+  _tableReady = true
+}
+
 // ── Default week (last completed Monday) ────────────────────────────────────
 function defaultWeekStart() {
   const d = new Date(); d.setUTCDate(d.getUTCDate() - 7)
@@ -191,6 +214,7 @@ ${context}`,
 // ── Public functions ─────────────────────────────────────────────────────────
 
 async function generateCallPrep(clientId, weekStart) {
+  await ensureTable()
   const ws = weekStart || defaultWeekStart()
 
   // Load evidence + insights concurrently
@@ -238,6 +262,7 @@ async function generateCallPrep(clientId, weekStart) {
 }
 
 async function getCallPrep(clientId, weekStart) {
+  await ensureTable()
   const ws = weekStart || defaultWeekStart()
   const { rows } = await query(
     `SELECT call_prep, updated_at FROM ai_call_preps WHERE client_id = $1 AND week_start = $2`,
