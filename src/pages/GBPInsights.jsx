@@ -33,7 +33,7 @@ export default function GBPInsights() {
     week:       weekLabel(w.week),
     Calls:      w.gbp_calls      || 0,
     Directions: w.gbp_directions || 0,
-    Website:    w.gbp_website    || 0,
+    Website:    w.gbp_website_clicks || 0,
   }))
 
   return (

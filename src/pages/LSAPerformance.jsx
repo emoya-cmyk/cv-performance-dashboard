@@ -29,7 +29,7 @@ export default function LSAPerformance() {
   const stats = data?.stats || {}
 
   const bookRate = stats.lsa_calls > 0
-    ? `${((stats.lsa_booked_jobs / stats.lsa_calls) * 100).toFixed(1)}%`
+    ? `${(((stats.lsa_booked_jobs || 0) / stats.lsa_calls) * 100).toFixed(1)}%`
     : '—'
 
   return (

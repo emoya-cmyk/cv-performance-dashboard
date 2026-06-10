@@ -122,8 +122,8 @@ function SectionCard({ icon: Icon, title, accent, items, numbered }) {
 export default function CallPrep() {
   const ctx = useOutletContext()
   const clients  = ctx?.clients  ?? []
-  const selected = ctx?.selected ?? null
-  const setSelected = ctx?.setSelected ?? (() => {})
+  const selected = ctx?.selectedClient ?? null
+  const setSelected = ctx?.setSelectedClient ?? (() => {})
 
   const [prep, setPrep]       = useState(null)
   const [status, setStatus]   = useState('idle')   // idle | loading | done | error
@@ -132,7 +132,7 @@ export default function CallPrep() {
 
   // Load prep whenever client changes
   useEffect(() => {
-    if (!selected) { setPrep(null); setStatus('idle'); return }
+    if (!selected || selected === 'all') { setPrep(null); setStatus('idle'); return }
     if (!USE_API)  { setPrep(MOCK_PREP); setStatus('done'); return }
 
     setStatus('loading')

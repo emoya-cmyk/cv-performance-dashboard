@@ -2164,7 +2164,7 @@ export default function ClientView({ store }) {
                 Sign out{user?.email ? ` (${user.email})` : ''}
               </button>
             )}
-            <p className="text-[10px] text-slate-300">Powered by 10X Marketing · Updated weekly</p>
+            <p className="text-[10px] text-slate-300">Powered by {agency_name || '10X Marketing'} · Updated weekly</p>
           </div>
 
         </div>

@@ -9,6 +9,7 @@ import {
 import TopBar from '@/components/TopBar'
 import { SkeletonGrid } from '@/components/SkeletonCard'
 import { USE_API, api } from '@/lib/api'
+import { isAgency } from '@/lib/auth'
 import { fmt$, fmtN, weekLabel } from '@/lib/utils'
 import OrganicScoreCard from '@/components/seo/OrganicScoreCard'
 import KeywordRankTable from '@/components/seo/KeywordRankTable'
@@ -18,6 +19,7 @@ import CompetitorCard from '@/components/seo/CompetitorCard'
 function ConnectState({ domain, onDomainSave }) {
   const [val, setVal] = useState(domain || '')
   const [saving, setSaving] = useState(false)
+  const agencyUser = isAgency()
 
   async function save(e) {
     e.preventDefault()
@@ -44,52 +46,65 @@ function ConnectState({ domain, onDomainSave }) {
         and which competitors are winning the same searches as your clients.
       </p>
 
-      {/* Step-by-step activation */}
-      <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left mb-4">
-        <p className="text-xs font-black uppercase tracking-wider text-sky-400 mb-4">Activate in 4 steps</p>
-        <div className="space-y-3">
-          {STEPS.map(s => (
-            <div key={s.n} className="flex items-start gap-3">
-              <span className="w-5 h-5 rounded-full bg-sky-500/15 text-sky-400 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{s.n}</span>
-              <p className="text-xs text-slate-300 leading-relaxed">{s.text}</p>
+      {agencyUser ? (
+        <>
+          {/* Step-by-step activation — agency only */}
+          <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left mb-4">
+            <p className="text-xs font-black uppercase tracking-wider text-sky-400 mb-4">Activate in 4 steps</p>
+            <div className="space-y-3">
+              {STEPS.map(s => (
+                <div key={s.n} className="flex items-start gap-3">
+                  <span className="w-5 h-5 rounded-full bg-sky-500/15 text-sky-400 text-[10px] font-black flex items-center justify-center shrink-0 mt-0.5">{s.n}</span>
+                  <p className="text-xs text-slate-300 leading-relaxed">{s.text}</p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <a
-          href="https://www.semrush.com/api-analytics/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 mt-4 text-xs font-bold text-sky-400 hover:text-sky-300 transition-colors"
-        >
-          <Globe className="w-3 h-3" /> semrush.com/api-analytics →
-        </a>
-      </div>
+            <a
+              href="https://www.semrush.com/api-analytics/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 mt-4 text-xs font-bold text-sky-400 hover:text-sky-300 transition-colors"
+            >
+              <Globe className="w-3 h-3" /> semrush.com/api-analytics →
+            </a>
+          </div>
 
-      {/* Domain pre-save */}
-      <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left">
-        <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-1">
-          Save domain now (optional)
-        </p>
-        <p className="text-[10px] text-slate-500 mb-3">
-          Pre-save the client's domain so the first sync runs automatically once your API key is live.
-        </p>
-        <form onSubmit={save} className="flex gap-2">
-          <input
-            type="text"
-            placeholder="example.com"
-            value={val}
-            onChange={e => setVal(e.target.value)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
-          />
-          <button
-            type="submit"
-            disabled={saving || !val.trim()}
-            className="px-4 py-2 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-colors"
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </form>
-      </div>
+          {/* Domain pre-save — agency only */}
+          <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-5 text-left">
+            <p className="text-xs font-black uppercase tracking-wider text-slate-400 mb-1">
+              Save domain now (optional)
+            </p>
+            <p className="text-[10px] text-slate-500 mb-3">
+              Pre-save the client's domain so the first sync runs automatically once your API key is live.
+            </p>
+            <form onSubmit={save} className="flex gap-2">
+              <input
+                type="text"
+                placeholder="example.com"
+                value={val}
+                onChange={e => setVal(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500/50"
+              />
+              <button
+                type="submit"
+                disabled={saving || !val.trim()}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white text-sm font-bold rounded-xl transition-colors"
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </form>
+          </div>
+        </>
+      ) : (
+        <div className="w-full bg-surface-2 rounded-2xl border border-white/[0.06] p-6 text-center">
+          <p className="text-sm text-slate-300 leading-relaxed">
+            SEO tracking is being configured for your account.
+          </p>
+          <p className="text-xs text-slate-500 mt-2">
+            Contact your account manager to enable organic search reporting.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

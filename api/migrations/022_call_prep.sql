@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS ai_call_preps (
   id          SERIAL      PRIMARY KEY,
-  client_id   TEXT        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  client_id   UUID        NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   week_start  DATE        NOT NULL,
   call_prep   JSONB       NOT NULL DEFAULT '{}',
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
