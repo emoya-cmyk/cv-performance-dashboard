@@ -1447,6 +1447,10 @@ export default function ClientView({ store }) {
   const [showGoalHist, setShowGoalHist] = useState(false)  // collapsible history toggle
   const [lastLoadedAt, setLastLoadedAt] = useState(null)   // Build F: timestamp of last completed load
   const [nowTick,      setNowTick]      = useState(0)      // increments every 30s to recompute age label
+  const [alertRules,      setAlertRules]      = useState(null)   // Build G: per-client WoW alert thresholds
+  const [alertRulesEdit,  setAlertRulesEdit]  = useState(false)
+  const [alertRulesDraft, setAlertRulesDraft] = useState({})
+  const [alertRulesSaving,setAlertRulesSaving]= useState(false)
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1548,6 +1552,14 @@ export default function ClientView({ store }) {
     api.getGoalHistory(clientObj.id)
       .then(rows => setGoalHistory(Array.isArray(rows) ? rows : []))
       .catch(() => setGoalHistory([]))
+  }, [clientObj?.id])
+
+  // Build G: per-client alert thresholds — agency-only, non-blocking
+  useEffect(() => {
+    if (!USE_API || !clientObj?.id) return
+    api.getAlertRules(clientObj.id)
+      .then(r => setAlertRules(r))
+      .catch(() => {})
   }, [clientObj?.id])
 
   // Initial fetch + refetch whenever the selected client changes.
@@ -1979,6 +1991,93 @@ export default function ClientView({ store }) {
                     </li>
                   ))}
                 </ul>
+              )}
+            </div>
+          )}
+
+          {/* ── Alert Thresholds editor (Build G) — agency-only WoW drop settings ── */}
+          {USE_API && user?.role !== 'client' && (
+            <div className="no-print bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Alert Thresholds</h3>
+                {!alertRulesEdit && (
+                  <button
+                    onClick={() => {
+                      setAlertRulesDraft({
+                        revenue_drop_warn: alertRules ? Math.round(alertRules.revenue_drop_warn * 100) : 20,
+                        revenue_drop_crit: alertRules ? Math.round(alertRules.revenue_drop_crit * 100) : 40,
+                        leads_drop_warn:   alertRules ? Math.round(alertRules.leads_drop_warn   * 100) : 20,
+                        leads_drop_crit:   alertRules ? Math.round(alertRules.leads_drop_crit   * 100) : 40,
+                      })
+                      setAlertRulesEdit(true)
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-medium transition-colors"
+                  >Edit</button>
+                )}
+              </div>
+              {!alertRulesEdit ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { label: 'Revenue warn',     val: alertRules?.revenue_drop_warn ?? 0.20 },
+                    { label: 'Revenue critical', val: alertRules?.revenue_drop_crit ?? 0.40 },
+                    { label: 'Leads warn',       val: alertRules?.leads_drop_warn   ?? 0.20 },
+                    { label: 'Leads critical',   val: alertRules?.leads_drop_crit   ?? 0.40 },
+                  ].map(({ label, val }) => (
+                    <div key={label}>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+                      <p className="text-sm font-semibold text-slate-700">{Math.round(val * 100)}% WoW drop</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    {[
+                      { key: 'revenue_drop_warn', label: 'Revenue warn %' },
+                      { key: 'revenue_drop_crit', label: 'Revenue critical %' },
+                      { key: 'leads_drop_warn',   label: 'Leads warn %' },
+                      { key: 'leads_drop_crit',   label: 'Leads critical %' },
+                    ].map(({ key, label }) => (
+                      <div key={key}>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">{label}</label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="99"
+                          value={alertRulesDraft[key] ?? ''}
+                          onChange={e => setAlertRulesDraft(d => ({ ...d, [key]: e.target.value }))}
+                          className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                          placeholder="–"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mb-3">Whole numbers — e.g. 20 = fire an alert when weekly drop ≥ 20%</p>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      onClick={() => setAlertRulesEdit(false)}
+                      className="text-xs px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
+                    >Cancel</button>
+                    <button
+                      disabled={alertRulesSaving}
+                      onClick={async () => {
+                        setAlertRulesSaving(true)
+                        try {
+                          const saved = await api.saveAlertRules(clientObj.id, {
+                            revenue_drop_warn: Number(alertRulesDraft.revenue_drop_warn) / 100,
+                            revenue_drop_crit: Number(alertRulesDraft.revenue_drop_crit) / 100,
+                            leads_drop_warn:   Number(alertRulesDraft.leads_drop_warn)   / 100,
+                            leads_drop_crit:   Number(alertRulesDraft.leads_drop_crit)   / 100,
+                          })
+                          setAlertRules(saved)
+                        } catch (_) {}
+                        setAlertRulesEdit(false)
+                        setAlertRulesSaving(false)
+                      }}
+                      className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-50"
+                    >{alertRulesSaving ? 'Saving…' : 'Save Thresholds'}</button>
+                  </div>
+                </div>
               )}
             </div>
           )}

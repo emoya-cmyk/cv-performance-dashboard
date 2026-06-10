@@ -286,10 +286,9 @@ function startScheduler() {
   console.log(`[scheduler] insights on schedule: ${INSIGHTS_SCHEDULE}`)
 
   // ── WoW threshold alerts — daily 7:30am UTC ───────────────────────────────────
-  // Compares the two most recent weekly_reports rows per client. Fires a warning
-  // for revenue or lead drops >20% WoW and a critical for >40% drops. Skips any
-  // client with fewer than 2 weeks of data. Prior-week baseline must be non-zero
-  // to avoid false alarms on clients with no data in a given week.
+  // Compares the two most recent weekly_reports rows per client. Fires a warning /
+  // critical based on per-client thresholds from client_alert_rules (falls back to
+  // 20% warn / 40% critical). Skips clients with fewer than 2 weeks of data.
   cron.schedule(THRESHOLD_SCHEDULE, async () => {
     console.log('[threshold] starting WoW check', new Date().toISOString())
     try {
@@ -297,16 +296,22 @@ function startScheduler() {
       cutoff.setUTCDate(cutoff.getUTCDate() - 21)
       const cutoffStr = cutoff.toISOString().slice(0, 10)
 
-      const { rows } = await query(
-        `SELECT wr.client_id, c.name AS client_name, wr.week_start,
-                COALESCE(wr.projected_revenue, 0) AS revenue,
-                COALESCE(wr.raw_leads, 0)         AS leads
-           FROM weekly_reports wr
-           JOIN clients c ON c.id = wr.client_id
-          WHERE wr.week_start >= $1
-          ORDER BY wr.client_id, wr.week_start DESC`,
-        [cutoffStr]
-      )
+      const [{ rows }, { rows: ruleRows }] = await Promise.all([
+        query(
+          `SELECT wr.client_id, c.name AS client_name, wr.week_start,
+                  COALESCE(wr.projected_revenue, 0) AS revenue,
+                  COALESCE(wr.raw_leads, 0)         AS leads
+             FROM weekly_reports wr
+             JOIN clients c ON c.id = wr.client_id
+            WHERE wr.week_start >= $1
+            ORDER BY wr.client_id, wr.week_start DESC`,
+          [cutoffStr]
+        ),
+        query(`SELECT client_id, revenue_drop_warn, revenue_drop_crit, leads_drop_warn, leads_drop_crit FROM client_alert_rules`),
+      ])
+
+      const rulesByClient = {}
+      for (const r of ruleRows) rulesByClient[r.client_id] = r
 
       const byClient = {}
       for (const row of rows) {
@@ -314,25 +319,39 @@ function startScheduler() {
         if (byClient[row.client_id].weeks.length < 2) byClient[row.client_id].weeks.push(row)
       }
 
-      for (const [, data] of Object.entries(byClient)) {
+      for (const [clientId, data] of Object.entries(byClient)) {
         const [curr, prev] = data.weeks
         if (!curr || !prev) continue
 
+        const rules = rulesByClient[clientId] ?? {}
         const checks = [
-          { metric: 'Revenue', curr: Number(curr.revenue), prev: Number(prev.revenue) },
-          { metric: 'Leads',   curr: Number(curr.leads),   prev: Number(prev.leads)   },
+          {
+            metric:    'Revenue',
+            curr:      Number(curr.revenue),
+            prev:      Number(prev.revenue),
+            warnAt:    Number(rules.revenue_drop_warn) || 0.20,
+            critAt:    Number(rules.revenue_drop_crit) || 0.40,
+          },
+          {
+            metric:    'Leads',
+            curr:      Number(curr.leads),
+            prev:      Number(prev.leads),
+            warnAt:    Number(rules.leads_drop_warn)   || 0.20,
+            critAt:    Number(rules.leads_drop_crit)   || 0.40,
+          },
         ]
         for (const c of checks) {
           if (c.prev <= 0) continue
           const drop = (c.prev - c.curr) / c.prev
-          if (drop <= 0.2) continue
+          if (drop <= c.warnAt) continue
           const pct      = Math.round(drop * 100)
-          const severity = drop >= 0.4 ? 'critical' : 'warning'
+          const severity = drop >= c.critAt ? 'critical' : 'warning'
           fireAlert({
             title:      `${data.name} — ${c.metric} down ${pct}% WoW`,
             body:       `${data.name} ${c.metric.toLowerCase()} fell from ${c.prev.toFixed(0)} to ${c.curr.toFixed(0)} (−${pct}%) vs the prior week.`,
             severity,
             clientName: data.name,
+            clientId,
             metric:     c.metric,
             value:      `-${pct}%`,
           })

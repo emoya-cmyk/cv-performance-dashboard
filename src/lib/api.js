@@ -292,8 +292,10 @@ export const api = {
   getGoal:        (clientId, month) => get(`/api/goals/${clientId}${month ? `?month=${month}` : ''}`),
   saveGoal:       (clientId, body)  => put(`/api/goals/${clientId}`, body),
   getGoalHistory: (clientId)        => get(`/api/goals/${clientId}/history`),
-  // Alert inventory (agency)
-  getFiredAlerts: (limit) => get(`/api/alerts${limit ? `?limit=${limit}` : ''}`),
+  // Alert inventory + per-client threshold rules (agency)
+  getFiredAlerts:  (limit)            => get(`/api/alerts${limit ? `?limit=${limit}` : ''}`),
+  getAlertRules:   (clientId)         => get(`/api/alerts/rules/${clientId}`),
+  saveAlertRules:  (clientId, rules)  => put(`/api/alerts/rules/${clientId}`, rules),
   // Campaign events (timeline annotations)
   getEvents:   (clientId, limit) => get(`/api/events/${clientId}${limit ? `?limit=${limit}` : ''}`),
   createEvent: (clientId, body)  => post(`/api/events/${clientId}`, body),
