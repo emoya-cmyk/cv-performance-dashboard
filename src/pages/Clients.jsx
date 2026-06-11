@@ -925,7 +925,15 @@ export default function Clients() {
   const [editClient,   setEditClient]   = useState(null)   // ClientUpdateModal target
   const [deleteTarget, setDeleteTarget] = useState(null)   // DeleteClientModal target
   const [amFilter,     setAmFilter]     = useState('')
+  const [fleetRules,   setFleetRules]   = useState({})
   const user = getUser()
+
+  useEffect(() => {
+    if (!USE_API) return
+    api.getFleetAlertRules()
+      .then(r => setFleetRules(r?.rules || {}))
+      .catch(() => {})
+  }, [])
 
   const amOwners = [...new Set(clientSummary.map(c => c.am_owner).filter(Boolean))].sort()
   const filtered = amFilter ? clientSummary.filter(c => c.am_owner === amFilter) : clientSummary
@@ -1085,20 +1093,27 @@ export default function Clients() {
                 </div>
               </div>
               {(!USE_API || isAgency()) && (
-                <div className="flex items-center gap-2 pt-2 mt-2 border-t border-slate-50">
-                  <button
-                    onClick={e => { e.stopPropagation(); store.setSelectedClient(c.id); navigate('/my-dashboard') }}
-                    className="flex-1 text-center text-[10px] font-bold text-brand-500 hover:text-brand-700 hover:bg-brand-50 py-1.5 rounded-lg transition-colors border border-brand-100"
-                  >
-                    Call Prep →
-                  </button>
-                  <button
-                    onClick={e => { e.stopPropagation(); navigate('/intelligence') }}
-                    className="flex-1 text-center text-[10px] font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-50 py-1.5 rounded-lg transition-colors border border-slate-100"
-                  >
-                    Intel →
-                  </button>
-                </div>
+                <>
+                  <div className="flex items-center gap-2 pt-2 mt-2 border-t border-slate-50">
+                    <button
+                      onClick={e => { e.stopPropagation(); store.setSelectedClient(c.id); navigate('/my-dashboard') }}
+                      className="flex-1 text-center text-[10px] font-bold text-brand-500 hover:text-brand-700 hover:bg-brand-50 py-1.5 rounded-lg transition-colors border border-brand-100"
+                    >
+                      Call Prep →
+                    </button>
+                    <button
+                      onClick={e => { e.stopPropagation(); navigate('/intelligence') }}
+                      className="flex-1 text-center text-[10px] font-bold text-slate-500 hover:text-slate-700 hover:bg-slate-50 py-1.5 rounded-lg transition-colors border border-slate-100"
+                    >
+                      Intel →
+                    </button>
+                  </div>
+                  {fleetRules[c.id] && (
+                    <div className="text-[9px] text-slate-400 text-center mt-1">
+                      Monitoring: Rev ≥{Math.round((fleetRules[c.id].revenue_drop_warn || 0.20) * 100)}% · Leads ≥{Math.round((fleetRules[c.id].leads_drop_warn || 0.20) * 100)}%
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )

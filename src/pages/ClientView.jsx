@@ -1451,6 +1451,7 @@ export default function ClientView({ store }) {
   const [alertRulesEdit,  setAlertRulesEdit]  = useState(false)
   const [alertRulesDraft, setAlertRulesDraft] = useState({})
   const [alertRulesSaving,setAlertRulesSaving]= useState(false)
+  const [clientAlerts,   setClientAlerts]   = useState([])    // Build H: recent fired alerts (both roles)
 
   const {
     stats: aggStats = {}, prevStats: aggPrev = {}, weeklyTrend: aggTrend = [],
@@ -1559,6 +1560,14 @@ export default function ClientView({ store }) {
     if (!USE_API || !clientObj?.id) return
     api.getAlertRules(clientObj.id)
       .then(r => setAlertRules(r))
+      .catch(() => {})
+  }, [clientObj?.id])
+
+  // Build H: per-client fired alerts — scoped endpoint (agency sees any; client sees own), non-blocking
+  useEffect(() => {
+    if (!USE_API || !clientObj?.id) return
+    api.getClientAlerts(clientObj.id)
+      .then(r => setClientAlerts(Array.isArray(r?.alerts) ? r.alerts : []))
       .catch(() => {})
   }, [clientObj?.id])
 
@@ -1806,6 +1815,11 @@ export default function ClientView({ store }) {
               nothing. Carries only the server-authored sentence — never a feed name, status,
               count, or any recovery machinery. */}
           <div className="no-print"><DataFreshnessNote note={connNote} /></div>
+          {(revenue > 0 || leads > 0 || spend > 0) && !connNote?.degraded && scopeWindow?.end && (
+            <p className="no-print text-center text-[11px] text-slate-400 -mt-1">
+              Data through {new Date(scopeWindow.end + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+            </p>
+          )}
 
           {/* ── Goal Progress Ring + edit overlay ── */}
           <div className="relative">
@@ -2079,6 +2093,30 @@ export default function ClientView({ store }) {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── Monitoring History — recent fired alerts, visible to both agency and client ── */}
+          {USE_API && clientAlerts.length > 0 && (
+            <div className="no-print bg-white rounded-2xl border border-slate-100 shadow-sm px-5 py-4">
+              <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500 mb-3">Monitoring History</h3>
+              <div className="space-y-2.5">
+                {clientAlerts.slice(0, 5).map(a => (
+                  <div key={a.id} className="flex items-start gap-2.5">
+                    <span className={`mt-0.5 shrink-0 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full ${
+                      a.severity === 'critical' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {a.severity === 'critical' ? 'Critical' : 'Warning'}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-xs text-slate-700 leading-snug">{a.title}</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {new Date(a.fired_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

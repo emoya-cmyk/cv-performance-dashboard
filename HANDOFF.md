@@ -1,6 +1,6 @@
 # Performance Dashboard — Handoff Brief
 
-_Last updated: 2026-06-04 · HEAD `494da9a` on `main` (local-only, never pushed)_
+_Last updated: 2026-06-10 · HEAD `2ca22d7` on `main` (pushed to origin)_
 
 Start a new chat with this file. It states **what the tool is**, **what's built**,
 **what was just finished**, and **what's next** to get to client onboarding.
@@ -42,7 +42,7 @@ React + Vite + Tailwind (src/)            Express + node-postgres / SQLite (api/
   - `lib/ask.js` `compileQuery` (NL → validated spec → safe SQL → grounded answer) — **scoped**.
   - `semantic/compile.js` `runQuerySpec` (powers `POST /api/query`) — honors `clients:'all'`,
     so it is **clamped in the route** for `client` callers (see §4).
-- **Tests:** `node --test` (1977 currently green). DB seam: unset `DATABASE_URL` +
+- **Tests:** `node --test` (2029 currently green). DB seam: unset `DATABASE_URL` +
   `SQLITE_PATH` → ephemeral SQLite, set **before** any `require('../db')`.
 
 ---
@@ -204,6 +204,37 @@ Judged acceptable-for-launch and deliberately **not** pursued: email-format vali
 presence checks suffice for a single-agency deploy) and refresh-token rotation (7-day stateless JWT
 is fine for the trust model). API gate **1977/1977**; FE `vite build` green.
 
+### 4.7 Persona-driven enhancements — Build H (Builds A–G → HEAD `2ca22d7`)
+
+After the launch-hardening sprint, a **persona-based critique** surfaced four actionable gaps.
+All four shipped as a single Build H, gates 2029/2029 green:
+
+**Builds A–G (committed before this session, pushed to origin/main):**
+
+- **A** — Funnel: suppress dropped-% across unit boundaries (agency/client both).
+- **B** — Seed `ads_clicks` at funnel-aggregate grain (dev.db fixture).
+- **C** — Seed daily `fact_metric` grain for `/explore` correctness.
+- **D** — Seed intelligence-layer insights output.
+- **E** — `/clients` card derives ROI + Win rate from existing fields.
+- **F** — `useCountUp` snap-to-target fallback + `prefers-reduced-motion` support.
+- **G** — Per-client WoW alert thresholds: `client_alert_rules` table (migration 029),
+  `GET/PUT /api/alerts/rules/:clientId`, Alert Thresholds card in ClientView (agency-only inline
+  edit overlay with warn/critical sliders for Revenue and Leads).
+
+**Build H — four persona-driven gaps (this session):**
+
+| Sub | Who sees it | What |
+|-----|-------------|------|
+| H1 | Both | "Data through Jun 9, 2026" freshness line in ClientView, gated on `!degraded && data present` |
+| H2 | Agency | Fleet threshold badge on each Clients.jsx card: `Monitoring: Rev ≥20% · Leads ≥20%` (single batch `GET /api/alerts/rules`) |
+| H3 | Both | "Monitoring History" recent-alerts panel in ClientView (last 5; scoped endpoint so client sees only own) |
+| H4 | Agency | This HANDOFF.md refresh |
+
+New API surface added in Build H:
+- `GET /api/alerts/rules` (no param, agency-only) — fleet-wide batch thresholds, no N+1.
+- `GET /api/alerts/client/:clientId` (`scopeClientParam` — agency or own client) — last 10 fired alerts.
+Both registered before their param-bearing siblings (routing-order safe).
+
 ### Operator gates before go-live (Class-C — never self-healed in code)
 The sprint closed everything automatable. What remains is **operator-only** (secrets, OAuth, host
 plan) — automate up to the click, then a human does it:
@@ -237,10 +268,10 @@ plan) — automate up to the click, then a human does it:
 
 ## 5. What's next (suggested order for the new chat)
 
-> **The entire build backlog #1–#268 is complete** — all intel-vN feature work (through the
-> intel-v14 D11 stability cue, `4fe8845`), the full launch-hardening sprint, **and** the gate-6
-> auth-provisioning hardening (`7cd9d9c` → `494da9a`, §4.6) are done, both gates green.
-> **Nothing code-side is open.** What remains to go live is **operator-only** (Class-C):
+> **Build backlog #1–#268 + Builds A–H are complete** — all intel-vN feature work, the full
+> launch-hardening sprint, the gate-6 auth-provisioning hardening, and the persona-driven Build H
+> enhancements (§4.7) are done, 2029/2029 tests green, pushed to origin/main.
+> What remains to go live is **operator-only** (Class-C):
 
 1. **Provision the operator gates** — §4's "Operator gates" 1–5: deploy with `JWT_SECRET` (auto on
    Render; now boot-enforced — §4.6), set `CRON_SECRET` + wire the Render Cron Job, optionally set
