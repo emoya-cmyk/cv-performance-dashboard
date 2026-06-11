@@ -494,6 +494,36 @@ async function seed() {
     console.warn('[seed] job_heartbeats seed skipped:', e.message)
   }
 
+  // ── fired_alerts demo rows (H3 monitoring history panel) ──────────────────────
+  // Seeds 3 realistic alert rows so the Monitoring History panel in ClientView
+  // renders in dev/demo instead of staying hidden. Idempotent: seed-tagged rows are
+  // purged first so a re-run converges rather than accumulates duplicates.
+  try {
+    await query(`DELETE FROM fired_alerts WHERE body LIKE '%"seed":true%'`)
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString()
+    const ALERT_ROWS = [
+      [daysAgo(2),  'critical', 'Revenue drop — Apex Roofing',
+       JSON.stringify({ seed: true, note: 'Week-over-week revenue fell 43% — below critical threshold' }),
+       clientIds[0], 'Apex Roofing',   'revenue', '-43%', 'google_ads'],
+      [daysAgo(5),  'warning',  'Lead volume below threshold — Apex Roofing',
+       JSON.stringify({ seed: true, note: 'Week-over-week leads fell 22% — below warning threshold' }),
+       clientIds[0], 'Apex Roofing',   'leads',   '-22%', 'lsa'],
+      [daysAgo(9),  'warning',  'Lead volume below threshold — Blue Sky HVAC',
+       JSON.stringify({ seed: true, note: 'Week-over-week leads fell 24% — below warning threshold' }),
+       clientIds[1], 'Blue Sky HVAC',  'leads',   '-24%', 'google_ads'],
+    ]
+    for (const [fa, sev, title, body, cid, cname, metric, value, channel] of ALERT_ROWS) {
+      await query(
+        `INSERT INTO fired_alerts (fired_at, severity, title, body, client_id, client_name, metric, value, channel)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [fa, sev, title, body, cid, cname, metric, value, channel]
+      )
+    }
+    console.log(`[seed] seeded ${ALERT_ROWS.length} fired_alerts demo rows (monitoring history panel)`)
+  } catch (e) {
+    console.warn('[seed] fired_alerts seed skipped:', e.message)
+  }
+
   // ── intelligence layer (defect D) ──────────────────────────────────────────────
   // The insights table seeds empty, so /intelligence and the per-client insight feed
   // opened blank on a fresh DB. Rather than hand-fake rows, run the REAL nightly sweep

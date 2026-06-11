@@ -60,6 +60,7 @@ const { router: sharesRouter } = require('../routes/shares')
 const campaignsRouter      = require('../routes/campaigns')
 const insightsRouter       = require('../routes/insights')
 const aiRouter             = require('../routes/ai')
+const alertsRouter         = require('../routes/alerts')
 
 // (3) Build the app, mirroring server.js mounts (real requireAuth + each
 //     router's own guards). Uses express.json() in place of server.js's custom
@@ -78,6 +79,7 @@ app.use('/api/shares',      requireAuth, sharesRouter)
 app.use('/api/campaigns',   requireAuth, campaignsRouter)
 app.use('/api/ai',          requireAuth, aiRouter)
 app.use('/api/insights',    requireAuth, insightsRouter)
+app.use('/api/alerts',      requireAuth, alertsRouter)
 
 // The two inline email routes from server.js (GET = scoped, PUT = agency-only).
 // `/:id/email` is two segments, so the clients router's `/:id` (one segment)
@@ -186,6 +188,7 @@ const SCOPED_GET = [
   (id) => `/api/insights/${id}`,
   (id) => `/api/clients/${id}`,
   (id) => `/api/clients/${id}/email`,
+  (id) => `/api/alerts/client/${id}`,
 ]
 
 test('scopeClientParam GET surfaces: client→OWN allowed, client→OTHER 403, agency allowed', async () => {
@@ -235,6 +238,10 @@ const AGENCY_ONLY = [
   ['PUT',    `/api/clients/${B}`],
   ['DELETE', `/api/clients/${B}`],
   ['PUT',    `/api/clients/${A}/email`],
+  ['GET',    `/api/alerts/`],
+  ['GET',    `/api/alerts/rules`],
+  ['GET',    `/api/alerts/rules/${A}`],
+  ['PUT',    `/api/alerts/rules/${A}`],
 ]
 
 test('requireAgency surfaces: role=client is denied (403) on every agency-only endpoint', async () => {
@@ -254,6 +261,8 @@ const AGENCY_ALLOWED_SAFE = [
   ['GET',  `/api/connections/${A}`],
   ['GET',  `/api/shares/${A}`],
   ['POST', `/api/sync/${A}/all`],
+  ['GET',  `/api/alerts/`],
+  ['GET',  `/api/alerts/rules`],
 ]
 
 test('requireAgency surfaces: role=agency passes the guard on safe agency reads', async () => {
