@@ -1,0 +1,11 @@
+{
+  "name": "@emoya-cmyk/memory-os",
+  "version": "0.1.0",
+  "description": "Portable, scoped, decaying agent memory — dependency-injected DB and grounding.",
+  "main": "index.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "files": ["index.js", "schema.sql", "schema.sqlite.sql", "README.md"],
+  "repository": { "type": "git", "url": "git+https://github.com/emoya-cmyk/memory-os.git" },
+  "publishConfig": { "registry": "https://npm.pkg.github.com" }
+}

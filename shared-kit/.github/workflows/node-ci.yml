@@ -1,0 +1,74 @@
+name: Node CI (reusable)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable CI workflow shared across emoya-cmyk repos.
+#
+# Call it from a repo's own .github/workflows/ci.yml (see ci-caller-example.yml).
+# It installs dependencies with `npm ci --include=dev` so that a committed
+# `.npmrc` containing `production=true` (which omits devDependencies — e.g. test
+# drivers like better-sqlite3, or build tools like vite) can NEVER make CI skip
+# the very packages the test/build need. That exact trap silently red-lined a
+# repo's CI; this workflow makes the fix the default everywhere.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node version for both jobs.
+        type: string
+        default: '20'
+      test-dir:
+        description: Dir with the test package (package.json + lockfile). Empty string skips the test job.
+        type: string
+        default: ''
+      test-command:
+        description: Command to run tests in test-dir.
+        type: string
+        default: 'node --test'
+      build-dir:
+        description: Dir to run the build in. Empty string skips the build job.
+        type: string
+        default: '.'
+      build-command:
+        description: Build command run in build-dir.
+        type: string
+        default: 'npx vite build'
+
+jobs:
+  test:
+    if: inputs.test-dir != ''
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.test-dir }}/package-lock.json
+      - name: Install deps (including devDependencies)
+        run: npm ci --include=dev
+        working-directory: ${{ inputs.test-dir }}
+      - name: Run tests
+        run: ${{ inputs.test-command }}
+        working-directory: ${{ inputs.test-dir }}
+        # Harmless if unused; satisfies apps that fail-closed without it.
+        env:
+          JWT_SECRET: ci-test-secret
+
+  build:
+    if: inputs.build-dir != ''
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - name: Install deps (including devDependencies)
+        run: npm ci --include=dev
+      - name: Build
+        run: ${{ inputs.build-command }}
+        working-directory: ${{ inputs.build-dir }}
