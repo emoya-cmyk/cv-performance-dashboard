@@ -73,3 +73,12 @@ test('a client scope confines semantic recall to its own tenant', async () => {
   assert.ok(out.every((m) => m.client_id === 'tenantX'))
   assert.ok(!out.some((m) => /for Y/.test(m.content)))
 })
+
+test('an agency fleet search (no clientId) spans all clients, not just NULL-scoped', async () => {
+  await ready()
+  await remember(AGENCY, { client_id: 'fa', kind: 'note', content: 'leads grew for fa', source: 'fact' })
+  await remember(AGENCY, { client_id: 'fb', kind: 'note', content: 'leads grew for fb', source: 'fact' })
+  const out = await semanticRecall(AGENCY, 'leads', { embed, k: 10 })  // no clientId
+  const ids = out.map((m) => m.client_id)
+  assert.ok(ids.includes('fa') && ids.includes('fb'), 'fleet search must not be clamped to agency-wide only')
+})

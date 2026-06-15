@@ -32,8 +32,12 @@ function cosine(a, b) {
 async function semanticRecall(scope, queryText, opts = {}) {
   const k     = Number.isInteger(opts.k) && opts.k > 0 ? opts.k : 5
   const embed = typeof opts.embed === 'function' ? opts.embed : null
-  const pool  = await recall(scope, { kind: opts.kind, clientId: opts.clientId },
-    { k: opts.candidatePool || 50, now: opts.now })
+  // Only include clientId when explicitly provided — passing it as undefined
+  // would make recall treat it as a NULL (agency-wide) filter.
+  const query = {}
+  if (opts.kind) query.kind = opts.kind
+  if (opts.clientId !== undefined) query.clientId = opts.clientId
+  const pool = await recall(scope, query, { k: opts.candidatePool || 50, now: opts.now })
 
   // No embedder (or no query) → keyword fallback over the same scoped pool.
   if (!embed || !queryText) {
