@@ -16,6 +16,7 @@
 const { query }             = require('../db')
 const { buildEvidencePack } = require('./evidence')
 const { generateRecapText } = require('./ai')
+const { buildContinuity }   = require('./memoryContext')
 const { weekStartOf }       = require('./rollup')
 
 // Most recently COMPLETED ISO week (last Monday). weekStartOf(today) is the
@@ -54,6 +55,14 @@ function normalizeRecapRow(row) {
 async function generateRecap(clientId, weekStart) {
   const ws   = weekStart || defaultWeekStart()
   const pack = await buildEvidencePack(clientId, ws)
+
+  // Memory OS Phase 4: capture this week's highlights and recall prior ones so
+  // the narration can draw a through-line. Additive, STRING-only, non-throwing —
+  // it leaves the grounding allow-set and the fail-safe recap path untouched, and
+  // the output verifier still rejects any stale number the model might echo.
+  const { continuity } = await buildContinuity(clientId, pack, { scope: { role: 'agency' } })
+  if (continuity.length) pack.continuity = continuity
+
   const { text, model, grounded } = await generateRecapText(pack)
 
   await query(

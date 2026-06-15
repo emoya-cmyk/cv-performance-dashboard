@@ -229,6 +229,13 @@ const SYSTEM_PROMPT = [
   '  never as a failure or a tactic that "did not work".',
   '- Use ONLY the labels and the integer counts inside that object — never invent a',
   '  percentage or a success rate. If every count is zero, write nothing about posture.',
+  '',
+  'CONTINUITY (only if a non-empty "continuity" array is present):',
+  '- Each entry is a short note the system remembered from a PRIOR week. You MAY add',
+  '  ONE sentence drawing a through-line ("the second straight week leads climbed"),',
+  '  but Rule 1 still holds absolutely: any number you write must be in THIS pack —',
+  '  never quote a figure from a continuity note. If nothing connects cleanly to this',
+  '  week, omit it; never force a callback.',
 ].join('\n')
 
 const USER_PREAMBLE =
