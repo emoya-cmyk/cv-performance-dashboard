@@ -151,6 +151,78 @@ test('classifier is deterministic and pure (same input → same output)', () => 
   assert.deepEqual(ctx, { retryCount: 0 })
 })
 
+// ── classifyFailure — cross-tier precedence (FR-2 "evaluated in order") ────────
+// These pin the *ordering* between tiers. They are the invariants a port (e.g.
+// the Python reimplementation in cli_framework) is most likely to break by
+// reordering branches, so they are the heart of the conformance spec.
+
+test('precedence: a retry-safe code (429) outranks co-present auth/data context', () => {
+  // 429 is evaluated before the 401 auth branch and before any Tier 1 signal.
+  const d = classifyFailure(
+    { error_code: 429 },
+    { refreshTokenAvailable: true, missingFields: ['email'], malformedPayload: true },
+  )
+  assert.equal(d.tier, TIER.RETRY)
+  assert.equal(d.reason, 'rate_limit')
+})
+
+test('precedence: rate limit (429) has no retry cap — always retries', () => {
+  // Unlike timeouts, 429 is never promoted on retryCount; a port must not apply
+  // the TIMEOUT_MAX_RETRY cap to rate limiting.
+  const d = classifyFailure({ error_code: 429 }, { retryCount: 99 })
+  assert.equal(d.tier, TIER.RETRY)
+  assert.equal(d.reason, 'rate_limit')
+})
+
+test('precedence: timeout promotes exactly at the retry cap boundary (2 retries, then 3)', () => {
+  assert.equal(classifyFailure({ error_code: 504 }, { retryCount: 2 }).tier, TIER.RETRY)
+  assert.equal(classifyFailure({ error_code: 504 }, { retryCount: 3 }).tier, TIER.DATA)
+})
+
+test('precedence: Tier 2 auth (401/403) outranks co-present Tier 1 data signals', () => {
+  const a = classifyFailure({ error_code: 401 }, { refreshTokenAvailable: true, missingFields: ['email'] })
+  assert.equal(a.tier, TIER.AUTH)
+  assert.equal(a.reason, 'auth_expired_refreshable')
+  const b = classifyFailure({ error_code: 403 }, { canonicalIdMissing: true, fieldMapMiss: true })
+  assert.equal(b.tier, TIER.AUTH)
+  assert.equal(b.reason, 'auth_forbidden_scope')
+})
+
+test('precedence: an invalid signature outranks Tier 1 data signals', () => {
+  const d = classifyFailure({ error_code: 200 }, { signatureValid: false, malformedPayload: true })
+  assert.equal(d.tier, TIER.AUTH)
+  assert.equal(d.reason, 'webhook_signature_invalid')
+})
+
+test('precedence: signatureValid must be strictly false to trip — true/undefined fall through', () => {
+  // A truthiness check here would be a porting bug: only an explicit HMAC
+  // mismatch (=== false) is an auth failure; otherwise it falls to Tier 3.
+  assert.equal(classifyFailure({ error_code: 200 }, { signatureValid: true }).tier, TIER.UNKNOWN)
+  assert.equal(classifyFailure({ error_code: 200 }, {}).tier, TIER.UNKNOWN)
+})
+
+test('precedence: Tier 1 internal order is missingFields → canonicalId → fieldMap → malformed', () => {
+  const all = { missingFields: ['email'], canonicalIdMissing: true, fieldMapMiss: true, malformedPayload: true }
+  assert.equal(classifyFailure({}, all).reason, 'missing_required_field')
+  const { missingFields, ...noFields } = all
+  assert.equal(classifyFailure({}, noFields).reason, 'canonical_id_missing')
+  assert.equal(classifyFailure({}, { fieldMapMiss: true, malformedPayload: true }).reason, 'field_mapping_mismatch')
+  assert.equal(classifyFailure({}, { malformedPayload: true }).reason, 'malformed_payload')
+})
+
+test('precedence: an empty missingFields array is not a Tier 1 trigger', () => {
+  // Array.isArray && length > 0 — an empty array must fall through, not classify.
+  assert.equal(classifyFailure({ error_code: 418 }, { missingFields: [] }).tier, TIER.UNKNOWN)
+})
+
+test('Tier 2 refreshable is a non-auto, non-human state (attempt refresh, then notify)', () => {
+  // autoResolvable defaults false for AUTH; the 401-refreshable override only
+  // clears humanRequired. Pin this so a port keeps both flags distinct.
+  const d = classifyFailure({ error_code: 401 }, { refreshTokenAvailable: true })
+  assert.equal(d.autoResolvable, false)
+  assert.equal(d.humanRequired, false)
+})
+
 // ── wilsonFeedback (FR-9) ─────────────────────────────────────────────────────
 
 test('wilsonFeedback maps outcomes to deltas and freeze', () => {

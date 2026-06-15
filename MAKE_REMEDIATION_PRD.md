@@ -133,7 +133,12 @@ When `cli_framework` is in scope:
    `crypto`). It is the single source of truth for the taxonomy and is the natural Layer B core.
 2. The route's DB helpers assume a `pg`-compatible `query()` (this repo's `db.js`). In
    `cli_framework` (Python), reimplement intake/persistence against its DB layer but keep the
-   classifier semantics identical — the unit tests double as the conformance spec.
+   classifier semantics identical — the unit tests double as the conformance spec. In
+   particular, `api/test/makeRemediation.test.js` pins the **cross-tier precedence** (FR-2
+   "evaluated in order"): retry-safe codes outrank auth, auth outranks data, `429` has no retry
+   cap while timeouts promote at the cap boundary, `signatureValid` must be strictly `false` to
+   trip, and the Tier 1 internal order is missingFields → canonicalId → fieldMap → malformed.
+   Mirror these cases in the Python port.
 3. The **field-equivalence map (158 entries)** and the **operator fix queue (Layer C)** already
    live in `cli_framework`; wire Tier 1 active remap there instead of the dead-letter fallback
    used here.
