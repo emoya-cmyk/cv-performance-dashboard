@@ -247,3 +247,12 @@ test('POST /api/cron/memory runs governance + capture on an empty DB → 200', a
   assert.equal(r.body.governance.ok, true)        // live-count verify-after held
   assert.equal(r.body.capture.captured, 0)        // no clients/highlights yet
 })
+
+test('GET /api/cron/memory works too (Vercel-cron compatible) and still fails closed', async () => {
+  await ready()
+  const ok = await call('GET', '/api/cron/memory', { bearer: CRON_SECRET })
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.ok, true)
+  const noAuth = await call('GET', '/api/cron/memory')
+  assert.equal(noAuth.status, 401)
+})

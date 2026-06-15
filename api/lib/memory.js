@@ -43,6 +43,8 @@ const AUTHORITY = Object.freeze({
 const HALF_LIFE_DAYS = 30   // confidence halves every 30 days since last reinforcement
 const DEFAULT_K      = 10   // default recall fan-out
 const DAY_MS         = 86_400_000
+const MAX_KIND_LEN    = 64    // a kind is a short tag
+const MAX_CONTENT_LEN = 2000  // bound a single memory's size to prevent store bloat
 
 function nowIso() { return new Date().toISOString() }
 
@@ -114,6 +116,10 @@ async function remember(scope, claim) {
   const source  = typeof claim.source === 'string' ? claim.source.trim() : ''
   if (!kind)    throw new Error('memory: claim.kind required')
   if (!content) throw new Error('memory: claim.content required')
+  // Size guardrails — bound what a single write can store so an oversized payload
+  // can't bloat the store (the route surfaces these as 400, not 500).
+  if (kind.length > MAX_KIND_LEN)       throw new Error(`memory: kind exceeds ${MAX_KIND_LEN} chars`)
+  if (content.length > MAX_CONTENT_LEN) throw new Error(`memory: content exceeds ${MAX_CONTENT_LEN} chars`)
   if (!(source in AUTHORITY)) {
     throw new Error(`memory: unknown source "${source}" (expected one of ${Object.keys(AUTHORITY).join(', ')})`)
   }

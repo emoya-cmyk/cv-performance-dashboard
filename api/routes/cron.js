@@ -126,7 +126,7 @@ router.post('/heartbeat', cronAuth, async (req, res) => {
   }
 })
 
-// POST /api/cron/memory — the DAILY memory-autonomy driver (cronAuth-gated).
+// GET|POST /api/cron/memory — the DAILY memory-autonomy driver (cronAuth-gated).
 // Separate from /heartbeat on purpose: memory governance + capture are daily/
 // weekly work, not the ~15-min heartbeat cadence — so they ride their own
 // external cron. This is what makes the Memory OS self-heal/self-capture even on
@@ -134,7 +134,11 @@ router.post('/heartbeat', cronAuth, async (req, res) => {
 // a single step's failure still returns 200 with that step's { ok:false } so a
 // well-formed request never 500s on an internal hiccup. Fails CLOSED on auth like
 // every cron route (503 without CRON_SECRET, 401 on a bad bearer).
-router.post('/memory', cronAuth, async (_req, res) => {
+//
+// Both verbs are accepted: GET so a Vercel cron (which sends GET + an auto
+// Authorization: Bearer $CRON_SECRET header, scheduled in vercel.json) can drive
+// it identically to /tick; POST for a Render Cron Job / any external scheduler.
+async function memoryCronHandler(_req, res) {
   const result = { ok: true, governance: null, capture: null }
   try {
     result.governance = await governMemory()           // never throws; returns an audit
@@ -148,6 +152,8 @@ router.post('/memory', cronAuth, async (_req, res) => {
     result.ok = false; result.capture = { ok: false, error: err.message }
   }
   res.json(result)
-})
+}
+router.get('/memory', cronAuth, memoryCronHandler)
+router.post('/memory', cronAuth, memoryCronHandler)
 
 module.exports = { router, cronAuth }
