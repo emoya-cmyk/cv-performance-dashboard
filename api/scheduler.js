@@ -22,6 +22,7 @@ const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = requir
 const { planJobRecovery } = require('./lib/opsRecovery')
 const { fireAlert }       = require('./lib/alertDelivery')
 const memoryEngine        = require('./lib/memory')
+const { governMemory }    = require('./lib/memoryGovernor')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -506,24 +507,31 @@ function startScheduler() {
 
   console.log(`[scheduler] watchdog on schedule: ${WATCHDOG_SCHEDULE}`)
 
-  // ── Memory compaction — daily (Memory OS Phase 3) ──────────────────────────
-  // Reclaim long-dead agent_memory rows (forgotten or expired beyond the
-  // retention window); LIVE memories are never touched. The logic lives in the
-  // pure, tested lib/memory.compact — this only schedules it, in an isolated
-  // try/catch so a compaction failure never disturbs the other sweeps.
+  // ── Memory governance — daily (Memory OS Phase 3 → Phase 5) ────────────────
+  // The autonomous self-heal: assess the store, then apply the safe corrective
+  // within guardrails (compact dead rows; escalate runaway live growth; never
+  // touch live memory; verify-after). Logic lives in the tested lib/memoryGovernor
+  // — this only schedules it, isolated so a failure never disturbs other sweeps.
+  // (memoryEngine.compact remains the raw tool the governor calls.)
   const MEMORY_COMPACT_SCHEDULE = process.env.MEMORY_COMPACT_CRON || '30 3 * * *'
   if (cron.validate(MEMORY_COMPACT_SCHEDULE)) {
     cron.schedule(MEMORY_COMPACT_SCHEDULE, async () => {
       try {
-        const reclaimed = await memoryEngine.compact()
-        console.log(`[scheduler] memory compaction reclaimed ${reclaimed} dead rows`)
+        const audit = await governMemory()
+        if (!audit.ok) {
+          console.error('[scheduler] memory governance flagged:', audit.reason)
+        } else {
+          console.log(`[scheduler] memory governance: ${audit.status} — ${audit.action_taken}` +
+            (audit.reclaimed ? ` (reclaimed ${audit.reclaimed})` : '') +
+            (audit.escalated ? ' [ESCALATED]' : ''))
+        }
       } catch (err) {
-        console.error('[scheduler] memory compaction failed:', err.message)
+        console.error('[scheduler] memory governance failed:', err.message)
       }
     })
-    console.log(`[scheduler] memory compaction on schedule: ${MEMORY_COMPACT_SCHEDULE}`)
+    console.log(`[scheduler] memory governance on schedule: ${MEMORY_COMPACT_SCHEDULE}`)
   } else {
-    console.warn('[scheduler] invalid MEMORY_COMPACT_CRON, skipping memory compaction')
+    console.warn('[scheduler] invalid MEMORY_COMPACT_CRON, skipping memory governance')
   }
 }
 

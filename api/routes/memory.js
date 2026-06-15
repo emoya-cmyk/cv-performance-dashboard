@@ -53,6 +53,19 @@ router.post('/', requireAgency, async (req, res) => {
   }
 })
 
+// GET /api/memory/health — store governance verdict (agency-only). Registered
+// before /:clientId so "health" is never read as a clientId.
+router.get('/health', requireAgency, async (_req, res) => {
+  try {
+    const { gatherMemoryStats, assessMemory } = require('../lib/memoryHealth')
+    const stats = await gatherMemoryStats({})
+    res.json(assessMemory(stats))
+  } catch (err) {
+    console.error('[memory] GET health error', err.message)
+    res.status(500).json({ error: 'Failed to assess memory health' })
+  }
+})
+
 // GET /api/memory/:clientId — recall one client's memories (agency or own client).
 router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   try {
