@@ -18,7 +18,9 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - name: Install API deps
-        run: npm ci
+        # api/.npmrc sets production=true (lean prod deploys); tests need
+        # devDependencies (better-sqlite3), so include them explicitly here.
+        run: npm ci --include=dev
         working-directory: api
       - name: Run tests
         run: node --test
