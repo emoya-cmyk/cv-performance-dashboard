@@ -17,7 +17,8 @@ write to); apply it to the others with the steps below.
 | `claude/session-start.sh` | SessionStart hook — installs deps on session start so web sessions can run checks. | all repos |
 | `claude/settings.json` | Baseline Claude Code settings (wires the hook + a safe permission allow-list). | all repos |
 | `claude/CLAUDE.template.md` | Fill-in project-guidance template. | all repos |
-| `memory-os/` | Decoupled `@emoya-cmyk/memory-os` package (DI db + grounding) + schema. | LLM/agent repos |
+| `memory-os/` | Decoupled `@emoya-cmyk/memory-os` package (DI db + grounding) + schema. | JS LLM/agent repos |
+| `memory-os-py/` | Python port of memory-os (same contract/guarantees) + smoke test. | Python repos (cli_framework, mlb_v159) |
 
 ## Your repos — suggested rollout
 | Repo | CI workflow | Claude config | memory-os |
