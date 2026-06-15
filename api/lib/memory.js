@@ -270,6 +270,23 @@ async function forget(scope, selector = {}) {
   return res.rowCount || 0
 }
 
+// ── compact ───────────────────────────────────────────────────────────────────
+// Reclaim long-dead rows: those FORGOTTEN or EXPIRED longer ago than the
+// retention window. LIVE memories (not forgotten, and not past their expiry) are
+// never touched — a memory with no TTL never becomes eligible. Idempotent and
+// safe to run on a schedule. Returns the number of rows reclaimed.
+async function compact({ retentionDays = 90, now = nowIso() } = {}) {
+  const days   = Math.max(0, Number(retentionDays) || 0)
+  const cutoff = new Date(Date.parse(now) - days * DAY_MS).toISOString()
+  const res = await db.query(
+    `DELETE FROM agent_memory
+       WHERE (forgotten_at IS NOT NULL AND forgotten_at < $1)
+          OR (expires_at   IS NOT NULL AND expires_at   < $1)`,
+    [cutoff],
+  )
+  return res.rowCount || 0
+}
+
 // ── small helpers ─────────────────────────────────────────────────────────────
 function clampConfidence(c) {
   const n = c === undefined || c === null ? 1 : Number(c)
@@ -293,4 +310,4 @@ function isoOf(v) {
   return String(v)
 }
 
-module.exports = { remember, recall, forget, AUTHORITY, HALF_LIFE_DAYS, decayFactor }
+module.exports = { remember, recall, forget, compact, AUTHORITY, HALF_LIFE_DAYS, decayFactor }
