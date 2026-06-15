@@ -663,6 +663,11 @@ export const api = {
   // healsRecent, healWindowMs, jobs:[{job,status,ageMs,...}], now }); the route soft-degrades to
   // a 500 the strip swallows, so a ledger fault hides the badge rather than breaking the page.
   getOpsHealth:       ()         => get('/api/insights/ops'),
+  // getMemoryHealth() → the Memory OS governance verdict (agency-only): the
+  // self-heal layer's read on the store — status (healthy|degraded|critical) +
+  // recommended_action (none|compact|escalate) + live/dead counts. 403 for a
+  // client token, so the badge self-hides off the agency surface.
+  getMemoryHealth:    ()         => get('/api/memory/health'),
   // getImpactLedger(clientId?) → the INFLUENCE LEDGER (intel-v12 B2): the honest, weighted
   // tally of what the intelligence layer has actually DELIVERED — recovered findings plus, at
   // portfolio scope ONLY, the agency reallocation wins — distilled into {scope, as_of, count,
