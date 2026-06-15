@@ -28,6 +28,7 @@ const memoryRouter       = require('./routes/memory')
 const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
+const makeRemediationRouter = require('./routes/webhooks/makeRemediation')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
@@ -175,6 +176,7 @@ app.get('/api/unsubscribe/:token', async (req, res) => {
 app.use('/api/webhooks/ghl',          ghlRouter)
 app.use('/api/webhooks/hubspot',      hubspotRouter)
 app.use('/api/webhooks/supermetrics', supermetricsRouter)
+app.use('/api/webhooks/make-remediation', makeRemediationRouter)
 
 // External-cron heartbeat — mounted OUTSIDE requireAuth (a cron service carries
 // no user JWT). It self-authenticates with its own constant-time CRON_SECRET
@@ -219,6 +221,7 @@ if (require.main === module) {
     console.log(`[api] GHL webhook:      POST /api/webhooks/ghl`)
     console.log(`[api] HubSpot webhook:  POST /api/webhooks/hubspot`)
     console.log(`[api] Supermetrics:     POST /api/webhooks/supermetrics`)
+    console.log(`[api] Make remediation: POST /api/webhooks/make-remediation`)
     console.log(`[api] SSE stream:       GET  /api/realtime`)
     console.log(`[api] Manual sync all:  POST /api/sync/all`)
 
