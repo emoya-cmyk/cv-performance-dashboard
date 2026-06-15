@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-os"
+version = "0.1.0"
+description = "Portable, scoped, decaying agent memory (dependency-injected DB)."
+requires-python = ">=3.8"
+license = { text = "UNLICENSED" }
+
+[tool.setuptools]
+py-modules = ["memory_os"]
