@@ -23,6 +23,7 @@
     { "src": "/(.*)", "dest": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/cron/tick", "schedule": "0 7 * * *" }
+    { "path": "/api/cron/tick", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/memory", "schedule": "30 8 * * *" }
   ]
 }

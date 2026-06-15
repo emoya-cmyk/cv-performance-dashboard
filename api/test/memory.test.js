@@ -170,6 +170,21 @@ test('invalid scope and unknown source are rejected', async () => {
   await assert.rejects(() => mem.remember(AGENCY, { kind: '', content: 'x', source: 'user' }))
 })
 
+test('oversized content and kind are rejected (store-bloat guardrail)', async () => {
+  await ready()
+  await assert.rejects(
+    () => mem.remember(AGENCY, { client_id: 'big', kind: 'k', content: 'x'.repeat(2001), source: 'user' }),
+    /content exceeds/,
+  )
+  await assert.rejects(
+    () => mem.remember(AGENCY, { client_id: 'big', kind: 'k'.repeat(65), content: 'ok', source: 'user' }),
+    /kind exceeds/,
+  )
+  // At the limit is fine.
+  const ok = await mem.remember(AGENCY, { client_id: 'big', kind: 'k', content: 'y'.repeat(2000), source: 'user' })
+  assert.ok(ok.id)
+})
+
 test('confidence is clamped into [0,1]', async () => {
   await ready()
   await mem.remember(AGENCY, { client_id: 'cc-1', kind: 'k', content: 'too big', source: 'user', confidence: 5 })
