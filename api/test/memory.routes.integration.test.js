@@ -130,3 +130,14 @@ test('a malformed write is a 400, not a 500', async () => {
   const r = await request('POST', '/api/memory', { token: AGENCY, body: { kind: 'k', content: 'x', source: 'not-a-source' } })
   assert.equal(r.status, 400)
 })
+
+test('GET /api/memory/health is agency-only and returns a governance verdict', async () => {
+  await ready()
+  const ok = await request('GET', '/api/memory/health', { token: AGENCY })
+  assert.equal(ok.status, 200)
+  assert.ok(['healthy', 'degraded', 'critical'].includes(ok.body.status))
+  assert.ok(['none', 'compact', 'escalate'].includes(ok.body.recommended_action))
+
+  const denied = await request('GET', '/api/memory/health', { token: CLIENT_A })
+  assert.equal(denied.status, 403) // not the /:clientId route — health is agency-only
+})

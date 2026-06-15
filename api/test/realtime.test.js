@@ -138,8 +138,13 @@ test('broadcast routes a tenant event to agency + owner, never to a peer', () =>
     assert.equal(got(agency, 'ghl_event'), true,  'agency sees the tenant event')
     assert.equal(got(owner,  'ghl_event'), true,  'owner sees its own event')
     assert.equal(got(peer,   'ghl_event'), false, 'peer NEVER sees another tenant on the wire')
-    // And the peer id 42 must appear nowhere in the peer socket's bytes.
-    assert.equal(peer.writes.some((w) => w.includes('42')), false, 'no peer clientId in peer bytes')
+    // No tenant-event bytes reach the peer at all. Scope this to event payloads:
+    // the tenant-less connect hello carries an ISO timestamp that can incidentally
+    // contain the digits of a clientId (e.g. ".842Z" includes "42"), so a raw
+    // substring check on ALL bytes is a false-positive flake — assert on the
+    // event/payload markers instead, which never appear in a timestamp.
+    const peerEventBytes = peer.writes.filter((w) => w.includes('ghl_event') || w.includes('ContactCreate'))
+    assert.deepEqual(peerEventBytes, [], 'no tenant-event bytes reached the peer')
   } finally {
     agency.close(); owner.close(); peer.close()
   }
