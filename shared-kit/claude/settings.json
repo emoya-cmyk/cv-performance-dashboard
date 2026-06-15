@@ -1,0 +1,28 @@
+{
+  "$comment": "Baseline Claude Code project settings shared across emoya-cmyk repos. Copy to a repo's .claude/settings.json (and ship session-start.sh at .claude/session-start.sh, chmod +x). Trim the allow-list to what each repo actually uses.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".claude/session-start.sh" }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(node --test:*)",
+      "Bash(npx vite build:*)",
+      "Bash(npx eslint:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

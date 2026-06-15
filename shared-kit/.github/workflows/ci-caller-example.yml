@@ -1,0 +1,23 @@
+name: CI
+
+# Example caller. Copy this to a consuming repo as .github/workflows/ci.yml and
+# adjust the inputs. The whole CI for a repo becomes this one reference — the
+# logic lives once in emoya-cmyk/.github/workflows/node-ci.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    uses: emoya-cmyk/.github/.github/workflows/node-ci.yml@main
+    with:
+      node-version: '20'
+      # A backend/test package living in api/ (omit test-dir to skip tests):
+      test-dir: 'api'
+      test-command: 'node --test'
+      # A Vite frontend at the repo root (omit build-dir to skip the build):
+      build-dir: '.'
+      build-command: 'npx vite build'
