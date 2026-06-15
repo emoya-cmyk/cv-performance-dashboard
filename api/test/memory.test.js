@@ -153,8 +153,11 @@ test('remember does not mutate the input claim, and recall is deterministic', as
   await ready()
   const claim = Object.freeze({ client_id: 'pu-1', kind: 'k', content: 'immutable input', source: 'user' })
   await mem.remember(AGENCY, claim) // would throw if it tried to mutate a frozen object
-  const a = await mem.recall(AGENCY, { clientId: 'pu-1' })
-  const b = await mem.recall(AGENCY, { clientId: 'pu-1' })
+  // Pin the clock so the decay-derived effective_confidence is identical across
+  // both reads (otherwise two calls a millisecond apart differ — see opts.now).
+  const now = new Date().toISOString()
+  const a = await mem.recall(AGENCY, { clientId: 'pu-1' }, { now })
+  const b = await mem.recall(AGENCY, { clientId: 'pu-1' }, { now })
   assert.deepEqual(a, b)
 })
 
