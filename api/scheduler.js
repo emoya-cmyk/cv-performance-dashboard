@@ -21,6 +21,7 @@ const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
 const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = require('./lib/opsHealth')
 const { planJobRecovery } = require('./lib/opsRecovery')
 const { fireAlert }       = require('./lib/alertDelivery')
+const memoryEngine        = require('./lib/memory')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -504,6 +505,26 @@ function startScheduler() {
   })
 
   console.log(`[scheduler] watchdog on schedule: ${WATCHDOG_SCHEDULE}`)
+
+  // ── Memory compaction — daily (Memory OS Phase 3) ──────────────────────────
+  // Reclaim long-dead agent_memory rows (forgotten or expired beyond the
+  // retention window); LIVE memories are never touched. The logic lives in the
+  // pure, tested lib/memory.compact — this only schedules it, in an isolated
+  // try/catch so a compaction failure never disturbs the other sweeps.
+  const MEMORY_COMPACT_SCHEDULE = process.env.MEMORY_COMPACT_CRON || '30 3 * * *'
+  if (cron.validate(MEMORY_COMPACT_SCHEDULE)) {
+    cron.schedule(MEMORY_COMPACT_SCHEDULE, async () => {
+      try {
+        const reclaimed = await memoryEngine.compact()
+        console.log(`[scheduler] memory compaction reclaimed ${reclaimed} dead rows`)
+      } catch (err) {
+        console.error('[scheduler] memory compaction failed:', err.message)
+      }
+    })
+    console.log(`[scheduler] memory compaction on schedule: ${MEMORY_COMPACT_SCHEDULE}`)
+  } else {
+    console.warn('[scheduler] invalid MEMORY_COMPACT_CRON, skipping memory compaction')
+  }
 }
 
 module.exports = { startScheduler }
