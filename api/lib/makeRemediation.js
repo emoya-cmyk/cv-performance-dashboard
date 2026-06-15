@@ -185,6 +185,31 @@ function wilsonFeedback(outcomeKey) {
   return WILSON_FEEDBACK[outcomeKey] || { delta: 0, freeze: false }
 }
 
+/**
+ * Apply a Wilson-score delta to a scenario's current confidence (FR-9).
+ * Confidence is clamped to [0,1]. A frozen scenario (set when it escalated to
+ * Tier 3) does not move until a human clears it; a delta whose feedback carries
+ * freeze=true freezes it going forward.
+ *
+ * @param {number} current  existing confidence (default 0.5)
+ * @param {string} outcomeKey  WILSON_FEEDBACK key
+ * @param {boolean} [frozen]  whether the scenario is already frozen
+ * @returns {{ confidence: number, frozen: boolean }}
+ */
+function applyConfidence(current, outcomeKey, frozen = false) {
+  const base = Number.isFinite(current) ? current : 0.5
+  const { delta, freeze } = wilsonFeedback(outcomeKey)
+  const nextFrozen = frozen || freeze
+  // A frozen scenario holds its score; only the freeze flag can change.
+  const value = frozen ? base : clamp01(base + delta)
+  return { confidence: value, frozen: nextFrozen }
+}
+
+function clamp01(v) {
+  if (!Number.isFinite(v)) return 0.5
+  return Math.min(1, Math.max(0, v))
+}
+
 // ── Payload hashing (FR-6: store hash, never raw payload, for Tier 3) ─────────────
 
 /**
@@ -283,6 +308,7 @@ module.exports = {
   nextRetryDelay,
   classifyFailure,
   wilsonFeedback,
+  applyConfidence,
   hashPayload,
   buildTierAlert,
   buildTier1Digest,

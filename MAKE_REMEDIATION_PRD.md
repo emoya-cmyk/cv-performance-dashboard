@@ -1,7 +1,12 @@
 # PRD: Make.com Autonomous Remediation System
 
 **cli_framework · Layer B Extension** · Author: Ernesto | Cardone Ventures CRM Stack
-_Status: Phase 1 repo-side slice implemented in `cv-performance-dashboard` · Version 2.0 — Consolidated · Last updated: 2026-06-15_
+_Status: **~85% complete** (repo-side: **100%**) · Version 2.0 — Consolidated · Last updated: 2026-06-15_
+
+> **Build progress: ~85% complete / ~15% remaining.** Every remaining item is **external** to
+> this repo (Make.com scenario config, n8n per-vendor flows, the `cli_framework` field map) and
+> cannot be built from this session. The full repo-side surface this codebase can own is **done**.
+> See **[§ Build tracker](#build-tracker)**.
 
 > **Where this lives.** The canonical home for this system is the **`cli_framework`** repo
 > (this is its Layer B extension). The *repo-side slice* — the Performance DB schema, the
@@ -20,11 +25,14 @@ Phase 1 (Foundation) repo-side components, all under `api/`:
 
 | Component | File | PRD ref |
 |---|---|---|
-| Deterministic classifier, retry schedule, payload validation, Wilson feedback, Slack shapes, payload hashing | `api/lib/makeRemediation.js` | FR-2, FR-3, FR-1, FR-9, FR-8, FR-6 |
-| Error-handler intake webhook + per-tier remediation, dead-letter writes, circuit breaker, LLM enrichment | `api/routes/webhooks/makeRemediation.js` | FR-1, FR-3–FR-6 |
-| `make_remediation_log`, `make_dead_letter`, `make_circuit_breaker` tables (Postgres + SQLite) | `api/migrations/031_make_remediation.sql(.sqlite.sql)` | FR-7, FR-4, FR-5 |
-| Pure unit tests (classification order, fail-safe default, backoff, validation, feedback, hashing, alert shapes) | `api/test/makeRemediation.test.js` | — |
-| Route mount | `api/server.js` → `POST /api/webhooks/make-remediation` | — |
+| Deterministic classifier, retry schedule, payload validation, Wilson feedback + confidence apply, Slack shapes, payload hashing | `api/lib/makeRemediation.js` | FR-2, FR-3, FR-1, FR-9, FR-8, FR-6 |
+| Error-handler intake webhook + per-tier remediation, dead-letter writes, breaker-check-before-retry, LLM enrichment, confidence application | `api/routes/webhooks/makeRemediation.js` | FR-1, FR-3–FR-6, FR-9 |
+| Scheduled sweeps: Tier 1 batched digest, dead-letter 30-day retention, confidence store writer | `api/lib/makeRemediationSweeps.js` | FR-8, FR-4, FR-9 |
+| Operator surface: fix-queue list/resolve, circuit-breaker manual override, stats, recurring-unknown pattern analysis | `api/routes/makeRemediation.js` → `/api/make-remediation/*` | FR-4, FR-5, Phase 3 |
+| FR-1 coverage audit (Make API scenario handler check) | `api/scripts/auditMakeHandlers.js` | FR-1 |
+| `make_remediation_log`, `make_dead_letter`, `make_circuit_breaker`, `make_scenario_confidence` (+ `batched_notified`) | `api/migrations/031`,`032` (`.sql`/`.sqlite.sql`) | FR-7, FR-4, FR-5, FR-9 |
+| Tests (29 across 2 files: classification, fail-safe default, backoff, validation, feedback, confidence + freeze, hashing, alerts, digest dedup, retention) | `api/test/makeRemediation*.test.js` | — |
+| Route mounts + 30-min digest & daily retention crons | `api/server.js`, `api/scheduler.js` | — |
 
 **Design split.** `lib/makeRemediation.js` is a **pure** decision module (no I/O) so it can be
 unit-tested in isolation and ported verbatim into `cli_framework`. The route owns all DB
@@ -61,15 +69,59 @@ orchestrator (e.g. `{ retry: true, delay_ms, attempt }` for Tier 0).
 | `ANTHROPIC_API_KEY` | Tier 3 LLM enrichment (FR-6) | unset → alert sent without enrichment |
 | `MAKE_LLM_MODEL` | Enrichment model | `claude-sonnet-4-6` |
 
-### Not yet built here (by design)
+### Operator endpoints (`/api/make-remediation`, agency-only)
 
-- **Tier 1 batched Slack digest** (FR-8): `buildTier1Digest()` exists in the lib; wiring it to
-  a 30-min sweep belongs on the existing scheduler/cron and is deferred.
-- **Tier 1 active remap / contact search**: depends on the `cli_framework` field-equivalence
-  map — repo-side action is dead-letter with a suggested action.
-- **Vendor token-refresh execution** (FR-5): the circuit breaker + Slack are here; the actual
-  OAuth refresh call is executed by n8n per vendor.
-- **Dead-letter 30-day retention sweep** (FR-4): table is append-only; the cleanup job is TODO.
+| Method | Path | Purpose |
+|---|---|---|
+| GET  | `/dead-letter?status=open` | List the operator fix queue (FR-4) |
+| POST | `/dead-letter/:id/resolve` | Resolve a queued item |
+| GET  | `/circuit-breakers` | Current breaker state per tenant+vendor |
+| POST | `/circuit-breakers/clear` | Manual override to clear a trip (FR-5) |
+| GET  | `/stats?days=7` | Success-metric rollup (tier mix, auto-resolution rate) |
+| GET  | `/recurring-unknowns?days=14&min=2` | Tier 3 patterns → Tier 1 promotion candidates (Phase 3) |
+
+---
+
+## Build tracker
+
+**Overall ~85% complete / ~15% remaining.** Phase 1: 7/8 · Phase 2: 4.5/6 · Phase 3: 4/4.
+The entire remainder is **external** to this repo (🔒) — Make.com config, n8n flows, and the
+`cli_framework` field map — so it cannot be built from this session. Everything this repo can
+own is ✅.
+
+### Phase 1 — Foundation (≈88%)
+- 🔒 Universal error handler added to all Make scenarios — **external (Make.com config)**
+- ✅ Coverage audit script (`scripts/auditMakeHandlers.js`)
+- ✅ Webhook receiver endpoint
+- ✅ Deterministic failure classifier
+- ✅ Tier 0 retry logic + idempotency
+- ✅ Tier 3 hard stop + immediate Slack
+- ✅ `make_remediation_log` table
+- ✅ End-to-end: failure → classify → log → notify (verified)
+
+### Phase 2 — Intelligence (≈75%)
+- ◐ Tier 1 sub-flows — ✅ classification + ✅ dead-letter fallback; 🔒 **active remap/contact
+  search needs the `cli_framework` 158-entry field map**
+- ✅ Dead-letter queue writer → operator fix queue (+ list/resolve endpoints)
+- 🔒 Tier 2 per-vendor credential refresh execution — **external (n8n + vendor OAuth; credential
+  vault is explicitly out of scope per this PRD)**
+- ✅ Circuit breaker + manual override endpoint + check-before-retry (Session Rule 7)
+- ✅ Tier 1 batched 30-min Slack summary (scheduled)
+- ✅ Wilson-score feedback integration (per-event delta + scenario confidence store w/ freeze)
+
+### Phase 3 — LLM (100%)
+- ✅ Claude API enrichment on Tier 3 (env-gated, 10s timeout, non-blocking)
+- ✅ Enrichment appended to Slack alert
+- ✅ Enrichment logged to DB
+- ✅ Pattern analysis: recurring Tier 3 surfaced as promotion candidates
+
+### Remaining 15% — all external (blocked on access this session doesn't have)
+1. **Make.com:** add the universal error handler to every scenario + run the audit script with
+   `MAKE_API_TOKEN` to confirm 100% coverage.
+2. **n8n:** orchestrator flows that honor the Tier 0 `delay_ms` retry directive and execute the
+   per-vendor OAuth token refresh (GHL/HubSpot/Jobber/HCP).
+3. **`cli_framework`:** wire Tier 1 active remap/contact-search against the field-equivalence map
+   (repo currently dead-letters as the safe fallback). `lib/makeRemediation.js` ports verbatim.
 
 ---
 

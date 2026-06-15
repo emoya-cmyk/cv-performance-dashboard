@@ -29,6 +29,7 @@ const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const makeRemediationRouter = require('./routes/webhooks/makeRemediation')
+const makeRemediationOpsRouter = require('./routes/makeRemediation')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
@@ -127,6 +128,7 @@ app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intellige
 app.use('/api/events',    requireAuth, eventsRouter)     // campaign timeline annotations
 app.use('/api/alerts',    requireAuth, alertsRouter)     // fired-alert inventory (agency-only)
 app.use('/api/memory',    requireAuth, memoryRouter)     // agent memory layer (scoped recall / write / forget)
+app.use('/api/make-remediation', requireAuth, makeRemediationOpsRouter) // operator fix queue + circuit-breaker override (agency-only)
 
 // Email digest prefs — GET + PUT /api/clients/:id/email
 // Defined before the clients router so this specific path wins

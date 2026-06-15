@@ -30,6 +30,7 @@ const {
   hashPayload,
   buildTierAlert,
 } = require('../../lib/makeRemediation')
+const { recordConfidence } = require('../../lib/makeRemediationSweeps')
 
 const router = express.Router()
 
@@ -147,7 +148,7 @@ async function remediate({ id, event, ctx, decision, payloadHash }) {
 // schedule is exhausted, promote to Tier 1 + dead-letter (FR-3).
 async function tier0({ id, event, decision, ctx, payloadHash }) {
   if (decision.action === 'discard') {
-    await finalize(id, { outcome: 'success', autoResolved: true, feedback: 'tier0_resolved' })
+    await finalize(id, { scenarioId: event.scenario_id, outcome: 'success', autoResolved: true, feedback: 'tier0_resolved' })
     return { retry: false, discarded: true }
   }
   const delayMs = nextRetryDelay(ctx.retryCount)
@@ -166,10 +167,10 @@ async function tier0({ id, event, decision, ctx, payloadHash }) {
       payloadHash,
       fieldGap: null,
     })
-    await finalize(id, { outcome: 'escalated', feedback: 'tier1_dead_lettered' })
+    await finalize(id, { scenarioId: event.scenario_id, outcome: 'escalated', feedback: 'tier1_dead_lettered' })
     return { retry: false, promoted_to_tier: 1, dead_lettered: true }
   }
-  await finalize(id, { outcome: 'pending', autoResolved: true, feedback: 'tier0_resolved' })
+  await finalize(id, { scenarioId: event.scenario_id, outcome: 'pending', autoResolved: true, feedback: 'tier0_resolved' })
   return { retry: true, delay_ms: delayMs, attempt: ctx.retryCount + 1 }
 }
 
@@ -179,16 +180,24 @@ async function tier0({ id, event, decision, ctx, payloadHash }) {
 async function tier1({ id, event, decision, payloadHash }) {
   await deadLetter({ event, decision, payloadHash, fieldGap: (event.missing_fields || []).join(',') || null })
   await query(`UPDATE make_remediation_log SET dead_lettered = 1 WHERE id = $1`, [id])
-  await finalize(id, { outcome: 'escalated', feedback: 'tier1_dead_lettered' })
+  await finalize(id, { scenarioId: event.scenario_id, outcome: 'escalated', feedback: 'tier1_dead_lettered' })
   return { dead_lettered: true, notify: 'batch' }
 }
 
-// Tier 2 — auth/credential. Increment the circuit breaker, trip on the 2nd
-// consecutive failure, immediate Slack. Actual vendor token refresh is executed
-// by n8n; we record whether it is even attemptable here.
+// Tier 2 — auth/credential. Session Rule 7: check the breaker BEFORE proposing a
+// refresh — a tripped pair is paused, so no retry is attempted and the event goes
+// straight to escalation. Otherwise increment the breaker (trips on the 2nd
+// consecutive failure) and propose the refresh. Actual vendor token refresh is
+// executed by n8n; we record whether it is even attemptable here. Immediate Slack.
 async function tier2({ id, event, decision }) {
+  const already = await isBreakerTripped(event.tenant_id, event.vendor)
   const cb = await bumpCircuitBreaker(event.tenant_id, event.vendor, decision.reason)
-  const tokenRefresh = decision.action === 'token_refresh' ? 'ATTEMPT (n8n)' : 'NOT ATTEMPTED'
+
+  const tokenRefresh = (decision.action === 'token_refresh' && !already && !cb.tripped)
+    ? 'ATTEMPT (n8n)'
+    : already
+      ? 'SKIPPED (breaker open)'
+      : 'NOT ATTEMPTED'
 
   await query(
     `UPDATE make_remediation_log SET circuit_breaker_tripped = $1 WHERE id = $2`,
@@ -203,6 +212,7 @@ async function tier2({ id, event, decision }) {
   }))
 
   await finalize(id, {
+    scenarioId: event.scenario_id,
     outcome: decision.humanRequired ? 'escalated' : 'pending',
     feedback: cb.tripped ? 'tier2_refresh_failed' : 'tier2_refresh_succeeded',
   })
@@ -222,14 +232,16 @@ async function tier3({ id, event, decision, payloadHash }) {
 
   await sendAlert(buildTierAlert(TIER.UNKNOWN, { ...event, llm_enrichment: enrichment }))
 
-  await finalize(id, { outcome: 'escalated', feedback: 'tier3_escalated' })
+  await finalize(id, { scenarioId: event.scenario_id, outcome: 'escalated', feedback: 'tier3_escalated' })
   return { halted: true, dead_lettered: true, enriched: Boolean(enrichment), notify: 'immediate' }
 }
 
 // ── Shared DB helpers ────────────────────────────────────────────────────────
 
-// Write the final outcome + Wilson-score delta on the log row.
-async function finalize(id, { outcome, autoResolved = false, feedback }) {
+// Write the final outcome + Wilson-score delta on the log row, then apply that
+// delta to the scenario's confidence store (FR-9). The confidence write is
+// best-effort and never disturbs the log update.
+async function finalize(id, { scenarioId, outcome, autoResolved = false, feedback }) {
   const { delta } = wilsonFeedback(feedback)
   await query(
     `UPDATE make_remediation_log
@@ -240,6 +252,18 @@ async function finalize(id, { outcome, autoResolved = false, feedback }) {
      WHERE id = $5`,
     [outcome, autoResolved ? 1 : 0, delta, new Date().toISOString(), id]
   )
+  if (scenarioId && feedback) {
+    await recordConfidence({ query, scenarioId, outcomeKey: feedback })
+  }
+}
+
+// Is the circuit breaker currently open for this tenant+vendor pair? (Session Rule 7)
+async function isBreakerTripped(tenantId, vendor) {
+  const { rows } = await query(
+    `SELECT tripped FROM make_circuit_breaker WHERE tenant_id = $1 AND vendor = $2`,
+    [tenantId, vendor]
+  )
+  return rows.length ? (rows[0].tripped === 1 || rows[0].tripped === true) : false
 }
 
 // Append to the operator fix queue (FR-4). Never discarded; always recoverable.

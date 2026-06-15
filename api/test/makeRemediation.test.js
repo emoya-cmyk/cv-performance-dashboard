@@ -17,6 +17,7 @@ const {
   nextRetryDelay,
   classifyFailure,
   wilsonFeedback,
+  applyConfidence,
   hashPayload,
   buildTierAlert,
   buildTier1Digest,
@@ -158,6 +159,31 @@ test('wilsonFeedback maps outcomes to deltas and freeze', () => {
   assert.deepEqual(wilsonFeedback('tier2_refresh_failed'), { delta: -0.15, freeze: false })
   assert.deepEqual(wilsonFeedback('tier3_escalated'), { delta: 0, freeze: true })
   assert.deepEqual(wilsonFeedback('nonexistent'), { delta: 0, freeze: false })
+})
+
+// ── applyConfidence (FR-9) ────────────────────────────────────────────────────
+
+test('applyConfidence moves and clamps to [0,1]', () => {
+  assert.deepEqual(applyConfidence(0.5, 'tier1_remapped_verified'), { confidence: 0.55, frozen: false })
+  assert.deepEqual(applyConfidence(0.5, 'tier1_dead_lettered'), { confidence: 0.4, frozen: false })
+  // clamp at the floor
+  assert.equal(applyConfidence(0.1, 'tier2_refresh_failed').confidence, 0)
+  // clamp at the ceiling
+  assert.equal(applyConfidence(0.99, 'tier1_remapped_verified').confidence, 1)
+})
+
+test('applyConfidence freezes on Tier 3 and then holds steady', () => {
+  const frozen = applyConfidence(0.5, 'tier3_escalated')
+  assert.equal(frozen.frozen, true)
+  assert.equal(frozen.confidence, 0.5) // delta 0 on escalation
+  // once frozen, a subsequent negative outcome must not move the score
+  const held = applyConfidence(0.5, 'tier1_dead_lettered', true)
+  assert.equal(held.confidence, 0.5)
+  assert.equal(held.frozen, true)
+})
+
+test('applyConfidence defaults a non-finite current to 0.5 base', () => {
+  assert.equal(applyConfidence(undefined, 'tier0_resolved').confidence, 0.5)
 })
 
 // ── hashPayload (FR-6) ────────────────────────────────────────────────────────

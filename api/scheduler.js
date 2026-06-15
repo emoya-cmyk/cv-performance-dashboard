@@ -20,8 +20,9 @@ const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelive
 const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
 const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = require('./lib/opsHealth')
 const { planJobRecovery } = require('./lib/opsRecovery')
-const { fireAlert }       = require('./lib/alertDelivery')
+const { fireAlert, sendAlert } = require('./lib/alertDelivery')
 const memoryEngine        = require('./lib/memory')
+const { runTier1Digest, runDeadLetterRetention } = require('./lib/makeRemediationSweeps')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -524,6 +525,43 @@ function startScheduler() {
     console.log(`[scheduler] memory compaction on schedule: ${MEMORY_COMPACT_SCHEDULE}`)
   } else {
     console.warn('[scheduler] invalid MEMORY_COMPACT_CRON, skipping memory compaction')
+  }
+
+  // ── Make.com remediation: Tier 1 batched Slack digest — every 30 min (FR-8) ──
+  // Summarises auto-handled Tier 1 failures since the last run into one Slack
+  // message, so operators get an actionable batch instead of per-failure noise.
+  // Isolated try: a digest hiccup never disturbs the other sweeps.
+  const MAKE_DIGEST_SCHEDULE = process.env.MAKE_DIGEST_CRON || '*/30 * * * *'
+  if (cron.validate(MAKE_DIGEST_SCHEDULE)) {
+    cron.schedule(MAKE_DIGEST_SCHEDULE, async () => {
+      try {
+        const r = await runTier1Digest({ query, sendAlert })
+        if (r.events) console.log(`[make-digest] summarised ${r.events} Tier 1 events (slack ${r.sent ? 'sent' : 'skipped'})`)
+      } catch (err) {
+        console.error('[make-digest] failed:', err.message)
+      }
+    })
+    console.log(`[scheduler] make remediation digest on schedule: ${MAKE_DIGEST_SCHEDULE}`)
+  } else {
+    console.warn('[scheduler] invalid MAKE_DIGEST_CRON, skipping make remediation digest')
+  }
+
+  // ── Make.com remediation: dead-letter retention — daily 4am (FR-4) ──────────
+  // Enforces the 30-day MINIMUM by pruning only RESOLVED operator-queue items
+  // past the window. Open items are never touched — always recoverable.
+  const MAKE_RETENTION_SCHEDULE = process.env.MAKE_RETENTION_CRON || '0 4 * * *'
+  if (cron.validate(MAKE_RETENTION_SCHEDULE)) {
+    cron.schedule(MAKE_RETENTION_SCHEDULE, async () => {
+      try {
+        const r = await runDeadLetterRetention({ query })
+        if (r.pruned) console.log(`[make-retention] pruned ${r.pruned} resolved dead-letter items older than ${r.cutoff}`)
+      } catch (err) {
+        console.error('[make-retention] failed:', err.message)
+      }
+    })
+    console.log(`[scheduler] make dead-letter retention on schedule: ${MAKE_RETENTION_SCHEDULE}`)
+  } else {
+    console.warn('[scheduler] invalid MAKE_RETENTION_CRON, skipping make dead-letter retention')
   }
 }
 
