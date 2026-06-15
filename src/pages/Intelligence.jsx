@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { kindMeta } from '@/lib/insightMeta'
 import ImpactBanner from '@/components/ImpactBanner'
 import OpsHealthStrip from '@/components/OpsHealthStrip'
+import MemoryHealthBadge from '@/components/MemoryHealthBadge'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { Hero, StatCard, Pill, FieldLabel, EmptyAllClear, InsightCard, FiredAlertsPanel, TriageRoster, WeeklyRecapPanel } from '@/components/intelligence/IntelShared'
 import { PipelineHealthPanel } from '@/components/intelligence/PipelinePanels'
@@ -213,6 +214,7 @@ export default function Intelligence() {
           below would silently go stale. Agency-only (no client identifiers; 403s a client token),
           USE_API-gated, and SILENT on any read error so a ledger fault hides the badge, never the page. */}
       {USE_API && <OpsHealthStrip />}
+      {USE_API && <MemoryHealthBadge className="mt-1" />}
 
       {/* pipeline health — the foundation everything else stands on (intel-v11 A3). Every
           panel below is only as true as the feeds behind it, so this watchdog sits at the TOP:

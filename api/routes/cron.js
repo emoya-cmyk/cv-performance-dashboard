@@ -24,6 +24,8 @@ const { runSync }               = require('./sync')
 const { runInsightsForAll }     = require('../lib/insights')
 const { runConnectionWatchdog } = require('../lib/connectionWatchdog')
 const { runHeartbeat, VALID_JOBS } = require('../lib/heartbeat')
+const { governMemory }          = require('../lib/memoryGovernor')
+const { captureAllClients }     = require('../lib/memoryCapture')
 
 // Constant-time bearer-token guard for the cron driver.
 //
@@ -122,6 +124,30 @@ router.post('/heartbeat', cronAuth, async (req, res) => {
     }
     res.status(500).json({ error: err.message })
   }
+})
+
+// POST /api/cron/memory — the DAILY memory-autonomy driver (cronAuth-gated).
+// Separate from /heartbeat on purpose: memory governance + capture are daily/
+// weekly work, not the ~15-min heartbeat cadence — so they ride their own
+// external cron. This is what makes the Memory OS self-heal/self-capture even on
+// a free-tier host whose in-process node-cron is asleep. Each step is isolated;
+// a single step's failure still returns 200 with that step's { ok:false } so a
+// well-formed request never 500s on an internal hiccup. Fails CLOSED on auth like
+// every cron route (503 without CRON_SECRET, 401 on a bad bearer).
+router.post('/memory', cronAuth, async (_req, res) => {
+  const result = { ok: true, governance: null, capture: null }
+  try {
+    result.governance = await governMemory()           // never throws; returns an audit
+    if (result.governance && result.governance.ok === false) result.ok = false
+  } catch (err) {
+    result.ok = false; result.governance = { ok: false, reason: err.message }
+  }
+  try {
+    result.capture = await captureAllClients()          // per-client isolated
+  } catch (err) {
+    result.ok = false; result.capture = { ok: false, error: err.message }
+  }
+  res.json(result)
 })
 
 module.exports = { router, cronAuth }
