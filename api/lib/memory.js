@@ -182,7 +182,9 @@ async function remember(scope, claim) {
 async function recall(scope, query = {}, opts = {}) {
   normalizeScope(scope)
   const k   = Number.isInteger(opts.k) && opts.k > 0 ? opts.k : DEFAULT_K
-  const now = nowIso()
+  // `opts.now` (ISO) pins the decay/expiry clock so a recall is deterministic
+  // for a given instant; defaults to the wall clock.
+  const now = opts.now || nowIso()
 
   const clauses = ['forgotten_at IS NULL', `(expires_at IS NULL OR expires_at > $1)`]
   const params  = [now]
