@@ -23,6 +23,7 @@ import ScopeNarrative from '@/components/ScopeNarrative'
 import DriverBreakdown from '@/components/DriverBreakdown'
 import StreamStatus from '@/components/StreamStatus'
 import SpendAreaChart from '@/components/charts/SpendAreaChart'
+import MemoryPanel from '@/components/MemoryPanel'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { useAgency } from '@/lib/agencySettings'
 
@@ -2119,6 +2120,10 @@ export default function ClientView({ store }) {
               </div>
             </div>
           )}
+
+          {/* ── Performance Memory — durable highlights the system has remembered (read-only,
+              client-safe; self-hides when empty). Visible to both agency and the client. ── */}
+          {clientObj?.id && <MemoryPanel clientId={clientObj.id} />}
 
           {/* ── Data Source Setup Checklist — hidden when data is present or 4+ connected ── */}
           {USE_API && revenue === 0 && leads === 0 && (

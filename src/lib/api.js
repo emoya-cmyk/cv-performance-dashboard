@@ -298,6 +298,18 @@ export const api = {
   saveAlertRules:    (clientId, rules)  => put(`/api/alerts/rules/${clientId}`, rules),
   getClientAlerts:   (clientId)         => get(`/api/alerts/client/${clientId}`),
   getFleetAlertRules: ()                => get('/api/alerts/rules'),
+  // Agent memory (Memory OS): scoped recall of a client's durable memories.
+  // Same scope posture as getClientAlerts — agency sees any client; a client
+  // token is hard-pinned server-side to its own id and can never widen scope.
+  // Read-only on this surface. `opts.kind` filters (e.g. 'highlight'); `opts.k`
+  // caps the count.
+  getClientMemory: (clientId, opts = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.kind) qs.set('kind', opts.kind)
+    if (opts.k != null) qs.set('k', String(opts.k))
+    const q = qs.toString()
+    return get(`/api/memory/${clientId}${q ? `?${q}` : ''}`)
+  },
   // Campaign events (timeline annotations)
   getEvents:   (clientId, limit) => get(`/api/events/${clientId}${limit ? `?limit=${limit}` : ''}`),
   createEvent: (clientId, body)  => post(`/api/events/${clientId}`, body),
