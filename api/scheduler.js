@@ -23,6 +23,7 @@ const { planJobRecovery } = require('./lib/opsRecovery')
 const { fireAlert }       = require('./lib/alertDelivery')
 const memoryEngine        = require('./lib/memory')
 const { governMemory }    = require('./lib/memoryGovernor')
+const { captureAllClients } = require('./lib/memoryCapture')
 
 const SCHEDULE          = process.env.SYNC_CRON     || '0 */6 * * *'  // every 6 hours
 const DIGEST_SCHEDULE   = process.env.DIGEST_CRON   || '0 8 * * 1'    // Monday 8am UTC
@@ -532,6 +533,26 @@ function startScheduler() {
     console.log(`[scheduler] memory governance on schedule: ${MEMORY_COMPACT_SCHEDULE}`)
   } else {
     console.warn('[scheduler] invalid MEMORY_COMPACT_CRON, skipping memory governance')
+  }
+
+  // ── Memory capture sweep — weekly (Memory OS Phase 6) ──────────────────────
+  // Autonomously remember every client's completed-week highlights, independent
+  // of whether their recap was generated. Per-client failures are isolated in
+  // captureAllClients; this block only schedules + logs.
+  const MEMORY_CAPTURE_SCHEDULE = process.env.MEMORY_CAPTURE_CRON || '0 5 * * 1'  // Monday 05:00 UTC
+  if (cron.validate(MEMORY_CAPTURE_SCHEDULE)) {
+    cron.schedule(MEMORY_CAPTURE_SCHEDULE, async () => {
+      try {
+        const s = await captureAllClients()
+        console.log(`[scheduler] memory capture: ${s.captured} highlights across ${s.clients} clients` +
+          (s.failed ? ` (${s.failed} failed)` : ''))
+      } catch (err) {
+        console.error('[scheduler] memory capture failed:', err.message)
+      }
+    })
+    console.log(`[scheduler] memory capture on schedule: ${MEMORY_CAPTURE_SCHEDULE}`)
+  } else {
+    console.warn('[scheduler] invalid MEMORY_CAPTURE_CRON, skipping memory capture')
   }
 }
 
