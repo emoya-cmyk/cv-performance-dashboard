@@ -246,7 +246,9 @@ plan) — automate up to the click, then a human does it:
    misconfigured deploy can't silently issue forgeable tokens. This enforces the gate; it does **not**
    satisfy it — the operator still supplies the value.
 2. **`CRON_SECRET`** — set on the web service **and** the Cron Job (same value) to arm the heartbeat
-   (§4.3). Unset = the cron endpoint is disabled (503, fails closed).
+   (§4.3). Unset = the cron endpoint is disabled (503, fails closed). **Memory OS:** also add a
+   **daily** cron at `/api/cron/memory` (same bearer) so memory governance (self-heal) + capture run
+   on a sleeping host — automatic on Vercel (`vercel.json` crons), one extra Render Cron Job otherwise.
 3. **`ANTHROPIC_API_KEY`** — **optional.** Unset = AI recap/brief render deterministic templates
    (`200`) and `POST /api/ai/ask` returns `503`; everything else works. Set it (Render dashboard;
    `sync: false` stub now in `render.yaml`) to enable LLM narration. Optional `AI_RATE_MAX` (default
@@ -263,6 +265,36 @@ plan) — automate up to the click, then a human does it:
 7. **Public surfaces are by design** (token-validated) but re-confirm: `GET /api/share/:token`,
    `GET /api/unsubscribe/:token`, the HMAC webhook receivers, and `/api/agency`
    (GET public / PUT self-guards).
+
+---
+
+## 4.8 Memory OS — persistent, scoped, grounded, self-healing agent memory
+
+A durable memory layer so the intelligence layer remembers across stateless sessions. Built
+in phases, all merged, leak-proof-tested, additive-only. See `MEMORY_OS_PRD.md`.
+
+- **Engine** `lib/memory.js` — `remember/recall/forget/compact`: tenant-scoped (a `client` never
+  sees another tenant; reuses `authz` scoping), authority precedence (`policy>user>fact>derived>ai>
+  history`), confidence decay (30-day half-life) + TTL; write size caps (kind ≤64, content ≤2000).
+  Migration `030_agent_memory` (paired).
+- **Grounding** `lib/memoryGrounding.js` — recalled claims annotated `assertable` against the
+  evidence pack (reuses `ai.verifyGrounding`); unverifiable claims still inform retrieval, never asserted.
+- **Producers** `lib/memoryProducer.js` (weekly highlights) + `lib/memoryCapture.js`
+  (`captureAllClients`, autonomous sweep).
+- **Narration continuity** `lib/memoryContext.js` — the weekly recap (`lib/recap.js`) recalls prior
+  highlights as string-only context (grounding intact; the verifier still rejects stale numbers).
+- **Governance (self-heal)** `lib/memoryHealth.js` + `lib/memoryGovernor.js` — assess → bounded
+  corrective with guardrails: never deletes live memory, **live-count verify-after** every run,
+  escalates runaway growth instead of "fixing" it, fails closed. Surfaced at `GET /api/memory/health`
+  (agency) + the `MemoryHealthBadge` on Intelligence.
+- **Semantic recall** `lib/memorySemantic.js` + `lib/embeddings.js` — `?q=` on the memory REST
+  endpoints; ranked by a free local embedder (a real provider — Voyage/OpenAI — drops into the same
+  `embed()` seam; Anthropic has no first-party embeddings API).
+- **REST** `routes/memory.js` (scoped CRUD + health + search). **Schedules:** in-process crons
+  (`scheduler.js`) for always-on hosts; `POST|GET /api/cron/memory` (daily, `vercel.json` cron / a
+  Render Cron Job) for sleeping hosts.
+- **Cross-repo:** `shared-kit/` packages the engine (JS `memory-os/` + Python `memory-os-py/`) plus a
+  reusable CI workflow, SessionStart hook, settings, and a rollout guide — to standardize across repos.
 
 ---
 

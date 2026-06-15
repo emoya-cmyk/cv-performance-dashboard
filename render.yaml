@@ -31,6 +31,12 @@ services:
       # to keep sync/watchdog/insights firing. UNSET = endpoint disabled (503, fails
       # closed). Generate a long random value and paste the SAME value into both this
       # web service and the Cron Job's env in the Render dashboard.
+      #
+      # ALSO arm the Memory OS autonomy: add a SECOND Render Cron Job (DAILY) at
+      # /api/cron/memory (GET or POST, same `Authorization: Bearer <CRON_SECRET>`)
+      # so memory governance (self-heal) + capture run even while the host sleeps.
+      # On Vercel this is already automatic (vercel.json "crons"); Render needs this
+      # one extra daily cron.
       - key: CRON_SECRET
         sync: false                  # Enter in Render dashboard — not stored in repo
 
