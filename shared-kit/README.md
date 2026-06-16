@@ -19,6 +19,7 @@ write to); apply it to the others with the steps below.
 | `claude/CLAUDE.template.md` | Fill-in project-guidance template. | all repos |
 | `memory-os/` | Decoupled `@emoya-cmyk/memory-os` package (DI db + grounding) + schema. | JS LLM/agent repos |
 | `memory-os-py/` | Python port of memory-os (same contract/guarantees) + smoke test. | Python repos (cli_framework, mlb_v159) |
+| `dashboard-core/` | Publishable `@emoya-cmyk/dashboard-core` — **security module first** (auth/authz, headers, rate-limit/AI-budget, password-floor/timing-equalizer/JWT-boot-guard as DI factories); engine/connectors/semantic to follow. | JS dashboard repos |
 
 ## Your repos — suggested rollout
 | Repo | CI workflow | Claude config | memory-os |

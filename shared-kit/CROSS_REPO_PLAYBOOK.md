@@ -22,6 +22,13 @@ the actual pushes happen from the widened session). Everything referenced lives 
 
 ---
 
+> **New:** `shared-kit/dashboard-core/` now exists — the publishable
+> `@emoya-cmyk/dashboard-core` package, **security module first** (the auth/authz +
+> security layer extracted from agency, as DI factories; engine/connectors/semantic
+> to follow). It is NOT yet wired into any app. Consume it the same two ways as
+> memory-os (git-URL/file dep, or GitHub Packages publish — see Step 3 and the
+> package's own `README.md`).
+
 ## Step 0 — one-time: the shared-workflows repo
 `emoya-cmyk` is a user account, so the shared-workflows repo is named `.github`:
 1. Create **`emoya-cmyk/.github`** (public — so private repos can reference its workflows).
