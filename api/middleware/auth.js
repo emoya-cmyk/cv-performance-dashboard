@@ -1,24 +1,16 @@
 'use strict'
 
-const jwt = require('jsonwebtoken')
+// Thin wrapper over the vendored @emoya-cmyk/dashboard-core auth layer.
+// cv consumes the canonical module (vendored at api/vendor/dashboard-core) for
+// the byte-for-byte-identical requireAuth. The original cv implementation read
+//   const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production'
+// at module load and built requireAuth around it. createAuth() with no args
+// captures process.env.JWT_SECRET || DEV_SECRET_FALLBACK (the same literal) at
+// call time — invoked here at module load, so behaviour is identical. Public
+// export shape is unchanged: { requireAuth }.
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production'
+const { createAuth } = require('../vendor/dashboard-core')
 
-function requireAuth(req, res, next) {
-  const header = req.headers['authorization'] || ''
-  const token  = header.replace(/^Bearer\s+/i, '').trim()
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' })
-  }
-
-  try {
-    const payload = jwt.verify(token, JWT_SECRET)
-    req.user = payload
-    next()
-  } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' })
-  }
-}
+const { requireAuth } = createAuth()
 
 module.exports = { requireAuth }
