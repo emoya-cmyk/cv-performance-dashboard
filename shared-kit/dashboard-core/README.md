@@ -17,7 +17,7 @@ so a caller that passes nothing behaves exactly like agency today.
 ## What's in it
 | Export | What it is | Origin in agency |
 |--------|------------|------------------|
-| `createAuth({ jwtSecret })` | JWT-verify + the multi-tenant scope guards, bound to a secret. Returns `{ requireAuth, requireAgency, scopeClientParam, scopeClientQuery, scopeClientId, sameId }`. | `middleware/auth.js` + `middleware/authz.js` |
+| `createAuth({ jwtSecret })` | JWT-verify + the multi-tenant scope guards, bound to a secret. Returns `{ requireAuth, requireAgency, scopeClientParam, scopeClientQuery, scopeClientId, sameId }`. `scopeClientQuery(param, { mode })` supports `'reject'` (default) and `'clamp'` — see [Use](#use). | `middleware/auth.js` + `middleware/authz.js` |
 | `securityHeaders(opts?)` | Dependency-free helmet-equivalent header set (SPA-safe; no CSP/COEP). | `middleware/securityHeaders.js` |
 | `createRateLimiter(opts)` | Dependency-free fixed-window limiter (429 + `X-RateLimit-*` + `Retry-After`). | `middleware/rateLimit.js` |
 | `createLoginThrottle(opts?)` | Login brute-force throttle (per IP+email, 20/15min default, `LOGIN_RATE_MAX`). | inline in `server.js` |
@@ -57,6 +57,17 @@ app.use('/api/auth', authRouter)
 // Authenticated, per-client (IDOR-safe): agency any client; client only its own.
 app.use('/api/clients', auth.requireAuth, clientsRouter)
 router.get('/:clientId', auth.scopeClientParam('clientId'), handler)
+
+// Query-string client scope: scopeClientQuery(paramName='clientId', { mode='reject' }).
+// Agency always passes through. For a 'client' caller, pick the mode:
+//   • 'reject' (default) — proceed only if ?clientId matches the caller's own id;
+//                          a foreign/missing id is 403 (IDOR-safe, fail closed).
+//   • 'clamp'            — rewrite req.query[paramName] to the caller's own id and
+//                          proceed, so a client asking for another tenant (or 'all')
+//                          still gets 200 but only ever sees its own data.
+// In BOTH modes a client with no bound client_id is denied (fail closed).
+router.get('/', auth.scopeClientQuery('clientId'), handler)                  // reject (default)
+router.get('/summary', auth.scopeClientQuery('client', { mode: 'clamp' }), handler)
 
 // Agency-only surfaces (portfolio reads, client mutations, syncs, share links):
 router.use(auth.requireAgency)
@@ -129,9 +140,10 @@ npm install @emoya-cmyk/dashboard-core
   `(req, res, next)` signature. Pulled as a dev dep for the integration test.
 
 ## Tests
-`npm test` (`node --test`) — 52 assertions:
+`npm test` (`node --test`) — 60 assertions:
 - authz unit boundary (`sameId`, `requireAgency`, `scopeClientParam/Query`,
-  `scopeClientId`), ported from agency's `authz.test.js`;
+  `scopeClientId`), ported from agency's `authz.test.js` — including
+  `scopeClientQuery`'s `reject` (default) and `clamp` modes;
 - a self-contained Express **integration** test that mints real agency+client JWTs
   and asserts the 401/403/own-data boundary over HTTP (the package-isolated
   counterpart of agency's `authz.integration.test.js`);
