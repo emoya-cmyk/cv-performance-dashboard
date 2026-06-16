@@ -1886,7 +1886,7 @@ export default function ClientView({ store }) {
                           jobs_target:    goalDraft.jobs_target     !== '' ? Number(goalDraft.jobs_target)    : null,
                         })
                         setGoal(saved)
-                      } catch (_) {}
+                      } catch (_) { /* ignore goal save failure */ }
                       setGoalsEdit(false)
                       setGoalSaving(false)
                     }}
@@ -1971,7 +1971,7 @@ export default function ClientView({ store }) {
                           const ev = await api.createEvent(clientObj.id, eventForm)
                           setEvents(prev => [ev, ...prev])
                           setEventForm(null)
-                        } catch (_) {}
+                        } catch (_) { /* ignore event create failure */ }
                       }}
                       className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 transition-colors"
                     >Add</button>
@@ -1998,7 +1998,7 @@ export default function ClientView({ store }) {
                             try {
                               await api.deleteEvent(clientObj.id, ev.id)
                               setEvents(prev => prev.filter(e => e.id !== ev.id))
-                            } catch (_) {}
+                            } catch (_) { /* ignore event delete failure */ }
                           }}
                           className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-rose-400 text-xs transition-all flex-shrink-0"
                         >✕</button>
@@ -2085,7 +2085,7 @@ export default function ClientView({ store }) {
                             leads_drop_crit:   Number(alertRulesDraft.leads_drop_crit)   / 100,
                           })
                           setAlertRules(saved)
-                        } catch (_) {}
+                        } catch (_) { /* ignore alert-rules save failure */ }
                         setAlertRulesEdit(false)
                         setAlertRulesSaving(false)
                       }}

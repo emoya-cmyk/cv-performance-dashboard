@@ -484,7 +484,6 @@ export default function Explore() {
     setGroupBy(prev => (validG.has(prev) ? prev : 'channel'))
     const validCh = new Set((schema.channels || []).map(c => c.key))
     setChannelFilter(prev => prev.filter(k => validCh.has(k)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schema])
 
   function toggleMetric(id) {

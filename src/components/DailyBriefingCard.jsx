@@ -36,7 +36,7 @@ export default function DailyBriefingCard() {
     try {
       const r = await api.regeneratePortfolioBrief()
       if (r) setBrief(r)
-    } catch {}
+    } catch { /* ignore brief regen failure */ }
     finally { setRegen(false) }
   }
 
