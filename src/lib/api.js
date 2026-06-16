@@ -336,9 +336,6 @@ export const api = {
   saveConnection:   (clientId, ch, creds) => put(`/api/connections/${clientId}/${ch}`, { credentials: creds }),
   testConnection:   (clientId, ch)       => post(`/api/connections/${clientId}/${ch}/test`, {}),
   deleteConnection: (clientId, ch)       => del(`/api/connections/${clientId}/${ch}`),
-  // Agency settings
-  agencySettings:     ()     => get('/api/agency'),
-  saveAgencySettings: (body) => put('/api/agency', body),
   // Agency-wide anomalies (used by AnomalyStrip)
   getAnomalies: (period) => get(`/api/metrics?period=${period || 'last_4w'}`),
   // Per-client metrics

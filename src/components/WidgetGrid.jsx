@@ -31,7 +31,7 @@ export default function WidgetGrid({
     try {
       const saved = localStorage.getItem(storageKey)
       if (saved) return JSON.parse(saved)
-    } catch (_) {}
+    } catch (_) { /* ignore unavailable/invalid localStorage */ }
     return { lg: defaultLayout }
   })
 
@@ -39,7 +39,7 @@ export default function WidgetGrid({
     setLayouts(allLayouts)
     try {
       localStorage.setItem(storageKey, JSON.stringify(allLayouts))
-    } catch (_) {}
+    } catch (_) { /* ignore unavailable localStorage */ }
   }, [storageKey])
 
   const resetLayout = () => {
@@ -47,7 +47,7 @@ export default function WidgetGrid({
     setLayouts(fresh)
     try {
       localStorage.removeItem(storageKey)
-    } catch (_) {}
+    } catch (_) { /* ignore unavailable localStorage */ }
   }
 
   return (

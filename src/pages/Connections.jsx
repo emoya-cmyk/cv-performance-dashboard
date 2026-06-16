@@ -127,7 +127,6 @@ function ChannelCard({ channel, conn, clientId, onSaved }) {
   }
 
   async function handleRemove() {
-    // eslint-disable-next-line no-restricted-globals
     if (!confirm(`Remove ${channel.label} credentials for this client?`)) return
     setRemoving(true)
     try {
