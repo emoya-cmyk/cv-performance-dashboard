@@ -5,29 +5,51 @@ the repos** (this one — `cv-performance-dashboard` — only has scope for itse
 the actual pushes happen from the widened session). Everything referenced lives in
 `cv-performance-dashboard/shared-kit/`.
 
+> ## Status — 2026-06-16: rollout substantially COMPLETE
+> The base kit (CI workflow + `.claude/` SessionStart config + `CLAUDE.md`) is
+> **already adopted** in all four active repos — `agency-performance-dashboard`
+> (PR #1), `performance-dashboard` (PR #2), `cli_framework`, and
+> `cv-performance-dashboard` (source). Verified: each has `CLAUDE.md`,
+> `.github/workflows/ci.yml`, and `.claude/session-start.sh`.
+> **`dashboard-core` is now consumed (vendored) by agency, performance, and cv**
+> for the auth/security module, and **`cli_framework` has adopted `memory-os-py`**
+> (vendored, tenant-scoped).
+> **The only outstanding rollout step is Step 0 — the `emoya-cmyk/.github`
+> reusable-workflow repo** (each repo currently *inlines* the equivalent CI, which
+> works; the reusable-caller form is an optimization). Creating that org repo is
+> outside a 5-repo session's scope — it needs the account owner or a widened scope.
+> `integrations-performance-dashboard-app` is intentionally left alone (being retired).
+
 ## Decisions baked in
 - **Keep every dashboard active** — standardize via the kit, do **not** archive.
 - **Leave `integrations-performance-dashboard-app` (the integration hub) alone** — no changes.
 - Canonical / kit source of truth = **`cv-performance-dashboard`**.
 
 ## Target matrix
-| Repo | Lang | CI workflow | `.claude/` config | memory-os |
-|------|:----:|:-----------:|:-----------------:|:---------:|
-| cv-performance-dashboard | JS | ✅ done | ✅ | source of kit |
-| agency-performance-dashboard | JS | ✅ apply | ✅ apply | ✅ JS, if it has LLM features |
-| performance-dashboard | JS | ✅ apply | ✅ apply | ✅ JS, if it has LLM features |
-| cli_framework | Python | keep own CI | ✅ apply (pip/poetry hook) | ✅ `memory-os-py` if wanted |
-| mlb_v159 | Python | keep own CI | ✅ apply (pip/poetry hook) | ✅ `memory-os-py` if wanted |
-| integrations-performance-dashboard-app | — | ❌ leave alone | ❌ | ❌ |
+| Repo | Lang | CI workflow | `.claude/` config | memory-os | dashboard-core |
+|------|:----:|:-----------:|:-----------------:|:---------:|:--------------:|
+| cv-performance-dashboard | JS | ✅ done (inlined) | ✅ done | source of kit | ✅ consumes (vendored) |
+| agency-performance-dashboard | JS | ✅ done (inlined, PR #1) | ✅ done | n/a yet | ✅ consumes (vendored) |
+| performance-dashboard | JS | ✅ done (inlined, PR #2) | ✅ done | n/a yet | ✅ consumes (vendored) |
+| cli_framework | Python | keep own CI ✅ | ✅ done | ✅ `memory-os-py` adopted (vendored) | n/a (Python) |
+| mlb_v159 | Python | keep own CI | ⏳ apply (pip/poetry hook) | ⏳ `memory-os-py` if wanted | n/a (Python) |
+| integrations-performance-dashboard-app | — | ❌ leave alone (retiring) | ❌ | ❌ | ❌ |
+
+> Inlined CI = each repo carries the kit's CI logic directly in its own
+> `.github/workflows/ci.yml` (working today) rather than calling the reusable
+> `node-ci.yml`; switching to the reusable caller is Step 0 below. `mlb_v159` is
+> outside the current session scope and unverified here.
 
 ---
 
-> **New:** `shared-kit/dashboard-core/` now exists — the publishable
-> `@emoya-cmyk/dashboard-core` package, **security module first** (the auth/authz +
-> security layer extracted from agency, as DI factories; engine/connectors/semantic
-> to follow). It is NOT yet wired into any app. Consume it the same two ways as
-> memory-os (git-URL/file dep, or GitHub Packages publish — see Step 3 and the
-> package's own `README.md`).
+> **`shared-kit/dashboard-core/`** — the publishable `@emoya-cmyk/dashboard-core`
+> package, **security module first** (the auth/authz + security layer extracted
+> from agency, as DI factories; engine/connectors/semantic still to follow).
+> **Now CONSUMED (vendored into `api/vendor/dashboard-core/`) by agency, performance,
+> and cv** — a pure dedup with zero behavior change, each guarded by the copied
+> tests. Consumption today is **vendored** (no registry/deploy-auth change);
+> switching to a real dep (git-URL/file or GitHub Packages — see Step 3) is a later
+> option once registry auth is set up org-wide.
 
 ## Step 0 — one-time: the shared-workflows repo
 `emoya-cmyk` is a user account, so the shared-workflows repo is named `.github`:
