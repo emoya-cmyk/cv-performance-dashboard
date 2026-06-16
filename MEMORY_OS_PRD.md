@@ -1,6 +1,15 @@
 # PRD — Memory OS: Persistent, Scoped, Grounded Memory for a Stateless Agent
 
-_Status: Draft · Owner: TBD · Last updated: 2026-06-15 · Target branch: `claude/claude-fable-5-2jd9z6`_
+> ## ✅ STATUS (as of 2026-06-16) — this PRD is SHIPPED
+> Despite the "Draft" marker below, the Memory OS is **built through its optional
+> Phase 4**: `agent_memory` table (migration `030`), the `lib/memory.js` engine
+> (`remember`/`recall`/`forget` with scope/precedence/decay), grounding
+> (`lib/memoryGrounding.js`), producers, the `/api/memory` REST surface
+> (`routes/memory.js`), governance/health, and **vector recall** (`lib/embeddings.js`
+> + `lib/memorySemantic.js`). See
+> [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for the per-phase table.
+
+_Status: Draft (see SHIPPED banner above) · Owner: TBD · Last updated: 2026-06-15 · Target branch: `claude/claude-fable-5-2jd9z6`_
 
 > **Provenance note.** Part of the motivation below was sharpened by comparing this
 > project's intelligence layer against a publicly-circulated, **unverified** extraction of a

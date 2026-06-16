@@ -1,3 +1,16 @@
+> ## ⚠️ STATUS (as of 2026-06-16) — this plan is largely SHIPPED
+> The "Nothing here has been built — this is for review" line at the bottom is
+> **stale**. Reality: **Phases 0, 1, 2 are shipped** (atomic `fact_metric` grain,
+> the `POST /api/query` semantic layer, and the intelligence/insights analytics),
+> **Phase 3 is partial** (the `Explore.jsx` ad-hoc explorer ships, but the
+> `dashboards` table, the builder, and drill-down do **not**), and **Phase 4 is
+> partial** (alert rules + delivery exist; cron rule-eval and driver-grounded
+> narratives do not). The historical plan below is kept for context.
+> **See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for the verified,
+> per-phase status table.**
+
+---
+
 # Performance Dashboard → Dynamic Analytical Platform
 ## Transformation Design Doc (review before any code)
 
@@ -329,4 +342,10 @@ CREATE TABLE dashboard_widgets (
 
 ---
 
-*End of plan. Nothing here has been built — this is for review.*
+*End of plan.*
+
+> **STATUS (as of 2026-06-16):** the original "Nothing here has been built — this
+> is for review" line was true when written but is now stale. Phases 0–2 are
+> shipped; Phases 3–4 are partial. See
+> [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for the verified,
+> per-phase reconciliation against the code.
