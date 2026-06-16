@@ -153,8 +153,11 @@ test('remember does not mutate the input claim, and recall is deterministic', as
   await ready()
   const claim = Object.freeze({ client_id: 'pu-1', kind: 'k', content: 'immutable input', source: 'user' })
   await mem.remember(AGENCY, claim) // would throw if it tried to mutate a frozen object
-  const a = await mem.recall(AGENCY, { clientId: 'pu-1' })
-  const b = await mem.recall(AGENCY, { clientId: 'pu-1' })
+  // Pin the clock so the decay-derived effective_confidence is identical across
+  // both reads (otherwise two calls a millisecond apart differ — see opts.now).
+  const now = new Date().toISOString()
+  const a = await mem.recall(AGENCY, { clientId: 'pu-1' }, { now })
+  const b = await mem.recall(AGENCY, { clientId: 'pu-1' }, { now })
   assert.deepEqual(a, b)
 })
 
@@ -165,6 +168,21 @@ test('invalid scope and unknown source are rejected', async () => {
   await assert.rejects(() => mem.remember({ role: 'client' }, { kind: 'k', content: 'x', source: 'user' })) // no clientId
   await assert.rejects(() => mem.remember(AGENCY, { kind: 'k', content: 'x', source: 'made-up' }))
   await assert.rejects(() => mem.remember(AGENCY, { kind: '', content: 'x', source: 'user' }))
+})
+
+test('oversized content and kind are rejected (store-bloat guardrail)', async () => {
+  await ready()
+  await assert.rejects(
+    () => mem.remember(AGENCY, { client_id: 'big', kind: 'k', content: 'x'.repeat(2001), source: 'user' }),
+    /content exceeds/,
+  )
+  await assert.rejects(
+    () => mem.remember(AGENCY, { client_id: 'big', kind: 'k'.repeat(65), content: 'ok', source: 'user' }),
+    /kind exceeds/,
+  )
+  // At the limit is fine.
+  const ok = await mem.remember(AGENCY, { client_id: 'big', kind: 'k', content: 'y'.repeat(2000), source: 'user' })
+  assert.ok(ok.id)
 })
 
 test('confidence is clamped into [0,1]', async () => {

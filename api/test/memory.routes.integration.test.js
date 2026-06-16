@@ -130,3 +130,37 @@ test('a malformed write is a 400, not a 500', async () => {
   const r = await request('POST', '/api/memory', { token: AGENCY, body: { kind: 'k', content: 'x', source: 'not-a-source' } })
   assert.equal(r.status, 400)
 })
+
+test('GET /api/memory/health is agency-only and returns a governance verdict', async () => {
+  await ready()
+  const ok = await request('GET', '/api/memory/health', { token: AGENCY })
+  assert.equal(ok.status, 200)
+  assert.ok(['healthy', 'degraded', 'critical'].includes(ok.body.status))
+  assert.ok(['none', 'compact', 'escalate'].includes(ok.body.recommended_action))
+
+  const denied = await request('GET', '/api/memory/health', { token: CLIENT_A })
+  assert.equal(denied.status, 403) // not the /:clientId route — health is agency-only
+})
+
+test('?q= turns the memory endpoints into a scoped semantic search', async () => {
+  await ready()
+  await request('POST', '/api/memory', { token: AGENCY, body: { client_id: A, kind: 'note', content: 'revenue grew strongly', source: 'fact' } })
+  await request('POST', '/api/memory', { token: AGENCY, body: { client_id: A, kind: 'note', content: 'facebook spend dropped', source: 'fact' } })
+  await request('POST', '/api/memory', { token: AGENCY, body: { client_id: B, kind: 'note', content: 'revenue grew for B', source: 'fact' } })
+
+  // Agency per-client semantic search ranks the on-topic memory first.
+  const ag = await request('GET', `/api/memory/${A}?q=${encodeURIComponent('how did revenue grow')}`, { token: AGENCY })
+  assert.equal(ag.status, 200)
+  assert.equal(ag.body.semantic, true)
+  assert.equal(ag.body.memories[0].content, 'revenue grew strongly')
+
+  // A client's own semantic search stays confined to its tenant — never B's.
+  const own = await request('GET', `/api/memory/${A}?q=revenue`, { token: CLIENT_A })
+  assert.equal(own.status, 200)
+  assert.ok(own.body.memories.every((m) => m.client_id === A))
+  assert.ok(!own.body.memories.some((m) => /for B/.test(m.content)))
+
+  // A client still cannot semantic-search a peer's id (403 before the handler).
+  const peer = await request('GET', `/api/memory/${B}?q=revenue`, { token: CLIENT_A })
+  assert.equal(peer.status, 403)
+})

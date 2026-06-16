@@ -222,3 +222,37 @@ test('POST /api/cron/heartbeat 400 BAD_JOBS when jobs is not an array', async ()
   assert.equal(r.status, 400)
   assert.equal(r.body.code, 'BAD_JOBS')
 })
+
+// ── POST /memory — the daily memory-autonomy driver (cronAuth-gated) ──────────
+const memoryCron = (opts) => call('POST', '/api/cron/memory', opts)
+
+test('POST /api/cron/memory 401s with no Authorization header', async () => {
+  await ready()
+  const r = await memoryCron({})
+  assert.equal(r.status, 401)
+})
+
+test('POST /api/cron/memory 503s (fails CLOSED) when CRON_SECRET is unset', async () => {
+  await ready()
+  const r = await withSecretUnset(() => memoryCron({ bearer: CRON_SECRET }))
+  assert.equal(r.status, 503)
+})
+
+test('POST /api/cron/memory runs governance + capture on an empty DB → 200', async () => {
+  await ready()
+  const r = await memoryCron({ bearer: CRON_SECRET })
+  assert.equal(r.status, 200)
+  assert.equal(r.body.ok, true)
+  assert.ok(['healthy', 'degraded', 'critical'].includes(r.body.governance.status))
+  assert.equal(r.body.governance.ok, true)        // live-count verify-after held
+  assert.equal(r.body.capture.captured, 0)        // no clients/highlights yet
+})
+
+test('GET /api/cron/memory works too (Vercel-cron compatible) and still fails closed', async () => {
+  await ready()
+  const ok = await call('GET', '/api/cron/memory', { bearer: CRON_SECRET })
+  assert.equal(ok.status, 200)
+  assert.equal(ok.body.ok, true)
+  const noAuth = await call('GET', '/api/cron/memory')
+  assert.equal(noAuth.status, 401)
+})
