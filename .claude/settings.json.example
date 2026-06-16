@@ -1,0 +1,28 @@
+{
+  "$comment": "INERT TEMPLATE. Claude Code reads .claude/settings.json (and settings.local.json), NOT this .example. To activate the shared-kit config, a human copies this to .claude/settings.json — that deliberate step is required because wiring a SessionStart hook (auto-executes .claude/session-start.sh) and granting Bash permissions are security decisions that must be made by the repo owner, not planted by an assistant from a playbook file. After copying, trim the permissions.allow list to what you actually want auto-allowed (or manage it via /permissions).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".claude/session-start.sh" }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm ci:*)",
+      "Bash(npm install:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(node --test:*)",
+      "Bash(npx vite build:*)",
+      "Bash(npx eslint:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
