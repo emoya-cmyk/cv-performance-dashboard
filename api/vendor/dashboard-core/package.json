@@ -1,0 +1,41 @@
+{
+  "name": "@emoya-cmyk/dashboard-core",
+  "version": "0.1.0",
+  "description": "Canonical dashboard-family core. First module: the auth/authz + security layer (JWT verify, multi-tenant scope guards, security headers, dependency-free rate limiter / AI budget, password floor + login timing equalizer + JWT boot guard), as dependency-injected factories.",
+  "main": "index.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2"
+  },
+  "peerDependencies": {
+    "bcryptjs": "^2.4.3"
+  },
+  "peerDependenciesMeta": {
+    "bcryptjs": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emoya-cmyk/dashboard-core.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}
