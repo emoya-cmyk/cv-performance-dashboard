@@ -28,8 +28,8 @@ jobs:
         env:
           JWT_SECRET: test-secret-for-ci
 
-  build:
-    name: Frontend build
+  frontend:
+    name: Frontend lint + test + build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,13 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-      - name: Install deps
-        run: npm ci
+      - name: Install deps (including devDependencies)
+        # devDependencies (vite, eslint, vitest) are needed to lint, test, and
+        # build, so install with --include=dev.
+        run: npm ci --include=dev
+      - name: Lint (eslint src)
+        run: npm run lint
+      - name: Frontend tests (Vitest)
+        run: npm run test:fe
       - name: Vite build
         run: npx vite build
