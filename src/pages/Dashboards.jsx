@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -10,7 +10,10 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort } from '@/lib/utils'
-import { widgetGroupBy, reorderWidgets, buildDrillSpec, drillTitle } from '@/lib/dashboards'
+import {
+  widgetGroupBy, buildDrillSpec, drillTitle,
+  GRID_COLS, resolveLayouts, moveWidget, resizeWidget,
+} from '@/lib/dashboards'
 
 /*
  * Dashboards — the persistence half of Phase 3. Explore builds an ad-hoc view;
@@ -270,10 +273,141 @@ function WidgetCard({ widget, onDrill, dragProps }) {
   )
 }
 
-// ── one opened dashboard: run + render its widgets in a grid ──────────────────
+// ── the free-form 2-D grid ────────────────────────────────────────────────────
+// Renders each widget on a fixed GRID_COLS-column CSS grid using its resolved
+// {x,y,w,h}. BACKWARD-COMPAT: a dashboard with no saved layouts resolves to the
+// existing linear flow (sequential half-width tiles), so it looks identical until
+// a tile is moved/resized. A tile is moved by dragging its grip onto a grid cell;
+// resized by dragging the bottom-right corner across column/row steps. Both
+// persist the whole array via the parent's tenant-guarded PUT.
+const ROW_PX = 232 // one grid row's pixel height (a tile of h=1 is this tall)
+
+function DashboardGrid({ runWidgets, savedWidgets, dragId, setDragId, onMove, onResize, onDrill }) {
+  // Resolve placement off the SAVED widgets (they carry layout); pair each with
+  // its verified run result (figures) by id. A widget present in saved but not in
+  // the run (or vice-versa) is tolerated — we render whatever the run returned.
+  const runById = new Map((runWidgets || []).map((w) => [w.id, w]))
+  const placed = resolveLayouts(savedWidgets.length ? savedWidgets : (runWidgets || []))
+    .map((p) => ({ layout: p.layout, run: runById.get(p.widget.id), id: p.widget.id }))
+    .filter((p) => p.run) // only tiles we have a render for
+  const rows = placed.reduce((m, p) => Math.max(m, p.layout.y + p.layout.h), 1)
+
+  // Resize drag state: track the tile being resized and the pointer origin so we
+  // can translate pixel deltas into column/row steps on pointer-up.
+  const [resizing, setResizing] = useState(null) // { id, startX, startY, w, h, colPx }
+  const gridRef = useRef(null)
+
+  // Below `lg` we collapse to a single stacked column (no inline grid placement,
+  // no drag/resize) — the free-form grid is a desktop affordance; on a phone the
+  // tiles just stack in their saved/spec order, same as the rest of the app.
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(max-width: 1023px)')
+    const onChange = (e) => setNarrow(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (!resizing) return
+    function onUp(e) {
+      const dCols = Math.round((e.clientX - resizing.startX) / (resizing.colPx + 16))
+      const dRows = Math.round((e.clientY - resizing.startY) / ROW_PX)
+      const nw = resizing.w + dCols
+      const nh = resizing.h + dRows
+      if (nw !== resizing.w || nh !== resizing.h) onResize(resizing.id, nw, nh)
+      setResizing(null)
+    }
+    window.addEventListener('pointerup', onUp, { once: true })
+    return () => window.removeEventListener('pointerup', onUp)
+  }, [resizing, onResize])
+
+  if (narrow) {
+    return (
+      <div className="grid grid-cols-1 gap-4">
+        {placed.map(({ id, run }) => (
+          <WidgetCard key={id} widget={run} onDrill={onDrill} />
+        ))}
+      </div>
+    )
+  }
+
+  function startResize(e, id, layout) {
+    e.preventDefault(); e.stopPropagation()
+    const gw = gridRef.current ? gridRef.current.getBoundingClientRect().width : 0
+    const colPx = gw ? (gw - (GRID_COLS - 1) * 16) / GRID_COLS : 160 // minus gaps
+    setResizing({ id, startX: e.clientX, startY: e.clientY, w: layout.w, h: layout.h, colPx })
+  }
+
+  // A drop onto a tile or an empty cell moves the dragged tile's top-left there.
+  function dropAt(x, y) {
+    if (dragId) onMove(dragId, x, y)
+    setDragId(null)
+  }
+
+  return (
+    <div
+      ref={gridRef}
+      className="grid gap-4"
+      style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0, 1fr))`, gridAutoRows: `${ROW_PX}px` }}
+    >
+      {/* Empty drop cells (only meaningful while dragging) so a tile can be placed
+          on an unoccupied slot, not just swapped onto another tile. */}
+      {dragId && Array.from({ length: rows + 1 }).flatMap((_, y) =>
+        Array.from({ length: GRID_COLS }).map((__, x) => (
+          <div
+            key={`cell-${x}-${y}`}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); dropAt(x, y) }}
+            className="rounded-2xl ring-1 ring-dashed ring-brand-200/60"
+            style={{ gridColumn: `${x + 1} / span 1`, gridRow: `${y + 1} / span 1` }}
+            aria-hidden
+          />
+        )),
+      )}
+
+      {placed.map(({ id, layout, run }) => (
+        <div
+          key={id}
+          onDragOver={(e) => { if (dragId && dragId !== id) e.preventDefault() }}
+          onDrop={(e) => { e.preventDefault(); if (dragId && dragId !== id) dropAt(layout.x, layout.y) }}
+          className={cn('relative transition', dragId && dragId !== id && 'rounded-2xl ring-2 ring-dashed ring-brand-200')}
+          style={{
+            gridColumn: `${layout.x + 1} / span ${layout.w}`,
+            gridRow:    `${layout.y + 1} / span ${layout.h}`,
+          }}
+        >
+          <WidgetCard
+            widget={run}
+            onDrill={onDrill}
+            dragProps={{
+              draggable: true,
+              onDragStart: (e) => { setDragId(id); e.dataTransfer.effectAllowed = 'move' },
+              onDragEnd: () => setDragId(null),
+            }}
+          />
+          {/* Resize handle — bottom-right corner. Pointer drag → col/row steps. */}
+          <span
+            onPointerDown={(e) => startResize(e, id, layout)}
+            className="absolute bottom-1 right-1 w-3.5 h-3.5 cursor-nwse-resize text-slate-300 hover:text-slate-500"
+            title="Drag to resize"
+            aria-label="Resize widget"
+          >
+            <svg viewBox="0 0 10 10" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M9 3 L3 9 M9 6 L6 9" strokeLinecap="round" />
+            </svg>
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── one opened dashboard: run + render its widgets on a free-form 2-D grid ─────
 function DashboardDetail({ id, onBack, onChanged }) {
   const [run, setRun] = useState(null)
-  const [savedWidgets, setSavedWidgets] = useState([]) // raw saved specs (for reorder-persist)
+  const [savedWidgets, setSavedWidgets] = useState([]) // raw saved specs (carry layout for persist)
   const [status, setStatus] = useState('loading')
   const [error, setError] = useState(null)
   const [dragId, setDragId] = useState(null)           // widget id being dragged
@@ -282,8 +416,8 @@ function DashboardDetail({ id, onBack, onChanged }) {
 
   const load = useCallback(() => {
     setStatus('loading'); setError(null)
-    // Load the saved spec array (so a reorder can be persisted) AND the verified
-    // server run (the rendered figures) together.
+    // Load the saved spec array (carrying any per-widget layout, so a move/resize
+    // can be persisted) AND the verified server run (the rendered figures).
     Promise.all([api.getDashboard(id), api.runDashboard(id)])
       .then(([d, r]) => { setSavedWidgets(d?.dashboard?.widgets || []); setRun(r); setStatus('done') })
       .catch((e) => { setError(e.message || 'Failed to load dashboard'); setStatus('error') })
@@ -291,32 +425,28 @@ function DashboardDetail({ id, onBack, onChanged }) {
 
   useEffect(() => { load() }, [load])
 
-  // Persist a drag-drop reorder: the widget ARRAY ORDER is the layout, so we move
-  // the saved spec into its new slot and PUT the whole array back through the
-  // tenant-guarded PUT /api/dashboards/:id, then mirror the order locally so the
-  // grid reflows immediately without a full re-run.
-  async function commitReorder(fromId, toId) {
-    const next = reorderWidgets(savedWidgets, fromId, toId)
-    if (next === savedWidgets) return
+  // Persist a layout change (move or resize). The pure helper returns the WHOLE
+  // widgets array with explicit {x,y,w,h} on every tile (the first edit promotes a
+  // linear dashboard to grid mode); we PUT it back through the tenant-guarded
+  // PUT /api/dashboards/:id and mirror it locally so the grid reflows instantly.
+  // Optimistic with rollback, exactly like the reorder path before it.
+  async function commitLayout(next) {
+    if (!Array.isArray(next) || next === savedWidgets) return
     const prev = savedWidgets
-    const prevRun = run
-    // optimistic: reflow both the saved array and the rendered run results
-    setSavedWidgets(next)
-    if (run?.widgets) {
-      const byId = new Map(run.widgets.map((w) => [w.id, w]))
-      setRun({ ...run, widgets: next.map((w) => byId.get(w.id)).filter(Boolean) })
-    }
+    setSavedWidgets(next)        // optimistic: only coordinates change, run results stay valid
     setSavingOrder(true)
     try {
       await api.updateDashboard(id, { widgets: next })
       onChanged?.()
     } catch (e) {
-      setSavedWidgets(prev); setRun(prevRun) // roll back on failure
-      window.alert(e.message || 'Could not save the new order')
+      setSavedWidgets(prev)      // roll back on failure
+      window.alert(e.message || 'Could not save the new layout')
     } finally {
       setSavingOrder(false)
     }
   }
+  const commitMove   = (wid, x, y) => commitLayout(moveWidget(savedWidgets, wid, x, y))
+  const commitResize = (wid, w, h) => commitLayout(resizeWidget(savedWidgets, wid, w, h))
 
   function openDrill(widget, row) {
     const spec = buildDrillSpec(widget, row)
@@ -379,34 +509,19 @@ function DashboardDetail({ id, onBack, onChanged }) {
           </div>
         ) : (
           <>
-            <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <GripVertical className="w-3 h-3 text-slate-300" /> Drag a tile to reorder (saved automatically).
+            <p className="text-[11px] text-slate-400 flex items-center gap-1.5 flex-wrap">
+              <GripVertical className="w-3 h-3 text-slate-300" /> Drag a tile to place it; drag its corner to resize (saved automatically).
               <Search className="w-3 h-3 text-slate-300 ml-1" /> Click a row to drill in.
             </p>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {run.widgets.map((w) => (
-                <div
-                  key={w.id}
-                  onDragOver={(e) => { if (dragId && dragId !== w.id) e.preventDefault() }}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    if (dragId && dragId !== w.id) commitReorder(dragId, w.id)
-                    setDragId(null)
-                  }}
-                  className={cn('transition', dragId && dragId !== w.id && 'rounded-2xl ring-2 ring-dashed ring-brand-200')}
-                >
-                  <WidgetCard
-                    widget={w}
-                    onDrill={openDrill}
-                    dragProps={{
-                      draggable: true,
-                      onDragStart: (e) => { setDragId(w.id); e.dataTransfer.effectAllowed = 'move' },
-                      onDragEnd: () => setDragId(null),
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
+            <DashboardGrid
+              runWidgets={run.widgets}
+              savedWidgets={savedWidgets}
+              dragId={dragId}
+              setDragId={setDragId}
+              onMove={commitMove}
+              onResize={commitResize}
+              onDrill={openDrill}
+            />
           </>
         )
       )}

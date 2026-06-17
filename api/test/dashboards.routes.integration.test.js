@@ -255,6 +255,68 @@ test('LEAK-PROOF: a client cannot reorder/persist a peer or agency dashboard via
   assert.deepEqual(stillB.body.dashboard.widgets.map((x) => x.id), ['a', 'b'])
 })
 
+test('PUT persists per-widget layout {x,y,w,h} and it round-trips through GET + /run', async () => {
+  await ready()
+  const w = (id, layout) => ({ id, title: id, viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] }, ...(layout ? { layout } : {}) })
+  // Create WITHOUT layouts (the existing linear shape) — backward-compat baseline.
+  const c = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Grid', widgets: [w('a'), w('b')] } })
+  assert.equal(c.status, 201)
+  assert.ok(c.body.dashboard.widgets.every((x) => x.layout === undefined), 'no layout persisted until set')
+  const id = c.body.dashboard.id
+
+  // Move/resize: assign explicit free-form placements and PUT the whole array back.
+  const laidOut = [w('a', { x: 0, y: 0, w: 2, h: 1 }), w('b', { x: 2, y: 0, w: 2, h: 2 })]
+  const put = await request('PUT', `/api/dashboards/${id}`, { token: AGENCY, body: { widgets: laidOut } })
+  assert.equal(put.status, 200)
+  assert.deepEqual(put.body.dashboard.widgets.map((x) => x.layout), [{ x: 0, y: 0, w: 2, h: 1 }, { x: 2, y: 0, w: 2, h: 2 }])
+
+  // GET reloads the exact saved layout.
+  const got = await request('GET', `/api/dashboards/${id}`, { token: AGENCY })
+  assert.deepEqual(got.body.dashboard.widgets.map((x) => x.layout), [{ x: 0, y: 0, w: 2, h: 1 }, { x: 2, y: 0, w: 2, h: 2 }])
+
+  // /run still renders every widget (layout is presentation-only, never blocks a run).
+  const run = await request('POST', `/api/dashboards/${id}/run`, { token: AGENCY })
+  assert.equal(run.status, 200)
+  assert.deepEqual(run.body.widgets.map((x) => x.id), ['a', 'b'])
+  assert.ok(run.body.widgets.every((x) => x.result), 'both widgets ran')
+})
+
+test('a malformed/forged layout is DROPPED on save (never persisted), falling back to linear', async () => {
+  await ready()
+  const base = { spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] } }
+  const c = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Junk layout', widgets: [
+    { id: 'a', ...base, layout: { x: -1, y: 0, w: 2, h: 1 } },         // negative x
+    { id: 'b', ...base, layout: { x: 0, w: 2, h: 1 } },               // missing y
+    { id: 'c', ...base, layout: { x: 0, y: 0, w: 0, h: 1 } },         // w < 1
+    { id: 'd', ...base, layout: { x: 1, y: 2, w: 2, h: 1, evil: 1 } } // valid → extra key stripped
+  ] } })
+  assert.equal(c.status, 201)
+  const layouts = c.body.dashboard.widgets.map((x) => x.layout)
+  assert.equal(layouts[0], undefined)
+  assert.equal(layouts[1], undefined)
+  assert.equal(layouts[2], undefined)
+  assert.deepEqual(layouts[3], { x: 1, y: 2, w: 2, h: 1 }) // only the clean shape survives
+})
+
+test('LEAK-PROOF: a client cannot persist a layout onto a peer or agency dashboard', async () => {
+  await ready()
+  const w = (id) => ({ id, title: id, viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] }, layout: { x: 0, y: 0, w: 2, h: 1 } })
+  // Agency seeds a board for tenant B and an agency-owned board.
+  const forB   = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'B grid', client_id: B, widgets: [w('a')] } })
+  const agency = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Agency grid', widgets: [w('a')] } })
+
+  // Client A tries to persist a NEW layout on each → 403 (the tenant-clamped PUT).
+  const moved = [{ id: 'a', title: 'a', viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] }, layout: { x: 2, y: 3, w: 2, h: 2 } }]
+  const peer = await request('PUT', `/api/dashboards/${forB.body.dashboard.id}`, { token: CLIENT_A, body: { widgets: moved } })
+  assert.equal(peer.status, 403)
+  const ag = await request('PUT', `/api/dashboards/${agency.body.dashboard.id}`, { token: CLIENT_A, body: { widgets: moved } })
+  assert.equal(ag.status, 403)
+
+  // B's saved layout is untouched by the rejected write.
+  const stillB = await request('GET', `/api/dashboards/${forB.body.dashboard.id}`, { token: AGENCY })
+  assert.deepEqual(stillB.body.dashboard.widgets[0].layout, { x: 0, y: 0, w: 2, h: 1 })
+})
+
 test('unauthenticated requests are rejected; malformed widgets are 400', async () => {
   await ready()
   const noauth = await request('GET', '/api/dashboards')
