@@ -18,6 +18,10 @@ api/dev.db-wal
 
 # Logs
 *.log
+
+# Python bytecode (shared-kit/scripts/*.py)
+__pycache__/
+*.pyc
 npm-debug.log*
 
 # OS
