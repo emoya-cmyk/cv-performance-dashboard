@@ -190,21 +190,21 @@ test('POST /api/cron/heartbeat runs the REAL sync sweep on an empty DB → 200, 
   assert.equal(r.body.results.insights, undefined, 'insights was not requested')
 })
 
-test('POST /api/cron/heartbeat default body runs all three REAL jobs in canonical order → 200', async () => {
+test('POST /api/cron/heartbeat default body runs all REAL jobs in canonical order → 200', async () => {
   await ready()
   // No `jobs` → the full idempotent set, driven through the real lib collaborators
-  // (sync/watchdog/insights) against an empty migrated DB. This is the wiring
+  // (sync/watchdog/insights/alerts) against an empty migrated DB. This is the wiring
   // proof: a mis-imported collaborator would surface as that job's ok=false.
   const r = await heartbeat({ bearer: CRON_SECRET })
   assert.equal(r.status, 200)
-  assert.deepEqual(r.body.jobs, VALID_JOBS, 'all three jobs ran, in canonical order')
+  assert.deepEqual(r.body.jobs, VALID_JOBS, 'all jobs ran, in canonical order')
   for (const job of VALID_JOBS) {
     const res = r.body.results[job]
     assert.ok(res, `${job} produced a result`)
     assert.equal(res.ok, true, `${job} succeeded on an empty DB (error: ${res && res.error})`)
     assert.equal(typeof res.ms, 'number', `${job} carries an ms timing`)
   }
-  assert.equal(r.body.ok, true, 'all three idempotent jobs succeeded')
+  assert.equal(r.body.ok, true, 'all idempotent jobs succeeded')
 })
 
 // ── POST /heartbeat — malformed request contract ─────────────────────────────

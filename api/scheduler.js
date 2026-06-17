@@ -20,7 +20,8 @@ const { assessBriefDelivery, narrateBriefDelivery } = require('./lib/briefDelive
 const { runConnectionWatchdog } = require('./lib/connectionWatchdog')
 const { recordHeartbeat, classifyRunStatus, loadRecentRuns, assessOps } = require('./lib/opsHealth')
 const { planJobRecovery } = require('./lib/opsRecovery')
-const { fireAlert, sendAlert } = require('./lib/alertDelivery')
+const { sendAlert }       = require('./lib/alertDelivery')
+const { evaluateAlerts }  = require('./lib/alertEngine')
 const memoryEngine        = require('./lib/memory')
 const { runTier1Digest, runDeadLetterRetention } = require('./lib/makeRemediationSweeps')
 const { governMemory }    = require('./lib/memoryGovernor')
@@ -290,78 +291,20 @@ function startScheduler() {
   console.log(`[scheduler] insights on schedule: ${INSIGHTS_SCHEDULE}`)
 
   // ── WoW threshold alerts — daily 7:30am UTC ───────────────────────────────────
-  // Compares the two most recent weekly_reports rows per client. Fires a warning /
-  // critical based on per-client thresholds from client_alert_rules (falls back to
-  // 20% warn / 40% critical). Skips clients with fewer than 2 weeks of data.
+  // Evaluates client_alert_rules against the two most recent weekly_reports rows
+  // per client (warn/critical WoW drops, defaulting to 20%/40%). The eval→fire loop
+  // lives in lib/alertEngine.evaluateAlerts — extracted so the SAME idempotent path
+  // is what the external-cron heartbeat (/api/cron/*) drives. IDEMPOTENT: each fire
+  // dedups on (client, metric, week), so re-running never duplicates a fired_alerts
+  // row. Delivery self-gates on a configured channel (Slack/Resend), so this records
+  // alerts and sends nothing when no channel is set.
   cron.schedule(THRESHOLD_SCHEDULE, async () => {
     console.log('[threshold] starting WoW check', new Date().toISOString())
     try {
-      const cutoff = new Date()
-      cutoff.setUTCDate(cutoff.getUTCDate() - 21)
-      const cutoffStr = cutoff.toISOString().slice(0, 10)
-
-      const [{ rows }, { rows: ruleRows }] = await Promise.all([
-        query(
-          `SELECT wr.client_id, c.name AS client_name, wr.week_start,
-                  COALESCE(wr.projected_revenue, 0) AS revenue,
-                  COALESCE(wr.raw_leads, 0)         AS leads
-             FROM weekly_reports wr
-             JOIN clients c ON c.id = wr.client_id
-            WHERE wr.week_start >= $1
-            ORDER BY wr.client_id, wr.week_start DESC`,
-          [cutoffStr]
-        ),
-        query(`SELECT client_id, revenue_drop_warn, revenue_drop_crit, leads_drop_warn, leads_drop_crit FROM client_alert_rules`),
-      ])
-
-      const rulesByClient = {}
-      for (const r of ruleRows) rulesByClient[r.client_id] = r
-
-      const byClient = {}
-      for (const row of rows) {
-        if (!byClient[row.client_id]) byClient[row.client_id] = { name: row.client_name, weeks: [] }
-        if (byClient[row.client_id].weeks.length < 2) byClient[row.client_id].weeks.push(row)
-      }
-
-      for (const [clientId, data] of Object.entries(byClient)) {
-        const [curr, prev] = data.weeks
-        if (!curr || !prev) continue
-
-        const rules = rulesByClient[clientId] ?? {}
-        const checks = [
-          {
-            metric:    'Revenue',
-            curr:      Number(curr.revenue),
-            prev:      Number(prev.revenue),
-            warnAt:    Number(rules.revenue_drop_warn) || 0.20,
-            critAt:    Number(rules.revenue_drop_crit) || 0.40,
-          },
-          {
-            metric:    'Leads',
-            curr:      Number(curr.leads),
-            prev:      Number(prev.leads),
-            warnAt:    Number(rules.leads_drop_warn)   || 0.20,
-            critAt:    Number(rules.leads_drop_crit)   || 0.40,
-          },
-        ]
-        for (const c of checks) {
-          if (c.prev <= 0) continue
-          const drop = (c.prev - c.curr) / c.prev
-          if (drop <= c.warnAt) continue
-          const pct      = Math.round(drop * 100)
-          const severity = drop >= c.critAt ? 'critical' : 'warning'
-          fireAlert({
-            title:      `${data.name} — ${c.metric} down ${pct}% WoW`,
-            body:       `${data.name} ${c.metric.toLowerCase()} fell from ${c.prev.toFixed(0)} to ${c.curr.toFixed(0)} (−${pct}%) vs the prior week.`,
-            severity,
-            clientName: data.name,
-            clientId,
-            metric:     c.metric,
-            value:      `-${pct}%`,
-          })
-          console.log(`[threshold] ${severity.toUpperCase()}: ${data.name} ${c.metric} −${pct}%`)
-        }
-      }
+      const r = await evaluateAlerts({ query })
+      console.log(`[threshold] done — evaluated ${r.evaluated} clients, ` +
+        `${r.fired} fired (${r.delivered} delivered), ${r.skipped} deduped, ${r.errors.length} errors`)
+      for (const e of r.errors) console.error(`[threshold] ${e.client_id}/${e.metric}: ${e.error}`)
     } catch (err) {
       console.error('[threshold] fatal:', err.message)
     }

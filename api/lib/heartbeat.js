@@ -9,13 +9,18 @@
 // cron (a Render Cron Job, GitHub Actions, cron-job.org, ...) can POST one authed
 // request and drive it — so the loop survives the host sleeping.
 //
-// It runs the three IDEMPOTENT, INTERNAL jobs only:
+// It runs the four IDEMPOTENT, INTERNAL jobs only:
 //   sync     — refresh every active connection's facts (runSync per connection)
 //   watchdog — the selective, backoff-gated self-heal recovery loop
 //   insights — the nightly self-improving intelligence sweep
+//   alerts   — evaluate client_alert_rules against the latest weekly metrics and
+//              record a fired_alerts row for any crossed condition (idempotent per
+//              client/metric/week; delivery self-gates on a configured channel).
 // The weekly email DIGEST is deliberately NOT here: it sends client-facing emails
 // (an external, gated side-effect), so it must never be fired by a bare heartbeat
-// ping. It stays on its own weekly cadence in scheduler.js.
+// ping. It stays on its own weekly cadence in scheduler.js. The alerts job is safe
+// here precisely because its delivery is inert without a configured channel and it
+// dedups, so a heartbeat tick can never spam or send an unsolicited client email.
 //
 // Design notes:
 //   • Pure & dependency-injected — every collaborator (query, runSync,
@@ -23,20 +28,21 @@
 //     module is trivially unit-testable with no database and no network.
 //   • Per-job isolation — each job runs in its own try/catch and reports a
 //     structured { ok, ... } result; one failing job never sinks the others.
-//   • Canonical order — sync → watchdog → insights, regardless of the order the
-//     caller lists them (fresh facts first, then heal anything dark, then sweep
-//     on the fresh data). De-duplicated.
+//   • Canonical order — sync → watchdog → insights → alerts, regardless of the
+//     order the caller lists them (fresh facts first, then heal anything dark,
+//     then sweep on the fresh data, then evaluate alert rules against it).
+//     De-duplicated.
 //   • Idempotent — running the heartbeat twice back-to-back is safe: sync UPSERTs
 //     facts, the watchdog is deterministic-backoff-gated, insights re-grades and
-//     re-snapshots the same window.
+//     re-snapshots the same window, and alerts dedup per client/metric/week.
 
 // The autonomy-liveness ledger writer + run grader. recordHeartbeat persists one
 // row per job run via the INJECTED `query` (so this module stays DB-free under test
 // — the fake query simply absorbs the write); the ops-health reader later grades
 // each job's freshness against its expected cadence to prove the loop is alive.
-const { recordHeartbeat, classifyRunStatus } = require('./opsHealth')
+const { recordHeartbeat, classifyRunStatus, JOBS: LEDGER_JOBS } = require('./opsHealth')
 
-const VALID_JOBS = ['sync', 'watchdog', 'insights']
+const VALID_JOBS = ['sync', 'watchdog', 'insights', 'alerts']
 
 // Map a finished job result to the (status, detail) the heartbeat ledger records.
 // A job that threw (ok:false) is ALWAYS 'error' with zeroed counters — never a
@@ -48,6 +54,8 @@ function ledgerStatus(job, result) {
   if (job === 'sync')     return classifyRunStatus(result.synced, result.failed)
   if (job === 'watchdog') return classifyRunStatus(result.scanned, result.failed)
   if (job === 'insights') return classifyRunStatus(result.swept, result.failed)
+  // alerts: evaluated clients are the "work" count; delivery/insert errors the failures.
+  if (job === 'alerts')   return classifyRunStatus(result.evaluated, (result.errors || []).length)
   return 'error'
 }
 
@@ -56,6 +64,7 @@ function ledgerDetail(job, result) {
   if (job === 'sync')     return { scanned: r.scanned || 0, synced: r.synced || 0, failed: r.failed || 0 }
   if (job === 'watchdog') return { scanned: r.scanned || 0, healed: r.healed || 0, failed: r.failed || 0, operator_required: r.operator_required || 0 }
   if (job === 'insights') return { swept: r.swept || 0, clients: r.clients || 0, findings: r.findings || 0, failed: r.failed || 0 }
+  if (job === 'alerts')   return { evaluated: r.evaluated || 0, fired: r.fired || 0, delivered: r.delivered || 0, skipped: r.skipped || 0, failed: (r.errors || []).length }
   return {}
 }
 
@@ -97,6 +106,10 @@ async function runHeartbeat(deps = {}) {
     runSync,
     runInsightsForAll,
     runConnectionWatchdog,
+    // The alerts evaluator. Injectable for tests; defaults to the real engine so
+    // an external cron driving /api/cron/* needs no extra wiring. Bound to the
+    // injected `query` so the module stays the single DB seam.
+    evaluateAlerts = require('./alertEngine').evaluateAlerts,
     logger = console,
   } = deps
 
@@ -122,6 +135,12 @@ async function runHeartbeat(deps = {}) {
       } else if (job === 'insights') {
         const r = await runInsightsForAll()
         results.insights = { ok: true, ...r }
+      } else if (job === 'alerts') {
+        // Evaluate rules → fire on the just-synced/swept fresh data. Idempotent
+        // (dedups per client/metric/week) and delivery self-gates on a configured
+        // channel, so it's safe to run on every tick.
+        const r = await evaluateAlerts({ query })
+        results.alerts = { ok: true, ...r }
       }
     } catch (err) {
       results[job] = { ok: false, error: err.message }
@@ -134,7 +153,12 @@ async function runHeartbeat(deps = {}) {
     // even while the host is asleep and the in-process scheduler never fires. The
     // injected `query` is the only DB seam (keeps this module unit-testable); a
     // ledger-write failure is swallowed so it can never sink the heartbeat itself.
-    if (typeof query === 'function') {
+    //
+    // Only jobs in the ops-health roster (LEDGER_JOBS) are recorded — the `alerts`
+    // job is a fire-only side-effect with its own dedup/audit (fired_alerts) and is
+    // deliberately NOT on the cadence-graded liveness strip, so recording it would
+    // be a rejected write. Skipping it keeps the ops-health surface unchanged.
+    if (typeof query === 'function' && LEDGER_JOBS.includes(job)) {
       try {
         await recordHeartbeat({
           query,

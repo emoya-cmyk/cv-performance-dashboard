@@ -54,27 +54,30 @@ test('runSyncAll isolates a per-connection failure — one dead channel never si
 })
 
 // ── runHeartbeat: orchestration ─────────────────────────────────────────────────
-test('runHeartbeat runs all three jobs in canonical order by default', async () => {
+test('runHeartbeat runs all four jobs in canonical order by default', async () => {
   const order = []
   const deps = {
     query: connQuery([{ client_id: 'c1', channel: 'google_ads' }]),
     runSync: async () => { order.push('sync'); return { rows: 1 } },
     runConnectionWatchdog: async () => { order.push('watchdog'); return { scanned: 1, healed: 0, failed: 0, operator_required: 0 } },
     runInsightsForAll: async () => { order.push('insights'); return { swept: 1, clients: 1, findings: 2, failed: 0, errors: [] } },
+    evaluateAlerts: async () => { order.push('alerts'); return { evaluated: 1, fired: 0, delivered: 0, skipped: 0, errors: [] } },
     logger: quietLogger(),
   }
 
   const r = await runHeartbeat(deps)
 
   assert.equal(r.ok, true)
-  assert.deepEqual(r.jobs, ['sync', 'watchdog', 'insights'])
+  assert.deepEqual(r.jobs, ['sync', 'watchdog', 'insights', 'alerts'])
   // sync runs runSync inside the sweep, so 'sync' appears first, then the others.
-  assert.deepEqual(order, ['sync', 'watchdog', 'insights'], 'canonical execution order')
+  assert.deepEqual(order, ['sync', 'watchdog', 'insights', 'alerts'], 'canonical execution order')
   assert.equal(r.results.sync.ok, true)
   assert.equal(r.results.sync.synced, 1)
   assert.equal(r.results.watchdog.ok, true)
   assert.equal(r.results.insights.ok, true)
   assert.equal(r.results.insights.findings, 2)
+  assert.equal(r.results.alerts.ok, true)
+  assert.equal(r.results.alerts.evaluated, 1)
   for (const j of r.jobs) assert.equal(typeof r.results[j].ms, 'number', `${j} carries an ms timing`)
 })
 
@@ -156,5 +159,56 @@ test('runHeartbeat passes the right deps into the watchdog', async () => {
 })
 
 test('VALID_JOBS is the canonical heartbeat job set, in order', () => {
-  assert.deepEqual(VALID_JOBS, ['sync', 'watchdog', 'insights'])
+  assert.deepEqual(VALID_JOBS, ['sync', 'watchdog', 'insights', 'alerts'])
+})
+
+test('runHeartbeat drives the alerts job via injected evaluateAlerts; it is fire-only (no ledger write)', async () => {
+  const ledger = []
+  const deps = {
+    jobs: ['alerts'],
+    // recordHeartbeat would write through this query — capture any ledger insert.
+    query: async (sql, params) => {
+      if (/job_heartbeats/i.test(sql)) ledger.push({ sql, params })
+      return { rows: [] }
+    },
+    runSync: async () => ({ rows: 0 }),
+    runConnectionWatchdog: async () => ({}),
+    runInsightsForAll: async () => ({}),
+    evaluateAlerts: async ({ query }) => {
+      assert.equal(typeof query, 'function', 'alerts job is handed the same query seam')
+      return { evaluated: 3, fired: 2, delivered: 0, skipped: 1, errors: [] }
+    },
+    logger: quietLogger(),
+  }
+
+  const r = await runHeartbeat(deps)
+
+  assert.deepEqual(r.jobs, ['alerts'], 'only the alerts job ran')
+  assert.equal(r.ok, true)
+  assert.equal(r.results.alerts.evaluated, 3)
+  assert.equal(r.results.alerts.fired, 2)
+  assert.equal(r.results.alerts.skipped, 1)
+  assert.equal(typeof r.results.alerts.ms, 'number', 'alerts carries an ms timing')
+  // alerts is NOT on the cadence-graded ops-health roster — it has its own audit
+  // trail (fired_alerts), so it deliberately does not write a job_heartbeats row.
+  assert.equal(ledger.length, 0, 'the alerts job does not touch the ops-health ledger')
+})
+
+test('runHeartbeat alerts job isolates an evaluator throw — overall ok=false, others unaffected', async () => {
+  const deps = {
+    query: connQuery([]),
+    runSync: async () => ({ rows: 0 }),
+    runConnectionWatchdog: async () => ({ scanned: 0 }),
+    runInsightsForAll: async () => ({ swept: 0, clients: 0, findings: 0, failed: 0, errors: [] }),
+    evaluateAlerts: async () => { throw new Error('alerts blew up') },
+    logger: quietLogger(),
+  }
+
+  const r = await runHeartbeat(deps)
+
+  assert.equal(r.ok, false, 'a failing alerts job makes the heartbeat not-ok')
+  assert.equal(r.results.alerts.ok, false)
+  assert.equal(r.results.alerts.error, 'alerts blew up')
+  assert.equal(r.results.sync.ok, true, 'the other jobs still ran')
+  assert.equal(r.results.insights.ok, true)
 })
