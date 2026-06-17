@@ -60,6 +60,7 @@ const precision = require('./lib/precision')
 const correlate = require('./lib/correlate')
 const contribution = require('./lib/contribution')
 const ratioAttribution = require('./lib/ratioAttribution')
+const metricsCore = require('./lib/metricsCore')
 
 module.exports = {
   // Auth/authz layer
@@ -183,4 +184,17 @@ module.exports = {
   isRatioMetric: ratioAttribution.isRatioMetric,
   ratioDriversOf: ratioAttribution.ratioDriversOf,
   RATIO_IDENTITIES: ratioAttribution.RATIO_IDENTITIES,
+
+  // Engine (increment 3) — `metricsCore`, the SINGLE source of truth for derived
+  // KPIs (the wide `AGG` aggregate, `derive`, `pctChange`, `detectAnomalies`)
+  // shared by the live metrics endpoints, the AI evidence pack, and the digest.
+  // Byte-for-byte identical across cv + agency before extraction. Exposed both as
+  // the namespace and spread, so cv's `lib/metricsCore.js` re-exports the exact
+  // same public shape with no call-site changes. No member collides with the
+  // module name, so the namespace is exposed plainly as `metricsCore`.
+  metricsCore,
+  AGG: metricsCore.AGG,
+  derive: metricsCore.derive,
+  pctChange: metricsCore.pctChange,
+  detectAnomalies: metricsCore.detectAnomalies,
 }
