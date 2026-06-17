@@ -13,3 +13,9 @@ there; do not edit in place.
   Byte-for-byte identical across cv + agency before extraction; cv's
   `api/lib/baselines.js` is now a thin re-export of this copy. Pure functions, no
   DB/IO.
+- **Engine — `lib/forecast.js`, `lib/attribution.js`, `lib/pacing.js`,
+  `lib/precision.js`, `lib/correlate.js`, `lib/contribution.js`,
+  `lib/ratioAttribution.js`** (the pure-math analysis modules) — increment 2.
+  Byte-for-byte identical across cv + agency before extraction; cv's
+  `api/lib/<module>.js` are now thin re-exports of these copies. Pure functions,
+  no DB/IO. (`forecast` depends on the package-internal `./baselines`.)
