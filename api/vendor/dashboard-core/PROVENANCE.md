@@ -19,3 +19,11 @@ there; do not edit in place.
   Byte-for-byte identical across cv + agency before extraction; cv's
   `api/lib/<module>.js` are now thin re-exports of these copies. Pure functions,
   no DB/IO. (`forecast` depends on the package-internal `./baselines`.)
+- **Engine — `lib/metricsCore.js`** (the single source of truth for derived KPIs:
+  the wide `AGG` aggregate, `derive`, `pctChange`, `detectAnomalies`) — increment 3.
+  Byte-for-byte identical across cv + agency before extraction; cv's
+  `api/lib/metricsCore.js` is now a thin re-export of this copy. Pure functions,
+  no DB/IO. Shipped with a characterization test (`test/metricsCore.test.js`)
+  written first to pin its observable behavior (totals, guarded ratios, the
+  cold-start no-NaN/Infinity hardening, `pctChange` null guard, and the
+  `detectAnomalies` threshold/skip/sort).
