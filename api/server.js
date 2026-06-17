@@ -25,6 +25,7 @@ const insightsRouter     = require('./routes/insights')
 const eventsRouter       = require('./routes/events')
 const alertsRouter       = require('./routes/alerts')
 const memoryRouter       = require('./routes/memory')
+const dashboardsRouter   = require('./routes/dashboards')
 const ghlRouter          = require('./routes/webhooks/ghl')
 const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
@@ -128,6 +129,7 @@ app.use('/api/insights',   requireAuth, insightsRouter)  // autonomous intellige
 app.use('/api/events',    requireAuth, eventsRouter)     // campaign timeline annotations
 app.use('/api/alerts',    requireAuth, alertsRouter)     // fired-alert inventory (agency-only)
 app.use('/api/memory',    requireAuth, memoryRouter)     // agent memory layer (scoped recall / write / forget)
+app.use('/api/dashboards', requireAuth, dashboardsRouter) // saved/composable dashboards (widgets reuse the /api/query clamp)
 app.use('/api/make-remediation', requireAuth, makeRemediationOpsRouter) // operator fix queue + circuit-breaker override (agency-only)
 
 // Email digest prefs — GET + PUT /api/clients/:id/email
