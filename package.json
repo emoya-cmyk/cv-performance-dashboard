@@ -17,7 +17,7 @@
     "recharts":                "^2.12.4",
     "lucide-react":            "^0.378.0",
     "clsx":                    "^2.1.1",
-    "tailwind-merge":          "^2.3.0",
+    "tailwind-merge":          "^3.6.0",
     "@vitejs/plugin-react":    "^4.2.1",
     "autoprefixer":            "^10.4.19",
     "postcss":                 "^8.4.38",
