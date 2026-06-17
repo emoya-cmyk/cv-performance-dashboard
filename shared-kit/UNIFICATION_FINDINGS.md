@@ -97,10 +97,21 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
       grounded against the source repo's evidence path (fails closed); leak-proof recall tested both
       directions; grounded, cited, recommend-only synthesis store
       (`cli_framework/enhancements/family_synthesis_store.py`).
-- [ ] B (remaining wiring): register real per-repo sources (JS Memory OS read shim for dashboards) +
-      expose `family_recall` / `family_synthesis` as MCP tools.
-- [ ] C1/C2: family weekly-synthesis + monthly-pattern skills (grounded, recommend-only)
-- [ ] D1: read-only orchestration view of all scheduled skills
+- [x] **B wiring** — `cli_framework/enhancements/family_sources.py` (read-only source adapters: SQLite +
+      Postgres `$N`→`%s` seam = the Python-side "JS Memory OS read shim"; structural read-only guard;
+      config-driven `load_sources`, local store always included) + MCP tools
+      (`mcp_server/tools/family_memory.py`, wired in `clients/loader.py`).
+- [x] **C1/C2** — `cli_framework/enhancements/family_synthesis.py`: `weekly_synthesis` (grounded cross-repo
+      co-occurrence) + `monthly_patterns` (≥4 independent grounded notes across ≥2 repos). Grounded-only,
+      recommend-only, tenant-scoped. Operator CLI `family_cli.py`.
+- [x] **D1** — `cli_framework/enhancements/family_orchestration.py`: read-only view of every scheduled
+      skill across the family (dashboard crons "declared (not polled)"; local cadence enriched).
+- Gates: `cli_framework/tests/test_family_{memory,sources,synthesis,orchestration}.py` = 57 assertions green.
+
+**Remaining (owner / infra, not code):**
+- A1 org repo `emoya-cmyk/.github` (owner-blocked) → then A2 flip vendoring to `@emoya-cmyk/*` packages.
+- Point `FAMILY_MEMORY_SOURCES` at the dashboards' live Memory OS DBs (DSNs stay in host env).
+- Optional Phase C LLM phrasing pass (env-gated) on top of the deterministic synthesis core.
 
 **Guardrails (unchanged):** draft PRs, G1–G4 green before merge, grounded-only,
 tenant isolation never weakened, no autonomous config writes (skills recommend;
