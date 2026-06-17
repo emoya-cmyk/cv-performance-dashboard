@@ -317,6 +317,57 @@ test('LEAK-PROOF: a client cannot persist a layout onto a peer or agency dashboa
   assert.deepEqual(stillB.body.dashboard.widgets[0].layout, { x: 0, y: 0, w: 2, h: 1 })
 })
 
+test('in-app builder: a widget APPENDED via PUT survives GET and renders via /run', async () => {
+  await ready()
+  // Start from a one-widget dashboard (the existing "Save as widget" baseline).
+  const c = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Buildable', widgets: [{ ...SPEND_WIDGET, id: 'w1' }] } })
+  assert.equal(c.status, 201)
+  const id = c.body.dashboard.id
+
+  // The in-app builder appends a SECOND widget (what appendWidget produces on the
+  // FE) and PUTs the whole array back — exactly the create-widget flow.
+  const appended = {
+    id: 'w2',
+    title: 'Leads by channel',
+    viz: 'bar',
+    spec: { metrics: ['leads', 'spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] },
+  }
+  const put = await request('PUT', `/api/dashboards/${id}`, { token: AGENCY, body: { widgets: [{ ...SPEND_WIDGET, id: 'w1' }, appended] } })
+  assert.equal(put.status, 200)
+  assert.deepEqual(put.body.dashboard.widgets.map((x) => x.id), ['w1', 'w2'])
+
+  // A reload (GET) carries the appended widget through.
+  const got = await request('GET', `/api/dashboards/${id}`, { token: AGENCY })
+  assert.deepEqual(got.body.dashboard.widgets.map((x) => x.id), ['w1', 'w2'])
+  assert.deepEqual(got.body.dashboard.widgets[1].spec.metrics, ['leads', 'spend'])
+
+  // /run renders BOTH widgets through the verified query path.
+  const run = await request('POST', `/api/dashboards/${id}/run`, { token: AGENCY })
+  assert.equal(run.status, 200)
+  assert.deepEqual(run.body.widgets.map((x) => x.id), ['w1', 'w2'])
+  assert.ok(run.body.widgets.every((x) => x.result), 'both widgets ran with a verified result')
+})
+
+test('LEAK-PROOF: a client cannot APPEND a widget onto a peer or agency dashboard via PUT', async () => {
+  await ready()
+  // Agency seeds a board for tenant B and an agency-owned board, each with one widget.
+  const forB   = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'B appendable', client_id: B, widgets: [{ ...SPEND_WIDGET, id: 'w1' }] } })
+  const agency = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Agency appendable', widgets: [{ ...SPEND_WIDGET, id: 'w1' }] } })
+
+  // Client A's builder tries to APPEND a second widget onto each (the create-widget
+  // PUT) — the tenant-clamped PUT rejects both → 403.
+  const appended = { id: 'w2', title: 'A injected', viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] } }
+  const peerBody = { widgets: [{ ...SPEND_WIDGET, id: 'w1' }, appended] }
+  const peer = await request('PUT', `/api/dashboards/${forB.body.dashboard.id}`, { token: CLIENT_A, body: peerBody })
+  assert.equal(peer.status, 403)
+  const ag = await request('PUT', `/api/dashboards/${agency.body.dashboard.id}`, { token: CLIENT_A, body: peerBody })
+  assert.equal(ag.status, 403)
+
+  // B's widgets are UNTOUCHED by the rejected append (still just the one).
+  const stillB = await request('GET', `/api/dashboards/${forB.body.dashboard.id}`, { token: AGENCY })
+  assert.deepEqual(stillB.body.dashboard.widgets.map((x) => x.id), ['w1'])
+})
+
 test('unauthenticated requests are rejected; malformed widgets are 400', async () => {
   await ready()
   const noauth = await request('GET', '/api/dashboards')

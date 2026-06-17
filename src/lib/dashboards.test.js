@@ -5,7 +5,7 @@ import {
   buildSpec, buildWidget, vizForGroupBy, defaultTitle, widgetGroupBy,
   reorderWidgets, buildDrillSpec, drillDimValue, drillTitle,
   GRID_COLS, normalizeLayout, hasLayout, resolveLayouts, applyLayouts,
-  moveWidget, resizeWidget,
+  moveWidget, resizeWidget, appendWidget,
 } from '@/lib/dashboards'
 
 // ── api client: dashboards methods (path, method, auth header, body) ──────────
@@ -112,6 +112,42 @@ describe('widget spec helpers', () => {
   it('buildWidget honours an explicit title', () => {
     const w = buildWidget({ metrics: ['spend'], groupBy: 'channel', start: '2024-01-01', end: '2024-01-31', title: '  My Widget ' })
     expect(w.title).toBe('My Widget')
+  })
+})
+
+// ── in-app widget builder: append a built widget with a default placement ─────
+describe('appendWidget', () => {
+  const w = (id, layout) => ({ id, title: id, viz: 'bar', spec: { metrics: ['spend'], groupBy: ['channel'] }, ...(layout ? { layout } : {}) })
+
+  it('appends WITHOUT a layout when the board is in linear mode (backward-compat)', () => {
+    const before = [w('a'), w('b')]                       // no layouts → linear
+    const widget = buildWidget({ metrics: ['leads'], groupBy: 'channel', start: '2024-01-01', end: '2024-01-31' })
+    const after = appendWidget(before, widget)
+    expect(after).toHaveLength(3)
+    expect(after[2].layout).toBeUndefined()               // stays layout-free → linear flow
+    expect(after[2].id).toBe(widget.id)
+    expect(before).toHaveLength(2)                          // original untouched
+    expect(hasLayout(after)).toBe(false)
+  })
+
+  it('places the new widget into the first free slot when the board is in grid mode', () => {
+    // a occupies cols 0-1, b occupies cols 2-3 on row 0 → first free slot is row 1, col 0.
+    const before = [w('a', { x: 0, y: 0, w: 2, h: 1 }), w('b', { x: 2, y: 0, w: 2, h: 1 })]
+    const widget = buildWidget({ metrics: ['leads'], groupBy: 'channel', start: '2024-01-01', end: '2024-01-31' })
+    const after = appendWidget(before, widget)
+    expect(after).toHaveLength(3)
+    const placed = after[2].layout
+    expect(placed).toBeTruthy()
+    expect(placed.y).toBe(1)                               // pushed below the full first row
+    expect(placed.x).toBe(0)
+    // The new tile never overlaps an existing one (resolveLayouts is the witness).
+    expect(resolveLayouts(after).every((p) => p && p.layout)).toBe(true)
+  })
+
+  it('returns the list unchanged for a non-widget input', () => {
+    const before = [w('a')]
+    expect(appendWidget(before, null)).toBe(before)
+    expect(appendWidget(undefined, w('x'))).toEqual([w('x')])
   })
 })
 

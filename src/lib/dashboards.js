@@ -215,6 +215,25 @@ export function resizeWidget(widgets, id, w, h) {
   return resolved.map((ww) => byId.get(ww.id) || ww)
 }
 
+// Append a freshly-built widget to a dashboard's widgets array, giving it a
+// sensible default placement. BACKWARD-COMPAT: if the dashboard has NO layouts
+// yet (linear mode), the new tile is appended WITHOUT a layout so the board stays
+// in linear flow exactly as before (resolveLayouts lays it out sequentially). If
+// the dashboard is ALREADY in grid mode (some tile carries a layout), we stamp the
+// new tile into the first free slot (reusing the same firstFree placement the grid
+// uses) so it lands somewhere visible rather than overlapping. Pure (no React, no
+// network); the caller persists the returned array via the tenant-guarded PUT.
+export function appendWidget(widgets, widget) {
+  const list = Array.isArray(widgets) ? widgets : []
+  if (!widget || typeof widget !== 'object') return list
+  if (!hasLayout(list)) return [...list, widget]
+  // Grid mode: resolve current placements, find the first free slot for a
+  // default-sized tile, and stamp it onto the new widget.
+  const resolved = resolveLayouts([...list, { ...widget, layout: undefined }])
+  const placed = resolved[resolved.length - 1]
+  return [...list, { ...widget, layout: placed.layout }]
+}
+
 // ── drill-down (Phase 3 — click a tile → grounded detail) ────────────────────
 // Read the breakdown value off a result row for the widget's group-by axis. For
 // a categorical widget this is the channel/client the clicked bar/row represents
