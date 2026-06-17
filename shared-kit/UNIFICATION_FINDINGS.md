@@ -124,6 +124,11 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
 - ~~Optional Phase C LLM phrasing pass~~ — **DONE** (`cli_framework/enhancements/family_llm.py` +
   `--llm` flag; env-gated on `ANTHROPIC_API_KEY`, rewords only, never changes citations/grounding,
   fails safe to deterministic text).
+- ~~Richer detectors~~ — **DONE** (`family_synthesis.py`): contradiction / emergence / blindspot +
+  `analyze_patterns`; grounded-only, tenant-scoped, recommend-only.
+- ~~Accept/reject feedback loop~~ — **DONE** (`family_synthesis_store.py`): per-`signal_class` Wilson-LB
+  confidence; rejected classes auto-suppress, live proposals annotated with the prior accept-rate.
+- Gates: family suites **84 assertions** green; `family_cli.py demo` self-check.
 
 **Guardrails (unchanged):** draft PRs, G1–G4 green before merge, grounded-only,
 tenant isolation never weakened, no autonomous config writes (skills recommend;
