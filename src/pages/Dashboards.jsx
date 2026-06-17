@@ -11,7 +11,7 @@ import {
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort } from '@/lib/utils'
 import {
-  widgetGroupBy, buildDrillSpec, drillTitle,
+  widgetGroupBy, buildDrillSpec, drillTitle, buildWidget, appendWidget,
   GRID_COLS, resolveLayouts, moveWidget, resizeWidget,
 } from '@/lib/dashboards'
 
@@ -404,6 +404,241 @@ function DashboardGrid({ runWidgets, savedWidgets, dragId, setDragId, onMove, on
   )
 }
 
+// ── in-app widget builder ─────────────────────────────────────────────────────
+// A small create-widget modal that authors a widget from WITHIN a dashboard (so an
+// operator isn't forced through Explore's "Save as widget"). It sources its
+// vocabulary from the SAME GET /api/query/schema the Explore page reads — so it can
+// only ever offer registry-backed metrics/dimensions/channels — and reuses the SAME
+// pure buildWidget() Explore uses, so there's one spec-building path. The produced
+// widget is appended (with a default placement) and persisted by the parent through
+// the existing tenant-guarded PUT; it then renders + runs like any other widget.
+// Optionally previews the spec through the existing POST /api/query before adding.
+const DEFAULT_METRICS = ['spend', 'leads', 'roas']
+
+function isoLocal(d) {
+  const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+  return z.toISOString().slice(0, 10)
+}
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return isoLocal(d) }
+const TODAY_ISO = isoLocal(new Date())
+
+// The breakdown choices, assembled from the schema (mirrors Explore.groupOptions).
+function groupOptions(schema) {
+  const dims   = (schema?.dimensions || []).map((d) => ({ value: d.id, label: d.label }))
+  const grains = (schema?.dateGrains || []).map((g) => ({
+    value: `date:${g}`,
+    label: g === 'day' ? 'Day' : g === 'week' ? 'Week' : g === 'month' ? 'Month' : g,
+  }))
+  return [...dims, ...grains]
+}
+
+const RANGE_PRESETS = [
+  { key: '7d',  label: 'Last 7d',  start: () => daysAgo(6),  end: () => TODAY_ISO },
+  { key: '28d', label: 'Last 28d', start: () => daysAgo(27), end: () => TODAY_ISO },
+  { key: '90d', label: 'Last 90d', start: () => daysAgo(89), end: () => TODAY_ISO },
+]
+
+function BuilderPill({ active, onClick, children, title }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'rounded-full px-3 py-1 text-xs font-semibold border transition',
+        active
+          ? 'bg-brand-500 text-white border-brand-500 shadow-sm'
+          : 'bg-white text-slate-500 border-slate-200 hover:border-brand-300 hover:text-brand-600',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function AddWidgetModal({ onClose, onAdd }) {
+  const [schema, setSchema] = useState(null)
+  const [schemaErr, setSchemaErr] = useState(null)
+  const [metrics, setMetrics] = useState(DEFAULT_METRICS)
+  const [groupBy, setGroupBy] = useState('channel')
+  const [range, setRange]     = useState('28d')
+  const [channelFilter, setChannelFilter] = useState([])
+  const [title, setTitle]     = useState('')
+  const [adding, setAdding]   = useState(false)
+  // Optional preview through the existing verified POST /api/query.
+  const [preview, setPreview] = useState({ status: 'idle', rowCount: null, error: null })
+
+  useEffect(() => {
+    let alive = true
+    api.querySchema()
+      .then((s) => { if (alive) setSchema(s) })
+      .catch((e) => { if (alive) setSchemaErr(e.message || 'Could not load query vocabulary') })
+    return () => { alive = false }
+  }, [])
+
+  const metricLabels = {}
+  for (const m of (schema?.metrics || [])) metricLabels[m.id] = m.label
+
+  const preset = RANGE_PRESETS.find((p) => p.key === range) || RANGE_PRESETS[1]
+  const start = preset.start()
+  const end   = preset.end()
+  // Validity: at least one metric AND a breakdown. Clamp metrics to the schema so a
+  // stale default can't slip a non-registry id through.
+  const validMetricIds = schema ? new Set(schema.metrics.map((m) => m.id)) : null
+  const chosen = validMetricIds ? metrics.filter((m) => validMetricIds.has(m)) : metrics
+  const valid = chosen.length > 0 && Boolean(groupBy)
+
+  function toggleMetric(id) {
+    setMetrics((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+  function toggleChannel(key) {
+    setChannelFilter((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]))
+  }
+
+  function buildIt() {
+    return buildWidget({ metrics: chosen, groupBy, start, end, channelFilter, title, metricLabels })
+  }
+
+  async function runPreview() {
+    if (!valid) return
+    setPreview({ status: 'loading', rowCount: null, error: null })
+    try {
+      const res = await api.query(buildIt().spec)
+      setPreview({ status: 'done', rowCount: res?.rows?.length ?? 0, error: null })
+    } catch (e) {
+      setPreview({ status: 'error', rowCount: null, error: e.message || 'Preview failed' })
+    }
+  }
+
+  async function add() {
+    if (!valid || adding) return
+    setAdding(true)
+    try {
+      await onAdd(buildIt())   // parent persists via PUT (optimistic + rollback)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-slate-100">
+          <div className="flex items-center gap-2 min-w-0">
+            <Plus className="w-4 h-4 text-brand-500 shrink-0" />
+            <p className="text-sm font-black text-slate-900 truncate">Add a widget</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 transition shrink-0" aria-label="Close">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-5 overflow-y-auto space-y-4">
+          {schemaErr ? (
+            <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-4 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700">{schemaErr}</p>
+            </div>
+          ) : !schema ? (
+            <div className="flex items-center gap-2 text-sm text-slate-400 py-8 justify-center">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading vocabulary…
+            </div>
+          ) : (
+            <>
+              {/* Metrics */}
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Metrics</p>
+                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto pr-1">
+                  {schema.metrics.map((m) => (
+                    <BuilderPill key={m.id} active={chosen.includes(m.id)} onClick={() => toggleMetric(m.id)} title={m.id}>
+                      {m.label}
+                    </BuilderPill>
+                  ))}
+                </div>
+              </div>
+
+              {/* Break down by */}
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Break down by</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {groupOptions(schema).map((o) => (
+                    <BuilderPill key={o.value} active={groupBy === o.value} onClick={() => setGroupBy(o.value)}>
+                      {o.label}
+                    </BuilderPill>
+                  ))}
+                </div>
+              </div>
+
+              {/* Date range */}
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Date range</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {RANGE_PRESETS.map((p) => (
+                    <BuilderPill key={p.key} active={range === p.key} onClick={() => setRange(p.key)}>{p.label}</BuilderPill>
+                  ))}
+                </div>
+              </div>
+
+              {/* Channel filter (optional) */}
+              {(schema.channels || []).length > 0 && (
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
+                    Filter channels <span className="font-medium normal-case text-slate-300">{channelFilter.length ? `· ${channelFilter.length} selected` : '· optional'}</span>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {schema.channels.map((c) => (
+                      <BuilderPill key={c.key} active={channelFilter.includes(c.key)} onClick={() => toggleChannel(c.key)}>
+                        {c.label}
+                      </BuilderPill>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Title (optional) */}
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Title <span className="font-medium normal-case text-slate-300">· optional</span></p>
+                <input
+                  type="text" value={title} onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Defaults to a readable label"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                />
+              </div>
+
+              {/* Preview status */}
+              {preview.status === 'done' && (
+                <p className="text-[11px] text-emerald-600 font-semibold inline-flex items-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Verified: {preview.rowCount} {preview.rowCount === 1 ? 'row' : 'rows'}
+                </p>
+              )}
+              {preview.status === 'error' && (
+                <p className="text-[11px] text-amber-600">{preview.error}</p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-slate-100">
+          {schema && (
+            <button
+              type="button" onClick={runPreview} disabled={!valid || preview.status === 'loading'}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 border border-slate-200 bg-white rounded-xl px-3 py-2 hover:border-slate-300 transition disabled:opacity-50"
+            >
+              {preview.status === 'loading' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Preview
+            </button>
+          )}
+          <button
+            type="button" onClick={add} disabled={!valid || adding}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-brand-500 hover:bg-brand-600 rounded-xl px-3.5 py-2 transition shadow-sm disabled:opacity-50"
+          >
+            {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-4 h-4" />} Add widget
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── one opened dashboard: run + render its widgets on a free-form 2-D grid ─────
 function DashboardDetail({ id, onBack, onChanged }) {
   const [run, setRun] = useState(null)
@@ -413,6 +648,7 @@ function DashboardDetail({ id, onBack, onChanged }) {
   const [dragId, setDragId] = useState(null)           // widget id being dragged
   const [savingOrder, setSavingOrder] = useState(false)
   const [drill, setDrill] = useState(null)             // { title, spec } | null
+  const [adding, setAdding] = useState(false)          // create-widget modal open?
 
   const load = useCallback(() => {
     setStatus('loading'); setError(null)
@@ -448,6 +684,28 @@ function DashboardDetail({ id, onBack, onChanged }) {
   const commitMove   = (wid, x, y) => commitLayout(moveWidget(savedWidgets, wid, x, y))
   const commitResize = (wid, w, h) => commitLayout(resizeWidget(savedWidgets, wid, w, h))
 
+  // Append a newly-built widget. appendWidget() gives it a default placement (into
+  // the first free grid slot when the board is already in grid mode, else linear),
+  // then we PERSIST the whole array via the same tenant-guarded PUT (optimistic with
+  // rollback, exactly like the layout path). On success we reload so the new tile
+  // renders + runs through the verified /run path. Throws on failure so the modal's
+  // in-flight guard releases.
+  async function commitAppend(widget) {
+    const prev = savedWidgets
+    const next = appendWidget(savedWidgets, widget)
+    setSavedWidgets(next)        // optimistic
+    try {
+      await api.updateDashboard(id, { widgets: next })
+      setAdding(false)
+      onChanged?.()
+      load()                     // re-run so the appended widget gets its verified result
+    } catch (e) {
+      setSavedWidgets(prev)      // roll back
+      window.alert(e.message || 'Could not add the widget')
+      throw e
+    }
+  }
+
   function openDrill(widget, row) {
     const spec = buildDrillSpec(widget, row)
     if (!spec) return
@@ -479,6 +737,9 @@ function DashboardDetail({ id, onBack, onChanged }) {
           {savingOrder && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-300 shrink-0" />}
         </div>
         <div className="flex items-center gap-1.5">
+          <button onClick={() => setAdding(true)} title="Add a widget to this dashboard" className="inline-flex items-center gap-1 text-[11px] font-bold text-white bg-brand-500 hover:bg-brand-600 rounded-xl px-2.5 py-1.5 transition shadow-sm">
+            <Plus className="w-3.5 h-3.5" /> Add widget
+          </button>
           <button onClick={load} title="Refresh" className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500 border border-slate-200 bg-white rounded-xl px-2.5 py-1.5 hover:border-slate-300 transition">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
@@ -505,7 +766,11 @@ function DashboardDetail({ id, onBack, onChanged }) {
       {status === 'done' && run && (
         (run.widgets || []).length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 p-10 text-center">
-            <p className="text-sm text-slate-400">This dashboard has no widgets yet. Add one from <span className="font-semibold text-slate-600">Explore → Save as widget</span>.</p>
+            <p className="text-sm text-slate-400">This dashboard has no widgets yet.</p>
+            <button onClick={() => setAdding(true)} className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-white bg-brand-500 hover:bg-brand-600 rounded-xl px-3.5 py-2 transition shadow-sm">
+              <Plus className="w-4 h-4" /> Add a widget
+            </button>
+            <p className="text-[11px] text-slate-400 mt-2">…or save one from <span className="font-semibold text-slate-600">Explore → Save as widget</span>.</p>
           </div>
         ) : (
           <>
@@ -527,6 +792,7 @@ function DashboardDetail({ id, onBack, onChanged }) {
       )}
 
       {drill && <DrillPanel title={drill.title} spec={drill.spec} onClose={() => setDrill(null)} />}
+      {adding && <AddWidgetModal onClose={() => setAdding(false)} onAdd={commitAppend} />}
     </div>
   )
 }
