@@ -1,7 +1,7 @@
 {
   "name": "@emoya-cmyk/dashboard-core",
-  "version": "0.1.0",
-  "description": "Canonical dashboard-family core. First module: the auth/authz + security layer (JWT verify, multi-tenant scope guards, security headers, dependency-free rate limiter / AI budget, password floor + login timing equalizer + JWT boot guard), as dependency-injected factories.",
+  "version": "0.2.0",
+  "description": "Canonical dashboard-family core. Auth/authz + security layer (JWT verify, multi-tenant scope guards, security headers, dependency-free rate limiter / AI budget, password floor + login timing equalizer + JWT boot guard) as dependency-injected factories, plus the engine layer (increment 1: `baselines` — the self-calibrating statistics core: median/MAD, robust z, linreg slope, EWMA, severity buckets, `summarizeSeries`).",
   "main": "index.js",
   "private": true,
   "license": "UNLICENSED",
