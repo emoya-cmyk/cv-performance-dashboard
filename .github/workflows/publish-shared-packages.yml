@@ -1,0 +1,69 @@
+name: Publish shared packages
+
+# MANUAL ONLY. This workflow never runs on push/PR — it is triggered by an
+# operator from the Actions tab (workflow_dispatch) to publish the shared-kit
+# JS packages to GitHub Packages. Until someone runs it, it is completely inert.
+#
+# The packages stay `private: true` in source (an accidental-publish guard); this
+# workflow flips that to false EPHEMERALLY in its own runner checkout only, so the
+# committed package.json is never changed. See shared-kit/PACKAGES.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Which shared-kit package to publish
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - dashboard-core
+          - memory-os
+      dry_run:
+        description: Pack only (no publish) to preview
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@emoya-cmyk'
+      - name: Publish selected package(s)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PKG: ${{ inputs.package }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          publish_one() {
+            local dir="shared-kit/$1"
+            echo "::group::$1"
+            ( cd "$dir"
+              # ephemeral: enable publish without touching committed source
+              npm pkg set private=false
+              if [ "$DRY" = "true" ]; then
+                npm pack --dry-run
+              else
+                npm publish
+              fi
+            )
+            echo "::endgroup::"
+          }
+          if [ "$PKG" = "both" ]; then
+            publish_one dashboard-core
+            publish_one memory-os
+          else
+            publish_one "$PKG"
+          fi
