@@ -5,11 +5,12 @@ import {
 } from 'recharts'
 import {
   Compass, Loader2, AlertTriangle, ShieldCheck, GitCompareArrows,
-  ArrowUpRight, ArrowDownRight, Sparkles, Download, Link2,
+  ArrowUpRight, ArrowDownRight, Sparkles, Download, Link2, BookmarkPlus,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn, fmtN, fmtPct, fmtX, fmtDollar, fmtDollarShort, delta } from '@/lib/utils'
 import ScopeNarrative from '@/components/ScopeNarrative'
+import { buildWidget } from '@/lib/dashboards'
 
 /*
  * Explore — the visible payoff of the Phase-1 atomic grain.
@@ -373,6 +374,7 @@ export default function Explore() {
   const [totals, setTotals] = useState(null)   // parallel groupBy:[] all-up totals → KPI cards
   const [error, setError]   = useState(null)
   const [copied, setCopied] = useState(false)  // transient "Copied" state for the share button
+  const [saving, setSaving] = useState(false)  // "Save as widget" in-flight guard
   const runSeq = useRef(0)
 
   // Load the self-describing vocabulary once.
@@ -513,6 +515,56 @@ export default function Explore() {
     const csv  = buildCsv({ rows: result.rows, groupBy, meta: result.meta, metricsMeta, channelLabel })
     const safe = groupBy.replace(':', '-')
     downloadCsv(`explore_${safe}_${start}_${end}.csv`, csv)
+  }
+
+  // Save the CURRENT view as a widget on a saved dashboard. We build the widget
+  // from the live controls (the SAME spec the page is running), then either
+  // append it to an existing dashboard the caller picks by name, or create a new
+  // one. The server clamps the spec to the caller's tenant at render time, so this
+  // is purely a "remember this view" action — it can never widen access.
+  async function saveAsWidget() {
+    if (!metrics.length || saving) return
+    setSaving(true)
+    try {
+      const metricLabels = {}
+      for (const m of (schema?.metrics || [])) metricLabels[m.id] = m.label
+      const title = window.prompt('Widget title', groupLabel ? `${metricsMeta.map(m => m.label).join(', ')} by ${groupLabel}` : '')
+      if (title == null) { setSaving(false); return }
+      const widget = buildWidget({ metrics, groupBy, start, end, channelFilter, compare, title, metricLabels })
+
+      const { dashboards = [] } = await api.listDashboards()
+      let target = null
+      if (dashboards.length) {
+        const names = dashboards.map((d, i) => `${i + 1}. ${d.name}`).join('\n')
+        const pick = window.prompt(`Add to which dashboard?\n\n${names}\n\nEnter a number, or a NEW name to create one.`, '1')
+        if (pick == null) { setSaving(false); return }
+        const idx = parseInt(pick.trim(), 10)
+        if (Number.isInteger(idx) && idx >= 1 && idx <= dashboards.length) {
+          target = dashboards[idx - 1]
+        } else {
+          const created = await api.createDashboard({ name: pick.trim(), widgets: [widget] })
+          window.alert(`Saved to new dashboard "${created.dashboard.name}".`)
+          setSaving(false)
+          return
+        }
+      } else {
+        const name = window.prompt('Name your first dashboard', 'My dashboard')
+        if (name == null || !name.trim()) { setSaving(false); return }
+        const created = await api.createDashboard({ name: name.trim(), widgets: [widget] })
+        window.alert(`Saved to new dashboard "${created.dashboard.name}".`)
+        setSaving(false)
+        return
+      }
+      // Append to the chosen dashboard (full GET → PUT, since widgets is replaced wholesale).
+      const { dashboard } = await api.getDashboard(target.id)
+      const nextWidgets = [...(dashboard.widgets || []), widget]
+      await api.updateDashboard(target.id, { widgets: nextWidgets })
+      window.alert(`Added widget to "${dashboard.name}".`)
+    } catch (e) {
+      window.alert(e.message || 'Could not save widget')
+    } finally {
+      setSaving(false)
+    }
   }
 
   function copyLink() {
@@ -679,6 +731,17 @@ export default function Explore() {
               <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded-full px-2 py-0.5">
                 <ShieldCheck className="w-3 h-3" /> Verified figures
               </span>
+            )}
+            {schema && metrics.length > 0 && (
+              <button
+                type="button"
+                onClick={saveAsWidget}
+                disabled={saving}
+                title="Save this view as a widget on a dashboard"
+                className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-brand-600 bg-brand-50 hover:bg-brand-100 border border-brand-100 rounded-full px-2 py-0.5 transition disabled:opacity-50"
+              >
+                <BookmarkPlus className="w-3 h-3" /> {saving ? 'Saving…' : 'Save as widget'}
+              </button>
             )}
             {schema && (
               <button

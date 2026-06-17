@@ -565,6 +565,22 @@ export const api = {
   // querySchema() drives the control vocabulary; query(spec) runs it.
   querySchema:   ()     => get('/api/query/schema'),
   query:         (spec) => post('/api/query', spec),
+  // Saved / composable dashboards (Phase 3). Each dashboard is a named bag of
+  // widgets; a widget = a saved query spec + viz + title. The server NEVER trusts
+  // a saved spec: every widget runs back through the SAME tenant clamp as
+  // POST /api/query, so a client dashboard can never read another tenant. Scope
+  // posture mirrors the rest of the app — an agency token sees every dashboard;
+  // a client token is hard-pinned to its OWN client-scoped dashboards (a peer's →
+  // 403/hidden), and createDashboard ignores any body client_id for a client.
+  listDashboards:   ()             => get('/api/dashboards'),
+  getDashboard:     (id)           => get(`/api/dashboards/${id}`),
+  createDashboard:  (body)         => post('/api/dashboards', body),
+  updateDashboard:  (id, body)     => put(`/api/dashboards/${id}`, body),
+  deleteDashboard:  (id)           => del(`/api/dashboards/${id}`),
+  // runDashboard() compiles + runs every widget's saved spec server-side and
+  // returns each widget's result; the FE could equivalently re-run each spec via
+  // query(spec) (same clamp). Used by the Dashboards grid renderer.
+  runDashboard:     (id)           => post(`/api/dashboards/${id}/run`, {}),
   // Intelligence (intel-v2): autonomous insight feed + lifecycle.
   // getInsights() → portfolio roll-up; getClientInsights() → one client's feed;
   // ack/resolve record a human decision the engine won't overwrite; runInsights()

@@ -24,6 +24,7 @@ const GA4Insights    = lazy(() => import('@/pages/GA4Insights'))
 const SharedReport   = lazy(() => import('@/pages/SharedReport'))
 const Settings       = lazy(() => import('@/pages/Settings'))
 const Explore        = lazy(() => import('@/pages/Explore'))
+const Dashboards     = lazy(() => import('@/pages/Dashboards'))
 const Intelligence   = lazy(() => import('@/pages/Intelligence'))
 const SEO            = lazy(() => import('@/pages/SEO'))
 const CallPrep       = lazy(() => import('@/pages/CallPrep'))
@@ -69,6 +70,7 @@ function AuthenticatedApp() {
         <Route path="/ga4"            element={<GA4Insights />} />
         <Route path="/funnel"         element={<LeadFunnel />} />
         <Route path="/explore"        element={<Explore />} />
+        <Route path="/dashboards"     element={<Dashboards />} />
         <Route path="/intelligence"   element={<Intelligence />} />
         <Route path="/clients"        element={<Clients />} />
         <Route path="/connections"    element={<Connections />} />
