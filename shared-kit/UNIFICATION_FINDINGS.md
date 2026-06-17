@@ -108,10 +108,20 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
       skill across the family (dashboard crons "declared (not polled)"; local cadence enriched).
 - Gates: `cli_framework/tests/test_family_{memory,sources,synthesis,orchestration}.py` = 57 assertions green.
 
+- [x] **A1 prep** — ready-to-publish bootstrap in `shared-kit/org-repo-bootstrap/` (README + `caller-ci.yml`).
+      Verified the inlined JS CI also runs `lint` + Vitest, so `node-ci.yml` gained `lint-command` /
+      `frontend-test-command` inputs (the naive caller would have dropped those gates); the staged caller
+      preserves them. `CROSS_REPO_PLAYBOOK.md` Step 0/1 updated.
+- [x] **Phase C schedule** — concrete cadence wired: tenant discovery (`FamilyRecall.tenants()` + source
+      `tenants()`), `family_cli.py --all-tenants`, and `cli_framework/.github/workflows/family-cadence.yml`
+      (weekly `0 9 * * 1` synthesis, monthly `0 9 1 * *` patterns; env-gated, recommend-only, manual dispatch).
+
 **Remaining (owner / infra, not code):**
-- A1 org repo `emoya-cmyk/.github` (owner-blocked) → then A2 flip vendoring to `@emoya-cmyk/*` packages.
-- Point `FAMILY_MEMORY_SOURCES` at the dashboards' live Memory OS DBs (DSNs stay in host env).
-- Optional Phase C LLM phrasing pass (env-gated) on top of the deterministic synthesis core.
+- A1: create `emoya-cmyk/.github` (owner) → publish `node-ci.yml` → swap each JS repo's `ci.yml` for the
+  staged caller → then A2 flip vendoring to `@emoya-cmyk/*` packages.
+- Set `FAMILY_MEMORY_SOURCES` secret + point it at the dashboards' live Memory OS DBs (DSNs stay in host env),
+  and run the producers where the synthesis store persists (durable host, not ephemeral CI).
+- Optional Phase C LLM phrasing pass (env-gated) over the deterministic synthesis core.
 
 **Guardrails (unchanged):** draft PRs, G1–G4 green before merge, grounded-only,
 tenant isolation never weakened, no autonomous config writes (skills recommend;

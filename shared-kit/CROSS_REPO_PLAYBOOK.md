@@ -52,13 +52,21 @@ the actual pushes happen from the widened session). Everything referenced lives 
 > option once registry auth is set up org-wide.
 
 ## Step 0 — one-time: the shared-workflows repo
-`emoya-cmyk` is a user account, so the shared-workflows repo is named `.github`:
+`emoya-cmyk` is a user account, so the shared-workflows repo is named `.github`.
+**Ready-to-publish bootstrap staged in `shared-kit/org-repo-bootstrap/`** (owner-gated):
 1. Create **`emoya-cmyk/.github`** (public — so private repos can reference its workflows).
 2. Add `shared-kit/.github/workflows/node-ci.yml` → `.github/workflows/node-ci.yml` in that repo.
 
+> **Verified caveat:** the JS dashboards' inlined CI runs `npm run lint` **and**
+> `npm run test:fe` (Vitest) alongside the build — switching to the caller naively
+> would have dropped those gates. `node-ci.yml` now takes `lint-command` /
+> `frontend-test-command` inputs, and `org-repo-bootstrap/caller-ci.yml` uses them,
+> so the switch preserves every gate. Use that caller (it covers cv too), not a
+> minimal one.
+
 ## Step 1 — per JS dashboard (agency-performance-dashboard, performance-dashboard)
 For each repo, on a feature branch:
-1. **CI** — copy `shared-kit/.github/workflows/ci-caller-example.yml` → `.github/workflows/ci.yml`; set `test-dir`/`build-dir` to the repo's layout (likely `api` + `.`); delete the old inline CI.
+1. **CI** — copy `shared-kit/org-repo-bootstrap/caller-ci.yml` → `.github/workflows/ci.yml` (it keeps API tests + lint + Vitest + build); delete the old inline CI.
 2. **Claude config** —
    - `shared-kit/claude/session-start.sh` → `.claude/session-start.sh` (`chmod +x`)
    - `shared-kit/claude/settings.json` → `.claude/settings.json` (trim the allow-list)
