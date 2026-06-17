@@ -215,6 +215,46 @@ test('agency /run honours the saved spec across tenants (no clamp for agency)', 
   assert.deepEqual(tenants, [A, B].sort()) // agency sees both tenants
 })
 
+test('PUT persists widget ARRAY ORDER (drag-drop reorder) and /run replays it', async () => {
+  await ready()
+  const w = (id) => ({ id, title: id, viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] } })
+  const c = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Orderable', widgets: [w('a'), w('b'), w('c')] } })
+  assert.equal(c.status, 201)
+  const id = c.body.dashboard.id
+  assert.deepEqual(c.body.dashboard.widgets.map((x) => x.id), ['a', 'b', 'c'])
+
+  // Reorder: move 'a' to the end (what reorderWidgets produces on the FE) and PUT
+  // the whole array back — the persisted order must round-trip exactly.
+  const reordered = [w('b'), w('c'), w('a')]
+  const put = await request('PUT', `/api/dashboards/${id}`, { token: AGENCY, body: { widgets: reordered } })
+  assert.equal(put.status, 200)
+  assert.deepEqual(put.body.dashboard.widgets.map((x) => x.id), ['b', 'c', 'a'])
+
+  // A reload (GET) and a server-side /run both preserve the saved order.
+  const got = await request('GET', `/api/dashboards/${id}`, { token: AGENCY })
+  assert.deepEqual(got.body.dashboard.widgets.map((x) => x.id), ['b', 'c', 'a'])
+  const run = await request('POST', `/api/dashboards/${id}/run`, { token: AGENCY })
+  assert.deepEqual(run.body.widgets.map((x) => x.id), ['b', 'c', 'a'])
+})
+
+test('LEAK-PROOF: a client cannot reorder/persist a peer or agency dashboard via PUT', async () => {
+  await ready()
+  const w = (id) => ({ id, title: id, viz: 'bar', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-01' }, groupBy: ['channel'] } })
+  // Agency seeds a board for tenant B and an agency-owned board.
+  const forB = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'B orderable', client_id: B, widgets: [w('a'), w('b')] } })
+  const agency = await request('POST', '/api/dashboards', { token: AGENCY, body: { name: 'Agency orderable', widgets: [w('a'), w('b')] } })
+
+  // Client A tries to persist a reorder on B's board and on the agency board → 403.
+  const peer = await request('PUT', `/api/dashboards/${forB.body.dashboard.id}`, { token: CLIENT_A, body: { widgets: [w('b'), w('a')] } })
+  assert.equal(peer.status, 403)
+  const ag = await request('PUT', `/api/dashboards/${agency.body.dashboard.id}`, { token: CLIENT_A, body: { widgets: [w('b'), w('a')] } })
+  assert.equal(ag.status, 403)
+
+  // B's saved order is untouched by the rejected write.
+  const stillB = await request('GET', `/api/dashboards/${forB.body.dashboard.id}`, { token: AGENCY })
+  assert.deepEqual(stillB.body.dashboard.widgets.map((x) => x.id), ['a', 'b'])
+})
+
 test('unauthenticated requests are rejected; malformed widgets are 400', async () => {
   await ready()
   const noauth = await request('GET', '/api/dashboards')

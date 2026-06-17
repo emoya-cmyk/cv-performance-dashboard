@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { setToken, clearToken } from '@/lib/auth'
-import { buildSpec, buildWidget, vizForGroupBy, defaultTitle, widgetGroupBy } from '@/lib/dashboards'
+import {
+  buildSpec, buildWidget, vizForGroupBy, defaultTitle, widgetGroupBy,
+  reorderWidgets, buildDrillSpec, drillDimValue, drillTitle,
+} from '@/lib/dashboards'
 
 // ── api client: dashboards methods (path, method, auth header, body) ──────────
 let calls
@@ -107,5 +110,82 @@ describe('widget spec helpers', () => {
   it('buildWidget honours an explicit title', () => {
     const w = buildWidget({ metrics: ['spend'], groupBy: 'channel', start: '2024-01-01', end: '2024-01-31', title: '  My Widget ' })
     expect(w.title).toBe('My Widget')
+  })
+})
+
+// ── layout / reordering (drag-drop persists via PUT widgets array order) ──────
+describe('reorderWidgets', () => {
+  const ws = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+
+  it('moves a widget to occupy the target slot, returning a new array', () => {
+    const out = reorderWidgets(ws, 'a', 'c')
+    expect(out.map((w) => w.id)).toEqual(['b', 'c', 'a'])
+    expect(out).not.toBe(ws)       // new array
+    expect(ws.map((w) => w.id)).toEqual(['a', 'b', 'c']) // original untouched
+  })
+
+  it('moves backward too', () => {
+    expect(reorderWidgets(ws, 'c', 'a').map((w) => w.id)).toEqual(['c', 'a', 'b'])
+  })
+
+  it('is a no-op (same array ref) for same id or unknown ids', () => {
+    expect(reorderWidgets(ws, 'a', 'a')).toBe(ws)
+    expect(reorderWidgets(ws, 'a', 'zzz')).toBe(ws)
+    expect(reorderWidgets(ws, 'zzz', 'a')).toBe(ws)
+    expect(reorderWidgets(null, 'a', 'b')).toBe(null)
+  })
+})
+
+// ── drill-down (click a tile row → grounded POST /api/query detail) ───────────
+describe('drill-down spec builder', () => {
+  const channelWidget = { id: 'w1', spec: { metrics: ['spend', 'leads'], dateRange: { start: '2024-01-01', end: '2024-01-31' }, groupBy: ['channel'] } }
+  const clientWidget  = { id: 'w2', spec: { metrics: ['roas'], dateRange: { start: '2024-01-01', end: '2024-01-31' }, groupBy: ['client'] } }
+  const dateWidget    = { id: 'w3', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-31' }, groupBy: ['date:week'] } }
+
+  it('reads the clicked dim value off a row', () => {
+    expect(drillDimValue(channelWidget, { channel: 'google_ads' })).toBe('google_ads')
+    expect(drillDimValue(clientWidget,  { client: 'c-7' })).toBe('c-7')
+    expect(drillDimValue(dateWidget,    { date: '2024-01-08' })).toBe('2024-01-08')
+    expect(drillDimValue(channelWidget, {})).toBe(null)
+  })
+
+  it('drills a channel row into that channel\'s weekly trend (carrying metrics + range)', () => {
+    const spec = buildDrillSpec(channelWidget, { channel: 'google_ads', spend: 100 })
+    expect(spec).toEqual({
+      metrics: ['spend', 'leads'],
+      dateRange: { start: '2024-01-01', end: '2024-01-31' },
+      groupBy: ['date:week'],
+      filters: [{ dim: 'channel', op: 'in', values: ['google_ads'] }],
+    })
+  })
+
+  it('drills a client row into that client\'s weekly trend', () => {
+    const spec = buildDrillSpec(clientWidget, { client: 'c-7' })
+    expect(spec.groupBy).toEqual(['date:week'])
+    expect(spec.filters).toEqual([{ dim: 'client', op: 'in', values: ['c-7'] }])
+  })
+
+  it('drills a date row sideways into a channel breakdown', () => {
+    const spec = buildDrillSpec(dateWidget, { date: '2024-01-08' })
+    expect(spec.groupBy).toEqual(['channel'])
+  })
+
+  it('carries forward the widget\'s own non-drill filters', () => {
+    const w = { id: 'w', spec: { metrics: ['spend'], dateRange: { start: '2024-01-01', end: '2024-01-31' }, groupBy: ['channel'], filters: [{ dim: 'channel', op: 'in', values: ['x'] }] } }
+    // the existing same-dim (channel) filter is replaced by the clicked one
+    const spec = buildDrillSpec(w, { channel: 'meta' })
+    expect(spec.filters).toEqual([{ dim: 'channel', op: 'in', values: ['meta'] }])
+  })
+
+  it('returns null when there is nothing to drill into', () => {
+    expect(buildDrillSpec(channelWidget, {})).toBe(null)
+    expect(buildDrillSpec({ id: 'x', spec: { metrics: [] } }, { channel: 'g' })).toBe(null)
+    expect(buildDrillSpec(null, { channel: 'g' })).toBe(null)
+  })
+
+  it('drillTitle labels the drilled slice', () => {
+    expect(drillTitle(channelWidget, { channel: 'google_ads' }, (k) => k === 'google_ads' ? 'Google Ads' : k)).toBe('Google Ads over time')
+    expect(drillTitle(clientWidget, { client: 'c-7', client_name: 'Acme' })).toBe('Acme over time')
+    expect(drillTitle(dateWidget, { date: '2024-01-08' })).toBe('Channel breakdown')
   })
 })
