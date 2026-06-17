@@ -60,6 +60,22 @@ function parseWidgets(raw) {
   return Array.isArray(arr) ? arr : []
 }
 
+// A widget MAY carry a free-form 2-D grid placement `layout` { x, y, w, h }
+// (reserved by Phase 3, used by the Dashboards grid). It is purely presentational
+// — it never touches the query/tenant path — so we only sanitize the shape: keep
+// it iff x/y/w/h are all non-negative integers with w,h ≥ 1, else DROP it (the FE
+// then falls back to linear order). This keeps the persisted blob clean without
+// rejecting an otherwise-valid save, and is backward-compatible (no layout = no
+// field). GRID_COLS isn't enforced here — the FE re-resolves/clamps on render.
+function sanitizeLayout(layout) {
+  if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return undefined
+  const { x, y, w, h } = layout
+  const intOk = (n) => typeof n === 'number' && Number.isInteger(n) && n >= 0
+  if (!intOk(x) || !intOk(y) || !intOk(w) || !intOk(h)) return undefined
+  if (w < 1 || h < 1) return undefined
+  return { x, y, w, h }
+}
+
 // Validate the widgets payload on write: must be an array; each widget needs a
 // spec object carrying at least a non-empty metrics array. We do NOT fully
 // validate the spec here (the compiler is the single source of truth at run
@@ -72,12 +88,13 @@ function validateWidgets(widgets) {
     const spec = w.spec
     if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error(`widget[${i}].spec must be an object`)
     if (!Array.isArray(spec.metrics) || spec.metrics.length === 0) throw new Error(`widget[${i}].spec.metrics must be a non-empty array`)
+    const layout = sanitizeLayout(w.layout)
     return {
       id:     typeof w.id === 'string' ? w.id : `w${i + 1}`,
       title:  typeof w.title === 'string' ? w.title : '',
       viz:    typeof w.viz === 'string' ? w.viz : 'table',
       spec,
-      ...(w.layout && typeof w.layout === 'object' ? { layout: w.layout } : {}),
+      ...(layout ? { layout } : {}),
     }
   })
 }

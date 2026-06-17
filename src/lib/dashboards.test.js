@@ -4,6 +4,8 @@ import { setToken, clearToken } from '@/lib/auth'
 import {
   buildSpec, buildWidget, vizForGroupBy, defaultTitle, widgetGroupBy,
   reorderWidgets, buildDrillSpec, drillDimValue, drillTitle,
+  GRID_COLS, normalizeLayout, hasLayout, resolveLayouts, applyLayouts,
+  moveWidget, resizeWidget,
 } from '@/lib/dashboards'
 
 // ── api client: dashboards methods (path, method, auth header, body) ──────────
@@ -133,6 +135,127 @@ describe('reorderWidgets', () => {
     expect(reorderWidgets(ws, 'a', 'zzz')).toBe(ws)
     expect(reorderWidgets(ws, 'zzz', 'a')).toBe(ws)
     expect(reorderWidgets(null, 'a', 'b')).toBe(null)
+  })
+})
+
+// ── free-form 2-D grid (reserved widgets[].layout {x,y,w,h}) ──────────────────
+describe('layout normalization', () => {
+  it('accepts a sane on-grid layout and returns a clean copy', () => {
+    expect(normalizeLayout({ x: 0, y: 0, w: 2, h: 1 })).toEqual({ x: 0, y: 0, w: 2, h: 1 })
+    expect(normalizeLayout({ x: 2, y: 3, w: 2, h: 2, extra: 'x' })).toEqual({ x: 2, y: 3, w: 2, h: 2 })
+  })
+
+  it('rejects missing / partial / non-integer / off-grid layouts as null', () => {
+    expect(normalizeLayout(null)).toBe(null)
+    expect(normalizeLayout({})).toBe(null)
+    expect(normalizeLayout({ x: 0, y: 0, w: 2 })).toBe(null)        // missing h
+    expect(normalizeLayout({ x: 0, y: 0, w: 0, h: 1 })).toBe(null)  // w < 1
+    expect(normalizeLayout({ x: -1, y: 0, w: 1, h: 1 })).toBe(null) // negative x
+    expect(normalizeLayout({ x: 0.5, y: 0, w: 1, h: 1 })).toBe(null) // non-integer
+    expect(normalizeLayout({ x: 3, y: 0, w: 2, h: 1 })).toBe(null)  // x+w > GRID_COLS (4)
+  })
+})
+
+describe('hasLayout / backward-compat fallback', () => {
+  it('reports no layout when no widget carries a valid one (→ linear mode)', () => {
+    expect(hasLayout([{ id: 'a' }, { id: 'b' }])).toBe(false)
+    expect(hasLayout([{ id: 'a', layout: { x: 9 } }])).toBe(false) // invalid → still none
+    expect(hasLayout([])).toBe(false)
+  })
+
+  it('reports a layout once any widget carries a valid one', () => {
+    expect(hasLayout([{ id: 'a' }, { id: 'b', layout: { x: 0, y: 0, w: 2, h: 1 } }])).toBe(true)
+  })
+})
+
+describe('resolveLayouts', () => {
+  it('lays out a NO-layout dashboard in linear order (left→right, top→bottom)', () => {
+    const out = resolveLayouts([{ id: 'a' }, { id: 'b' }, { id: 'c' }])
+    expect(out.map((p) => p.widget.id)).toEqual(['a', 'b', 'c']) // input order preserved
+    expect(out[0].layout).toEqual({ x: 0, y: 0, w: 2, h: 1 })
+    expect(out[1].layout).toEqual({ x: 2, y: 0, w: 2, h: 1 })
+    expect(out[2].layout).toEqual({ x: 0, y: 1, w: 2, h: 1 }) // wraps to next row
+  })
+
+  it('honours valid explicit layouts and back-fills the rest into free slots', () => {
+    const out = resolveLayouts([
+      { id: 'a', layout: { x: 0, y: 0, w: 4, h: 1 } }, // full width row 0
+      { id: 'b' },                                     // no layout → row 1
+    ])
+    expect(out[0].layout).toEqual({ x: 0, y: 0, w: 4, h: 1 })
+    expect(out[1].layout.y).toBe(1) // pushed below the full-width tile
+  })
+
+  it('never overlaps: an explicit clash is reflowed to a free slot', () => {
+    const out = resolveLayouts([
+      { id: 'a', layout: { x: 0, y: 0, w: 2, h: 1 } },
+      { id: 'b', layout: { x: 0, y: 0, w: 2, h: 1 } }, // same cell as a
+    ])
+    const cells = out.map((p) => `${p.layout.x},${p.layout.y}`)
+    expect(new Set(cells).size).toBe(2) // distinct placements
+  })
+
+  it('preserves input order in the returned array', () => {
+    const out = resolveLayouts([
+      { id: 'a', layout: { x: 2, y: 0, w: 2, h: 1 } },
+      { id: 'b', layout: { x: 0, y: 0, w: 2, h: 1 } },
+    ])
+    expect(out.map((p) => p.widget.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('applyLayouts', () => {
+  it('stamps an explicit {x,y,w,h} onto every widget, keeping id/spec', () => {
+    const out = applyLayouts([{ id: 'a', spec: { metrics: ['spend'] } }, { id: 'b' }])
+    expect(out[0]).toMatchObject({ id: 'a', spec: { metrics: ['spend'] } })
+    expect(normalizeLayout(out[0].layout)).toEqual(out[0].layout)
+    expect(out.every((w) => normalizeLayout(w.layout))).toBe(true)
+  })
+})
+
+describe('moveWidget', () => {
+  const ws = [
+    { id: 'a', layout: { x: 0, y: 0, w: 2, h: 1 } },
+    { id: 'b', layout: { x: 2, y: 0, w: 2, h: 1 } },
+  ]
+  it('moves a tile to a new cell and keeps the persisted (spec) order', () => {
+    const out = moveWidget(ws, 'a', 2, 1)
+    expect(out.map((w) => w.id)).toEqual(['a', 'b']) // order unchanged
+    expect(out.find((w) => w.id === 'a').layout).toMatchObject({ x: 2, y: 1, w: 2, h: 1 })
+  })
+  it('clamps x within the grid (cannot place a w=2 tile at x=3)', () => {
+    const out = moveWidget(ws, 'a', 99, 0)
+    expect(out.find((w) => w.id === 'a').layout.x).toBe(GRID_COLS - 2)
+  })
+  it('reflows so no two tiles overlap after a move onto an occupied cell', () => {
+    const out = moveWidget(ws, 'a', 2, 0) // onto b's cell
+    const cells = out.map((w) => `${w.layout.x},${w.layout.y}`)
+    expect(new Set(cells).size).toBe(2)
+  })
+  it('is a no-op (original ref) for an unknown id or unchanged position', () => {
+    expect(moveWidget(ws, 'zzz', 0, 0)).toBe(ws)
+    expect(moveWidget(ws, 'a', 0, 0)).toBe(ws)
+    expect(moveWidget(null, 'a', 0, 0)).toBe(null)
+  })
+})
+
+describe('resizeWidget', () => {
+  const ws = [
+    { id: 'a', layout: { x: 0, y: 0, w: 2, h: 1 } },
+    { id: 'b', layout: { x: 2, y: 0, w: 2, h: 1 } },
+  ]
+  it('resizes a tile, clamping w to 1..GRID_COLS', () => {
+    expect(resizeWidget(ws, 'a', 4, 2).find((w) => w.id === 'a').layout).toMatchObject({ w: 4, h: 2 })
+    expect(resizeWidget(ws, 'a', 99, 1).find((w) => w.id === 'a').layout.w).toBe(GRID_COLS)
+    expect(resizeWidget(ws, 'a', 0, 1).find((w) => w.id === 'a').layout.w).toBe(1)
+  })
+  it('pulls x left so a widened tile stays on-grid', () => {
+    const out = resizeWidget(ws, 'b', 4, 1) // b is at x=2; widening to 4 must shift to x=0
+    expect(out.find((w) => w.id === 'b').layout.x).toBe(0)
+  })
+  it('is a no-op for an unknown id or unchanged size', () => {
+    expect(resizeWidget(ws, 'zzz', 2, 2)).toBe(ws)
+    expect(resizeWidget(ws, 'a', 2, 1)).toBe(ws)
   })
 })
 
