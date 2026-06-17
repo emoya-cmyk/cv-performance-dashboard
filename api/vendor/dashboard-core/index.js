@@ -21,7 +21,14 @@
 //   router.use(auth.requireAgency)               // agency-only surface
 //   app.use('/api/ai', auth.requireAuth, createAiBudget(), aiRouter)
 //
-// (engine / connectors / semantic modules to follow — this is the security one.)
+// ENGINE (increment 1): the first pure-math engine module — `baselines`, the
+// self-calibrating statistics core (median/MAD/robust-z, linreg slope, EWMA,
+// severity buckets, and the `summarizeSeries` composite). Byte-for-byte
+// identical across cv + agency, no DB/IO — a true dedup, exported as-is.
+//
+//   const { summarizeSeries, robustStats } = require('@emoya-cmyk/dashboard-core')
+//
+// (more engine / connectors / semantic modules to follow.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const {
@@ -37,6 +44,7 @@ const { createRateLimiter, defaultKey, defaultSkip } = require('./lib/rateLimit'
 const { createLoginThrottle, loginThrottleKey } = require('./lib/loginThrottle')
 const { createAiBudget, aiBudgetKey } = require('./lib/aiBudget')
 const authSecurity = require('./lib/authSecurity')
+const baselines = require('./lib/baselines')
 
 module.exports = {
   // Auth/authz layer
@@ -69,4 +77,24 @@ module.exports = {
   DEV_SECRET_FALLBACK: authSecurity.DEV_SECRET_FALLBACK,
   MIN_PASSWORD_LENGTH: authSecurity.MIN_PASSWORD_LENGTH,
   BCRYPT_MAX_BYTES: authSecurity.BCRYPT_MAX_BYTES,
+
+  // Engine — self-calibrating statistics (baselines). Exposed both as the
+  // namespace and spread, so cv's `lib/baselines.js` can re-export the exact
+  // same public shape with no call-site changes.
+  baselines,
+  finite: baselines.finite,
+  mean: baselines.mean,
+  stddev: baselines.stddev,
+  median: baselines.median,
+  mad: baselines.mad,
+  robustStats: baselines.robustStats,
+  robustZ: baselines.robustZ,
+  linregSlope: baselines.linregSlope,
+  ewma: baselines.ewma,
+  classifyZ: baselines.classifyZ,
+  direction: baselines.direction,
+  summarizeSeries: baselines.summarizeSeries,
+  MAD_TO_SIGMA: baselines.MAD_TO_SIGMA,
+  DEFAULT_WARN: baselines.DEFAULT_WARN,
+  DEFAULT_CRIT: baselines.DEFAULT_CRIT,
 }

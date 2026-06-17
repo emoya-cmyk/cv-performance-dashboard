@@ -11,12 +11,14 @@ for the building blocks that are otherwise copy-pasted across
 read from `process.env` directly are now config, *with agency's env-var defaults*,
 so a caller that passes nothing behaves exactly like agency today.
 
-> Roadmap: this is the security module. **engine / connectors / semantic** modules
-> are to follow under the same package.
+> Roadmap: the security module came first; the **engine** layer has now started
+> (increment 1: `baselines`). **connectors / semantic** modules are to follow under
+> the same package.
 
 ## What's in it
 | Export | What it is | Origin in agency |
 |--------|------------|------------------|
+| `baselines` (+ spread: `summarizeSeries`, `robustStats`, `robustZ`, `linregSlope`, `ewma`, `classifyZ`, `direction`, `median`, `mad`, `mean`, `stddev`, `finite`, `MAD_TO_SIGMA`, `DEFAULT_WARN`, `DEFAULT_CRIT`) | **Engine:** self-calibrating statistics core — per-client/per-metric robust baselines (median/MAD, robust z, linreg slope, EWMA, severity buckets) and the `summarizeSeries` composite the intelligence engine calls. Pure functions, no DB/IO; byte-for-byte identical across cv + agency. | `lib/baselines.js` |
 | `createAuth({ jwtSecret })` | JWT-verify + the multi-tenant scope guards, bound to a secret. Returns `{ requireAuth, requireAgency, scopeClientParam, scopeClientQuery, scopeClientId, sameId }`. `scopeClientQuery(param, { mode })` supports `'reject'` (default) and `'clamp'` — see [Use](#use). | `middleware/auth.js` + `middleware/authz.js` |
 | `securityHeaders(opts?)` | Dependency-free helmet-equivalent header set (SPA-safe; no CSP/COEP). | `middleware/securityHeaders.js` |
 | `createRateLimiter(opts)` | Dependency-free fixed-window limiter (429 + `X-RateLimit-*` + `Retry-After`). | `middleware/rateLimit.js` |
