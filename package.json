@@ -27,7 +27,7 @@
   "devDependencies": {
     "@types/react":                "^18.2.66",
     "@types/react-dom":            "^18.2.22",
-    "eslint":                      "^8.57.0",
+    "eslint":                      "^10.5.0",
     "eslint-plugin-react-hooks":   "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
     "jsdom":                       "^24.1.0",
