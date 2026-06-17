@@ -41,6 +41,12 @@ touch performance's local clamp path.
 All three vendor dirs are now byte-identical to canonical except their own
 `PROVENANCE.md` (intentional) and `package-lock.json` (excluded by convention).
 
+**Drift can no longer happen silently (the fix for the root cause, not just the symptom):**
+- `api/test/vendorSync.test.js` — fails cv CI the moment its vendor drifts from canonical.
+- `shared-kit/scripts/check_vendor_drift.py` — family-wide scanner (all consumers incl.
+  memory-os-py), exit-coded for a scheduled job / the org-repo CI. Negative-tested to
+  detect both content drift and dropped files.
+
 ### 3.2 Kit adoption — CONFIRMED, no drift
 `CLAUDE.md` (from template), inlined `.github/workflows/ci.yml`, and
 `.claude/session-start.sh` are present and matching in agency, performance, and

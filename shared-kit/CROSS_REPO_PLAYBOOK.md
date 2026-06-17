@@ -96,6 +96,13 @@ Either:
 Each touched repo: PR CI green; for memory-os adopters, run the package's smoke test
 (`memory-os-py/test_smoke.py`) / port the JS memory tests.
 
+**Vendor drift guard (don't trust ✅ — prove it):**
+- In-repo: cv's `api/test/vendorSync.test.js` fails CI if `api/vendor/dashboard-core`
+  drifts from canonical `shared-kit/dashboard-core` (the gap that let it slip to 0.2.0).
+- Family-wide: `python3 shared-kit/scripts/check_vendor_drift.py` scans every consumer
+  (dashboard-core in cv/agency/performance, memory-os-py in cli_framework) and exits
+  non-zero on drift. Run it on a schedule (or in the org-repo CI once it exists).
+
 ## What NOT to do
 - Do **not** modify `integrations-performance-dashboard-app`.
 - Do **not** archive any dashboard — all stay active.
