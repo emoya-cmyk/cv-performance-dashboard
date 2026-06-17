@@ -15,9 +15,15 @@ const express = require('express')
 const { requireAgency, scopeClientParam } = require('../middleware/authz')
 const memory = require('../lib/memory')
 const { semanticRecall } = require('../lib/memorySemantic')
-const { localEmbed } = require('../lib/embeddings')
+const { makeEmbedder } = require('../lib/embeddings')
 
 const router = express.Router()
+
+// Resolve the embedder once from the environment (default: the free local
+// embedder; EMBEDDINGS_PROVIDER=voyage + VOYAGE_API_KEY opts into Voyage AI).
+// Query and candidate vectors then always come from this ONE embedder, so they
+// share a dimension and a real-provider switch is a pure config change here.
+const { embed } = makeEmbedder()
 
 // Translate the authenticated user into an engine scope.
 function scopeOf(req) {
@@ -35,7 +41,7 @@ router.get('/', requireAgency, async (req, res) => {
   try {
     const k = clampK(req.query.k)
     if (req.query.q) {
-      const opts = { embed: localEmbed, k }
+      const opts = { embed, k }
       if (req.query.kind) opts.kind = req.query.kind
       if (req.query.clientId !== undefined) opts.clientId = req.query.clientId === 'null' ? null : req.query.clientId
       const memories = await semanticRecall({ role: 'agency' }, req.query.q, opts)
@@ -83,7 +89,7 @@ router.get('/:clientId', scopeClientParam('clientId'), async (req, res) => {
   try {
     const k = clampK(req.query.k)
     if (req.query.q) {
-      const opts = { embed: localEmbed, k, clientId: req.params.clientId }
+      const opts = { embed, k, clientId: req.params.clientId }
       if (req.query.kind) opts.kind = req.query.kind
       const memories = await semanticRecall(scopeOf(req), req.query.q, opts)
       return res.json({ memories, count: memories.length, semantic: true })

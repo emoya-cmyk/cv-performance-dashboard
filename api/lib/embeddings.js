@@ -8,11 +8,26 @@
 // of words". Good enough for coarse semantic grouping and, crucially, free and
 // offline.
 //
-// NOTE — for production-quality semantics, pass a real embedder to semanticRecall
-// instead: `{ embed: myEmbed }`. Anthropic does not offer a first-party
-// embeddings endpoint (they recommend Voyage AI); OpenAI, Voyage, or a local
-// sentence-transformer all drop in as the `embed(text) => number[]` seam. This
-// local default is the floor, not the ceiling.
+// REAL EMBEDDINGS (opt-in, env-gated): the deterministic embedder is the FLOOR,
+// not the ceiling. Set `EMBEDDINGS_PROVIDER=voyage` + `VOYAGE_API_KEY` to route
+// recall through Voyage AI (Anthropic's recommended embeddings partner — Anthropic
+// has no first-party embeddings endpoint). With NOTHING set, behaviour is
+// byte-identical to before: the local embedder is both the DEFAULT and the
+// FALLBACK, and a real-provider failure (no key, timeout, HTTP error, bad shape)
+// silently degrades to local rather than throwing into the recall path.
+//
+//   EMBEDDINGS_PROVIDER  local (default) | voyage
+//   VOYAGE_API_KEY       Voyage API key  (required for the voyage provider)
+//   EMBEDDINGS_MODEL     Voyage model    (default 'voyage-3.5-lite')
+//
+// DIMENSION SAFETY: the local embedder is 64-dim; a real model is far larger
+// (e.g. Voyage 3.5 → 1024). Stored vectors and the query vector MUST come from
+// the SAME embedder, which they always do here because semanticRecall embeds both
+// the query and every candidate with the one injected `embed`. cosine() guards a
+// length mismatch (returns 0) so two embedders can never be silently compared.
+// SWITCHING PROVIDERS therefore requires RE-EMBEDDING any precomputed vectors —
+// this engine re-embeds candidate content per query, so no migration is needed
+// here, but any future vector store must be rebuilt on a provider change.
 
 const DIM = 64
 
@@ -34,4 +49,60 @@ function localEmbed(text) {
   return v
 }
 
-module.exports = { localEmbed, EMBED_DIM: DIM }
+// ── Real provider: Voyage AI ──────────────────────────────────────────────────
+// One embedding round-trip, behind the SAME guards as lib/anthropic.js: raw axios
+// (no SDK dependency), a short timeout, and NEVER throw into recall — any failure
+// returns null so makeEmbedder can degrade to the deterministic local embedder.
+const VOYAGE_URL          = 'https://api.voyageai.com/v1/embeddings'
+const DEFAULT_VOYAGE_MODEL = 'voyage-3.5-lite'
+const VOYAGE_TIMEOUT_MS   = 10000
+
+// voyageEmbed(text) → Promise<number[]> | Promise<null>. null signals the caller
+// to fall back; it never rejects, so it is safe to await in the recall hot path.
+async function voyageEmbed(text, { apiKey = process.env.VOYAGE_API_KEY, model = process.env.EMBEDDINGS_MODEL || DEFAULT_VOYAGE_MODEL } = {}) {
+  if (!apiKey) return null
+  let axios
+  try { axios = require('axios') } catch { return null }
+  try {
+    const { data } = await axios.post(
+      VOYAGE_URL,
+      { input: String(text || ''), model, input_type: 'document' },
+      {
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        timeout: VOYAGE_TIMEOUT_MS,
+      },
+    )
+    const vec = data && data.data && data.data[0] && data.data[0].embedding
+    return Array.isArray(vec) && vec.length > 0 ? vec : null
+  } catch (err) {
+    // Degrade quietly — recall must never break because an embeddings call failed.
+    console.error('[embeddings] voyage call failed, falling back to local:', err.message)
+    return null
+  }
+}
+
+// ── Provider selection ────────────────────────────────────────────────────────
+// makeEmbedder() returns { embed, name } where `embed(text) => Promise<number[]>`
+// is the seam semanticRecall consumes. The default ('local', or any unknown value,
+// or a 'voyage' request with no key) yields the deterministic local embedder, so
+// behaviour with no env set is unchanged. The 'voyage' provider wraps voyageEmbed
+// with a per-call fallback to localEmbed, so a single failed/empty response keeps
+// recall working (at local quality for that call) instead of poisoning it with a
+// null or a dimension-mismatched vector.
+function makeEmbedder({
+  provider = process.env.EMBEDDINGS_PROVIDER,
+  voyageApiKey = process.env.VOYAGE_API_KEY,
+} = {}) {
+  const sel = String(provider || 'local').toLowerCase()
+  if (sel === 'voyage' && voyageApiKey) {
+    const model = process.env.EMBEDDINGS_MODEL || DEFAULT_VOYAGE_MODEL
+    const embed = async (text) => {
+      const vec = await voyageEmbed(text, { apiKey: voyageApiKey, model })
+      return vec || localEmbed(text)
+    }
+    return { embed, name: `voyage:${model}` }
+  }
+  return { embed: localEmbed, name: 'local' }
+}
+
+module.exports = { localEmbed, voyageEmbed, makeEmbedder, EMBED_DIM: DIM, DEFAULT_VOYAGE_MODEL }
