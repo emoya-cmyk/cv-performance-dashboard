@@ -121,7 +121,9 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
   staged caller → then A2 flip vendoring to `@emoya-cmyk/*` packages.
 - Set `FAMILY_MEMORY_SOURCES` secret + point it at the dashboards' live Memory OS DBs (DSNs stay in host env),
   and run the producers where the synthesis store persists (durable host, not ephemeral CI).
-- Optional Phase C LLM phrasing pass (env-gated) over the deterministic synthesis core.
+- ~~Optional Phase C LLM phrasing pass~~ — **DONE** (`cli_framework/enhancements/family_llm.py` +
+  `--llm` flag; env-gated on `ANTHROPIC_API_KEY`, rewords only, never changes citations/grounding,
+  fails safe to deterministic text).
 
 **Guardrails (unchanged):** draft PRs, G1–G4 green before merge, grounded-only,
 tenant isolation never weakened, no autonomous config writes (skills recommend;
