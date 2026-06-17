@@ -91,8 +91,14 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
 - [x] §3 verification recorded
 - [x] **A2 (partial): dashboard-core vendor re-sync** — cv, agency, performance (gated green)
 - [ ] A1: org repo (owner-blocked) → then flip vendoring to `@emoya-cmyk/*` packages
-- [ ] B1: federated cross-repo read-only recall (leak-proof test required on the new surface)
-- [ ] B2/B3: grounding inheritance + tenant-scope leak test for the cross-repo join
+- [x] **B1: federated cross-repo read-only recall** — `cli_framework/enhancements/family_memory.py`
+      (`FamilyRecall`); federation, not a shared table. Gated by `tests/test_family_memory.py` (25/25).
+- [x] **B2/B3: grounding inheritance + tenant-scope leak test** — cross-repo hits are claims until
+      grounded against the source repo's evidence path (fails closed); leak-proof recall tested both
+      directions; grounded, cited, recommend-only synthesis store
+      (`cli_framework/enhancements/family_synthesis_store.py`).
+- [ ] B (remaining wiring): register real per-repo sources (JS Memory OS read shim for dashboards) +
+      expose `family_recall` / `family_synthesis` as MCP tools.
 - [ ] C1/C2: family weekly-synthesis + monthly-pattern skills (grounded, recommend-only)
 - [ ] D1: read-only orchestration view of all scheduled skills
 
