@@ -56,6 +56,9 @@ npm run lint                         # eslint src
 | `DATABASE_URL` | Postgres connection (prod data layer). |
 | `SQLITE_PATH` | SQLite path (local/dev + tests via `db-sqlite.js`). |
 | `CRON_SECRET` | Shared secret guarding the scheduled (watchdog/sync) routes. |
+| `EMBEDDINGS_PROVIDER` | Memory OS semantic-recall embedder: `local` (default, free deterministic) or `voyage`. |
+| `VOYAGE_API_KEY` | Voyage AI key; required to activate the `voyage` embeddings provider (Anthropic has no embeddings endpoint). |
+| `EMBEDDINGS_MODEL` | Override the Voyage embeddings model (default `voyage-3.5-lite`). Switching the provider/model requires re-embedding any stored vectors. |
 
 ## 6. Where state lives
 See `HANDOFF.md`, `GO_LIVE.md`, and `TRANSFORMATION_PLAN.md` for the roadmap /
