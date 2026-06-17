@@ -1,0 +1,12 @@
+# .npmrc.example — consumer template for installing the @emoya-cmyk/* shared
+# packages from GitHub Packages. Copy to a repo's .npmrc (or ~/.npmrc) and provide
+# a GitHub token with `read:packages` as GITHUB_TOKEN (CI: the default GITHUB_TOKEN
+# works for same-org private packages).
+#
+#   cp shared-kit/.npmrc.example <consumer-repo>/.npmrc
+#   npm install @emoya-cmyk/dashboard-core @emoya-cmyk/memory-os
+#
+# Do NOT commit a real token. In CI, inject GITHUB_TOKEN via the workflow env.
+
+@emoya-cmyk:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
