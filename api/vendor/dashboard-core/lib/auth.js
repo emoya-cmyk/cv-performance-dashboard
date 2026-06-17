@@ -67,15 +67,40 @@ function scopeClientParam(paramName = 'clientId') {
 }
 
 // Per-client endpoints where the target client id lives in the QUERY STRING
-// (req.query). Same boundary as scopeClientParam: agency passes through; a client
-// proceeds only when the requested id matches its own bound client_id; a client
-// with no bound id, or a missing/foreign id, is 403. Fail closed.
+// (req.query). Agency always passes through (may touch any client). For a 'client'
+// caller the behaviour is selected by `mode`:
 //
-//   router.get('/', scopeClientQuery('clientId'), handler)   // ?clientId=...
-function scopeClientQuery(paramName = 'clientId') {
+//   • 'reject' (DEFAULT) — same boundary as scopeClientParam: the client proceeds
+//     only when the requested id matches its own bound client_id; a missing or
+//     foreign id is 403. Fail closed.
+//
+//   • 'clamp' — the client is CLAMPED rather than rejected: req.query[paramName]
+//     is overwritten with the caller's own client_id and the request proceeds, so
+//     a client targeting another tenant (or 'all') still gets a 200 but only ever
+//     sees its own data. (This is the semantics performance-dashboard kept locally;
+//     see its api/middleware/authz.js + the metrics /summary clamp test.)
+//
+// In BOTH modes a client token with no bound client_id is denied (fail closed) —
+// an unscoped client can neither match nor be clamped to anything.
+//
+//   router.get('/', scopeClientQuery('clientId'), handler)               // reject (default)
+//   router.get('/', scopeClientQuery('client', { mode: 'clamp' }), h)    // clamp to own id
+function scopeClientQuery(paramName = 'clientId', { mode = 'reject' } = {}) {
   return function (req, res, next) {
     const role = req.user && req.user.role
     if (role === 'agency') return next()
+
+    if (mode === 'clamp') {
+      // Clamp: a scoped client is rewritten to its own id and proceeds; an
+      // unscoped client (no bound id) is denied.
+      if (role === 'client' && req.user.client_id) {
+        if (req.query) req.query[paramName] = req.user.client_id
+        return next()
+      }
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+
+    // Default 'reject': the requested id must match the caller's own id.
     const requested = req.query ? req.query[paramName] : undefined
     if (role === 'client' && sameId(requested, req.user.client_id)) {
       return next()

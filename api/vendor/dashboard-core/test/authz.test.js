@@ -183,6 +183,92 @@ test('scopeClientQuery: agency passes, client→own ok, client→other 403, nosc
   assert.equal(missingRes.statusCode, 403)
 })
 
+// ── scopeClientQuery: explicit reject mode (same as default) ───────────────────
+test('scopeClientQuery (mode: reject): agency passes, client→own ok, client→other 403, noscope 403', () => {
+  const ag = makeNext(); const agRes = makeRes()
+  scopeClientQuery('clientId', { mode: 'reject' })({ user: AGENCY, query: { clientId: 'client-zzz' } }, agRes, ag)
+  assert.equal(ag.calls.count, 1)
+
+  const own = makeNext(); const ownRes = makeRes()
+  scopeClientQuery('clientId', { mode: 'reject' })({ user: CLIENT_A, query: { clientId: 'client-aaa' } }, ownRes, own)
+  assert.equal(own.calls.count, 1)
+
+  const other = makeNext(); const otherRes = makeRes()
+  const otherReq = { user: CLIENT_A, query: { clientId: 'client-bbb' } }
+  scopeClientQuery('clientId', { mode: 'reject' })(otherReq, otherRes, other)
+  assert.equal(other.calls.count, 0)
+  assert.equal(otherRes.statusCode, 403)
+  // reject must NOT mutate the query
+  assert.equal(otherReq.query.clientId, 'client-bbb')
+
+  const noscope = makeNext(); const noscopeRes = makeRes()
+  scopeClientQuery('clientId', { mode: 'reject' })({ user: CLIENT_NOSCOPE, query: { clientId: 'client-aaa' } }, noscopeRes, noscope)
+  assert.equal(noscope.calls.count, 0)
+  assert.equal(noscopeRes.statusCode, 403)
+})
+
+// ── scopeClientQuery: clamp mode ───────────────────────────────────────────────
+test('scopeClientQuery (mode: clamp): agency passes untouched', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: AGENCY, query: { client: 'all' } }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(res.statusCode, null)
+  // agency is NOT clamped — its query is left exactly as-is
+  assert.equal(req.query.client, 'all')
+})
+
+test('scopeClientQuery (mode: clamp): client→own proceeds (id unchanged)', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_A, query: { client: 'client-aaa' } }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(res.statusCode, null)
+  assert.equal(req.query.client, 'client-aaa')
+})
+
+test('scopeClientQuery (mode: clamp): client→other is rewritten to own id and proceeds (200, own data)', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_A, query: { client: 'client-bbb' } }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(res.statusCode, null)
+  assert.equal(req.query.client, 'client-aaa') // clamped to own id
+})
+
+test('scopeClientQuery (mode: clamp): client→"all" is rewritten to own id and proceeds', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_A, query: { client: 'all' } }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(req.query.client, 'client-aaa')
+})
+
+test('scopeClientQuery (mode: clamp): missing param is set to own id (still scoped)', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_A, query: {} }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(req.query.client, 'client-aaa')
+})
+
+test('scopeClientQuery (mode: clamp): client with no bound id is forbidden (fail closed)', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_NOSCOPE, query: { client: 'client-aaa' } }
+  scopeClientQuery('client', { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 0)
+  assert.equal(res.statusCode, 403)
+  assert.deepEqual(res.body, { error: 'Forbidden' })
+})
+
+test('scopeClientQuery (mode: clamp): default param name is clientId', () => {
+  const next = makeNext(); const res = makeRes()
+  const req = { user: CLIENT_A, query: { clientId: 'client-bbb' } }
+  scopeClientQuery(undefined, { mode: 'clamp' })(req, res, next)
+  assert.equal(next.calls.count, 1)
+  assert.equal(req.query.clientId, 'client-aaa')
+})
+
 // ── scopeClientId ────────────────────────────────────────────────────────────
 test('scopeClientId: agency is unconfined (null)', () => {
   assert.equal(scopeClientId({ user: AGENCY }), null)
