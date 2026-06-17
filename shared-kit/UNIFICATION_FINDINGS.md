@@ -134,7 +134,10 @@ Outside this session's repo scope; MCP access denied. Treated as **owner-blocked
   `analyze_patterns`; grounded-only, tenant-scoped, recommend-only.
 - ~~Accept/reject feedback loop~~ — **DONE** (`family_synthesis_store.py`): per-`signal_class` Wilson-LB
   confidence; rejected classes auto-suppress, live proposals annotated with the prior accept-rate.
-- Gates: family suites **84 assertions** green; `family_cli.py demo` self-check.
+- ~~Short-term hardening~~ — **DONE**: durable feedback ledger (learning survives stateless runs),
+  strict pluggable grounding (`family_grounding.py`, fail-closed; no more "ref exists = grounded"),
+  and a scheduled cross-repo drift workflow (`vendor-drift.yml`, weekly).
+- Gates: family suites **108 assertions** green; `family_cli.py demo` self-check; sanitizer 0 high.
 
 **Guardrails (unchanged):** draft PRs, G1–G4 green before merge, grounded-only,
 tenant isolation never weakened, no autonomous config writes (skills recommend;

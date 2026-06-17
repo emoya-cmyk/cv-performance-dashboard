@@ -1,0 +1,54 @@
+name: Vendor drift check
+
+# Scheduled family-wide drift guard (closes the "scanner exists but nobody runs it"
+# gap). cv's own vendor is gated in-repo by api/test/vendorSync.test.js; this scans
+# the SIBLINGS too (agency, performance, cli_framework) on a cron and fails on drift.
+#
+# Sibling repos may be private, so their checkout uses FAMILY_REPOS_TOKEN (a PAT /
+# fine-grained token with read access). Without it, those checkouts are skipped and
+# the scanner only meaningfully covers cv — still useful, just narrower.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'   # weekly, Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cv (canonical)
+        uses: actions/checkout@v4
+        with:
+          path: family/cv-performance-dashboard
+      - name: Checkout agency
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: emoya-cmyk/agency-performance-dashboard
+          token: ${{ secrets.FAMILY_REPOS_TOKEN }}
+          path: family/agency-performance-dashboard
+      - name: Checkout performance
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: emoya-cmyk/performance-dashboard
+          token: ${{ secrets.FAMILY_REPOS_TOKEN }}
+          path: family/performance-dashboard
+      - name: Checkout cli_framework
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: emoya-cmyk/cli_framework
+          token: ${{ secrets.FAMILY_REPOS_TOKEN }}
+          path: family/cli_framework
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Scan for vendor drift
+        run: |
+          python3 family/cv-performance-dashboard/shared-kit/scripts/check_vendor_drift.py \
+            --root "$GITHUB_WORKSPACE/family"
