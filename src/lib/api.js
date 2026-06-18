@@ -676,6 +676,12 @@ export const api = {
   // healsRecent, healWindowMs, jobs:[{job,status,ageMs,...}], now }); the route soft-degrades to
   // a 500 the strip swallows, so a ledger fault hides the badge rather than breaking the page.
   getOpsHealth:       ()         => get('/api/insights/ops'),
+  // getCorrectnessStats(tenantId?) → write-verification CORRECTNESS roster (Spec A,
+  // agency-only): per (tenant, endpoint) split of FAILED / PERSISTED_UNVERIFIED /
+  // PERSISTED_INCORRECT / VERIFIED_CORRECT with verified_rate + the Wilson lower
+  // bound. Reporting-only — it does NOT (yet) gate promotion. 403s a client token.
+  getCorrectnessStats: (tenantId)  =>
+    get(`/api/make-remediation/correctness${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`),
   // getMemoryHealth() → the Memory OS governance verdict (agency-only): the
   // self-heal layer's read on the store — status (healthy|degraded|critical) +
   // recommended_action (none|compact|escalate) + live/dead counts. 403 for a
