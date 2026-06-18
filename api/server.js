@@ -31,6 +31,7 @@ const hubspotRouter      = require('./routes/webhooks/hubspot')
 const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const makeRemediationRouter = require('./routes/webhooks/makeRemediation')
 const makeRemediationOpsRouter = require('./routes/makeRemediation')
+const writeVerificationRouter = require('./routes/webhooks/writeVerification')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
@@ -181,6 +182,7 @@ app.use('/api/webhooks/ghl',          ghlRouter)
 app.use('/api/webhooks/hubspot',      hubspotRouter)
 app.use('/api/webhooks/supermetrics', supermetricsRouter)
 app.use('/api/webhooks/make-remediation', makeRemediationRouter)
+app.use('/api/webhooks/write-verification', writeVerificationRouter)
 
 // External-cron heartbeat — mounted OUTSIDE requireAuth (a cron service carries
 // no user JWT). It self-authenticates with its own constant-time CRON_SECRET
