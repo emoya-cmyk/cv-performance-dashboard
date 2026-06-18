@@ -31,18 +31,27 @@ const router = express.Router()
 const MAKE_WEBHOOK_SECRET = process.env.MAKE_WEBHOOK_SECRET || ''
 const VALID_KIND = new Set(['primary', 'email_fallback', 'phone_fallback'])
 
-// Constant-time shared-secret check. Returns true when unset (dev) or matched.
-function verifySecret(req) {
-  if (!MAKE_WEBHOOK_SECRET) return true
+// Shared-secret gate — FAIL CLOSED (mirrors integrationHealth.ihAuth). A
+// load-bearing correctness ingest must never silently accept unauthenticated
+// data: an unset secret is a 503 (disabled), not an open door. Both sides are
+// SHA-256'd to a fixed 32 bytes so the compare is constant-time and never leaks
+// the secret length. Read at request time so arming needs no restart.
+function checkSecret(req) {
+  if (!MAKE_WEBHOOK_SECRET) {
+    return { ok: false, code: 503, error: 'write-verification ingest disabled (MAKE_WEBHOOK_SECRET unset)' }
+  }
   const got = String(req.headers['x-make-signature'] || '')
-  const exp = MAKE_WEBHOOK_SECRET
-  if (got.length !== exp.length) return false
-  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(exp))
+  const sha = (s) => crypto.createHash('sha256').update(String(s)).digest()
+  if (!crypto.timingSafeEqual(sha(got), sha(MAKE_WEBHOOK_SECRET))) {
+    return { ok: false, code: 401, error: 'invalid signature' }
+  }
+  return { ok: true }
 }
 
 router.post('/', async (req, res) => {
-  if (!verifySecret(req)) {
-    return res.status(401).json({ error: 'invalid signature' })
+  const auth = checkSecret(req)
+  if (!auth.ok) {
+    return res.status(auth.code).json({ error: auth.error })
   }
 
   const e = req.body || {}

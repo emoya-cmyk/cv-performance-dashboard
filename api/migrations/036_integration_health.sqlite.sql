@@ -1,7 +1,7 @@
 -- ============================================================
--- 022 (SQLite) — integration-health snapshot ingest sibling.
+-- 036 (SQLite) — integration-health snapshot ingest sibling.
 -- ------------------------------------------------------------
--- Mirrors 022_integration_health.sql with SQLite-native types. This sibling is
+-- Mirrors 036_integration_health.sql with SQLite-native types. This sibling is
 -- MANDATORY: the SQLite runner skips any plain-.sql statement matching a PG-only
 -- pattern (UUID / gen_random_uuid / TIMESTAMPTZ / …), so the plain CREATE TABLE
 -- would be dropped and the table would never exist under the shim. The runner

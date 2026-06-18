@@ -1,7 +1,7 @@
 -- ============================================================
--- 023 (SQLite) — operator remediation-request queue sibling.
+-- 037 (SQLite) — operator remediation-request queue sibling.
 -- ------------------------------------------------------------
--- Mirrors 023_remediation_requests.sql with SQLite-native types. MANDATORY: the
+-- Mirrors 037_remediation_requests.sql with SQLite-native types. MANDATORY: the
 -- SQLite runner drops any plain-.sql statement matching a PG-only pattern
 -- (UUID / gen_random_uuid / TIMESTAMPTZ / …), so the plain CREATE TABLE would be
 -- skipped and the table would never exist under the shim. The runner prefers this

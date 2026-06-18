@@ -229,25 +229,31 @@ router.post('/requests/:id/result', ihAuth, async (req, res) => {
 
   try {
     const now = new Date().toISOString()
-    const { rows } = await query(
+    // Enforce the lifecycle pending|claimed → done|failed server-side: a row must
+    // exist and not already be terminal. (Don't add the status predicate to an
+    // UPDATE…RETURNING — the SQLite shim reconstructs RETURNING by re-applying the
+    // WHERE, which no longer matches post-update. Pre-check, then plain UPDATE, then
+    // re-select — robust across both dialects.)
+    const cur = await query(`SELECT status FROM remediation_requests WHERE id = $1`, [req.params.id])
+    if (!cur.rows.length) return res.status(404).json({ error: 'request not found', code: 'NOT_FOUND' })
+    const prev = cur.rows[0].status
+    if (prev === 'done' || prev === 'failed') {
+      return res.status(409).json({ error: 'request already finalized', code: 'ALREADY_TERMINAL', status: prev })
+    }
+
+    await query(
       `UPDATE remediation_requests
-          SET status = $2,
-              result = $3,
-              updated_at = $4,
-              completed_at = $4
-        WHERE id = $1
-        RETURNING id, client_id, action, params, status, result,
-                  requested_by, created_at, updated_at, completed_at`,
+          SET status = $2, result = $3, updated_at = $4, completed_at = $4
+        WHERE id = $1 AND status IN ('pending','claimed')`,
       [req.params.id, status, result == null ? null : JSON.stringify(result), now]
     )
-    // The SQLite shim reconstructs UPDATE…RETURNING by re-selecting on the WHERE
-    // predicate (id = ?), which still matches post-update — so rows is reliable
-    // here. An empty result means the id didn't exist.
-    let row = rows && rows[0]
-    if (!row) {
-      const back = await query(`SELECT * FROM remediation_requests WHERE id = $1`, [req.params.id])
-      row = back.rows[0]
-    }
+    const back = await query(
+      `SELECT id, client_id, action, params, status, result,
+              requested_by, created_at, updated_at, completed_at
+         FROM remediation_requests WHERE id = $1`,
+      [req.params.id]
+    )
+    const row = back.rows[0]
     if (!row) return res.status(404).json({ error: 'request not found', code: 'NOT_FOUND' })
     res.json({ ok: true, request: toWire(row) })
   } catch (err) {

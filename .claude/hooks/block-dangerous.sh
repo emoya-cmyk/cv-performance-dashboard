@@ -23,8 +23,8 @@ block() { echo "BLOCKED by harness safety gate: $1" >&2; exit 2; }
 printf '%s' "$target" | grep -Eq 'git[[:space:]]+push([[:space:]]|.)*(--force([[:space:]]|=|$)|-f([[:space:]]|$))' && block "force-push"
 # Never push directly to a protected branch.
 printf '%s' "$target" | grep -Eq 'git[[:space:]]+push.*[[:space:]](main|master)([[:space:]]|$)' && block "push to a protected branch (main/master)"
-# Never recursive-delete a dangerous root path.
-printf '%s' "$target" | grep -Eq 'rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+(/|~|\$HOME|/\*)([[:space:]]|$)' && block "recursive delete of a root path"
+# Never recursive-delete an absolute or home path (catches /, /etc, /var, ~, $HOME, …).
+printf '%s' "$target" | grep -Eq 'rm[[:space:]]+-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*(/|~|\$HOME)' && block "recursive delete of an absolute / home path"
 # Never read/edit a secret or credential.
 printf '%s' "$target" | grep -Eq '(^|[[:space:]/="'"'"'])\.env([.[:space:]"'"'"']|$)|(^|/)secrets/|id_rsa|\.pem([[:space:]"'"'"']|$)' && block "secret / credential file"
 

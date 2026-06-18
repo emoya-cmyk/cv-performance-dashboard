@@ -9,11 +9,12 @@ live. See `CLI_FRAMEWORK_AUDIT.md` for what to verify on the framework side.
 
 ```
 POST /api/webhooks/write-verification
-Header: x-make-signature: <MAKE_WEBHOOK_SECRET>     # constant-time; omit only in local dev (unset secret)
+Header: x-make-signature: <MAKE_WEBHOOK_SECRET>     # required — fail-closed (SHA-256 constant-time compare)
 Content-Type: application/json
 ```
 
-`401` on a bad/missing signature when the secret is set. `400` if `tenant_id`,
+Fail-closed: `503` when `MAKE_WEBHOOK_SECRET` is **unset** (ingest disabled — the
+secret must be configured), `401` on a bad/missing signature, `400` if `tenant_id`,
 `endpoint`, or a boolean `persisted` is missing.
 
 ## Body
