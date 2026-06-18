@@ -9,6 +9,11 @@ name: Node CI (reusable)
 # drivers like better-sqlite3, or build tools like vite) can NEVER make CI skip
 # the very packages the test/build need. That exact trap silently red-lined a
 # repo's CI; this workflow makes the fix the default everywhere.
+#
+# Frontend coverage: the dashboards' inlined CI ran `npm run lint` and
+# `npm run test:fe` (Vitest) alongside the build. Those are preserved here via
+# the optional `lint-command` / `frontend-test-command` inputs (empty = skip), so
+# switching a repo to this caller does NOT drop a gate it had inlined.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -27,9 +32,17 @@ on:
         type: string
         default: 'node --test'
       build-dir:
-        description: Dir to run the build in. Empty string skips the build job.
+        description: Dir to run the build/frontend job in. Empty string skips the job.
         type: string
         default: '.'
+      lint-command:
+        description: Lint command run in build-dir before the build. Empty string skips linting.
+        type: string
+        default: ''
+      frontend-test-command:
+        description: Frontend test command (e.g. Vitest) run in build-dir before the build. Empty string skips it.
+        type: string
+        default: ''
       build-command:
         description: Build command run in build-dir.
         type: string
@@ -59,7 +72,7 @@ jobs:
 
   build:
     if: inputs.build-dir != ''
-    name: Build
+    name: Frontend lint + test + build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +82,16 @@ jobs:
           cache: npm
       - name: Install deps (including devDependencies)
         run: npm ci --include=dev
+      - name: Lint
+        if: inputs.lint-command != ''
+        run: ${{ inputs.lint-command }}
+        working-directory: ${{ inputs.build-dir }}
+      - name: Frontend tests
+        if: inputs.frontend-test-command != ''
+        run: ${{ inputs.frontend-test-command }}
+        working-directory: ${{ inputs.build-dir }}
+        env:
+          JWT_SECRET: ci-test-secret
       - name: Build
         run: ${{ inputs.build-command }}
         working-directory: ${{ inputs.build-dir }}

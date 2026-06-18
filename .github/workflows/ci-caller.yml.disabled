@@ -1,0 +1,28 @@
+# STAGED — inert until emoya-cmyk/.github exists with node-ci.yml published.
+# This file ends in `.disabled`, so GitHub Actions ignores it; the inlined
+# .github/workflows/ci.yml remains the ACTIVE CI until you activate the swap:
+#
+#   git rm .github/workflows/ci.yml
+#   git mv .github/workflows/ci-caller.yml.disabled .github/workflows/ci.yml
+#
+# See cv-performance-dashboard/shared-kit/org-repo-bootstrap/README.md.
+# Preserves every current gate: API tests (api/), eslint, Vitest (test:fe), Vite build.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    uses: emoya-cmyk/.github/.github/workflows/node-ci.yml@main
+    with:
+      node-version: '20'
+      test-dir: 'api'
+      test-command: 'node --test'
+      build-dir: '.'
+      lint-command: 'npm run lint'
+      frontend-test-command: 'npm run test:fe'
+      build-command: 'npx vite build'
