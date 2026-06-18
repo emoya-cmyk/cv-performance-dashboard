@@ -1,8 +1,17 @@
 # Hub Convergence Plan — `cv` ↔ `agency`
 
-**Status:** Proposal for review. No convergence executed. This is the evidence +
-sequenced plan for collapsing the duplicated "brain" into one canonical hub.
-Pairs with `DECISION_REGISTER.md` (candidate: *consolidate cv/agency*).
+**Status:** In progress. **Phase 0 + Phase 1 (backend) done**: the two
+agency-unique features (`integrationHealth`, `remediationRequests`, the
+cli_framework ↔ dashboard bridge) are up-ported into cv with their migrations
+(036/037) and integration tests (full suite green). The remaining phases —
+reconcile drifted libs, single-source the brain, and the register-gated
+decommission — are not executed. Pairs with `DECISION_REGISTER.md` (candidate:
+*consolidate cv/agency*).
+
+> Follow-up for Phase 1: the operator-facing Integration-Health **tile** (agency
+> `src/components/IntegrationHealthPanel.jsx` + its `api.js` helper + Intelligence
+> wiring) is not yet ported — the backend bridge is live and tested; the UI is the
+> next increment.
 
 ## 1. The problem, in evidence
 

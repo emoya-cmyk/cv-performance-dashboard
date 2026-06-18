@@ -32,6 +32,8 @@ const supermetricsRouter = require('./routes/webhooks/supermetrics')
 const makeRemediationRouter = require('./routes/webhooks/makeRemediation')
 const makeRemediationOpsRouter = require('./routes/makeRemediation')
 const writeVerificationRouter = require('./routes/webhooks/writeVerification')
+const { router: integrationHealthRouter } = require('./routes/integrationHealth')
+const { router: remediationRequestsRouter } = require('./routes/remediationRequests')
 const { requireAuth }    = require('./middleware/auth')
 const { requireAgency, scopeClientParam } = require('./middleware/authz')
 const { securityHeaders } = require('./middleware/securityHeaders')
@@ -183,6 +185,13 @@ app.use('/api/webhooks/hubspot',      hubspotRouter)
 app.use('/api/webhooks/supermetrics', supermetricsRouter)
 app.use('/api/webhooks/make-remediation', makeRemediationRouter)
 app.use('/api/webhooks/write-verification', writeVerificationRouter)
+
+// cli_framework ↔ dashboard bridge (up-ported from agency in the hub convergence).
+// Both halves mount under /api/integration-health and carry their OWN per-method
+// gates (machine ihAuth on the ingest/pull/result paths; requireAuth+requireAgency
+// on the operator reads/creates), so they are NOT wrapped in a blanket requireAuth.
+app.use('/api/integration-health', integrationHealthRouter)
+app.use('/api/integration-health', remediationRequestsRouter)
 
 // External-cron heartbeat — mounted OUTSIDE requireAuth (a cron service carries
 // no user JWT). It self-authenticates with its own constant-time CRON_SECRET
