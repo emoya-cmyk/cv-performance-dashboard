@@ -1,17 +1,25 @@
 # Hub Convergence Plan — `cv` ↔ `agency`
 
-**Status:** In progress. **Phase 0 + Phase 1 (backend) done**: the two
+**Status:** In progress. **Phase 0 + Phase 1 done** (backend **and** UI): the two
 agency-unique features (`integrationHealth`, `remediationRequests`, the
 cli_framework ↔ dashboard bridge) are up-ported into cv with their migrations
-(036/037) and integration tests (full suite green). The remaining phases —
-reconcile drifted libs, single-source the brain, and the register-gated
-decommission — are not executed. Pairs with `DECISION_REGISTER.md` (candidate:
-*consolidate cv/agency*).
+(036/037), integration tests (full API suite green), and the operator-facing
+Integration-Health **tile** (`src/components/IntegrationHealthPanel.jsx` + the
+three `api.js` helpers + Intelligence wiring; vite build + vitest green). The
+remaining phases — reconcile drifted libs, single-source the brain, and the
+register-gated decommission — are not executed. Pairs with `DECISION_REGISTER.md`
+(candidate: *consolidate cv/agency*).
 
-> Follow-up for Phase 1: the operator-facing Integration-Health **tile** (agency
-> `src/components/IntegrationHealthPanel.jsx` + its `api.js` helper + Intelligence
-> wiring) is not yet ported — the backend bridge is live and tested; the UI is the
-> next increment.
+> **Phase 2 finding (important):** the four "drifted" shared libs are **not**
+> bidirectional drift — each is **cv *ahead* of agency**, and ahead *because cv has
+> a subsystem agency lacks*: `recap.js`/`ai.js` use Memory-OS continuity
+> (`memoryContext`), `facts.js` carries 4 extra channels (migration
+> `023_new_channels`), `heartbeat.js` runs a 4th `alerts` job (`alertEngine`).
+> Copying cv's versions into agency would **hard-break it** (missing
+> `memoryContext.js`, `alertEngine.js`, and the channels migration that those files
+> `require`). So **Phase 2 has no safe standalone reconciliation** — it folds into
+> Phase 3 (port the subsystems) or resolves for free under Option A (agency becomes
+> a deploy of cv). No breaking copy was made.
 
 ## 1. The problem, in evidence
 
