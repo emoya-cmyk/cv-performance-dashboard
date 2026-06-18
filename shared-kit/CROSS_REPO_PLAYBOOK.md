@@ -115,31 +115,21 @@ Each touched repo: PR CI green; for memory-os adopters, run the package's smoke 
 
 ## Vendored dashboard-core: drift gate
 
-`dashboard-core` is **vendored** (copied), not a registry dependency — so a copy
-can silently fall behind canonical. That happened: `scopeClientQuery` gained a
-`clamp` mode in canonical (cv `33a2080`) but the vendored `auth.js` in **every**
-repo stayed a feature behind, undetected.
+`dashboard-core` is **vendored** (copied), not a registry dependency, so a copy can
+silently fall behind canonical. Enforcement (canonical home = cv):
 
-Each consumer now ships a **drift lock** + a test that fails CI on divergence:
-
-- `api/vendor/dashboard-core/dashboard-core.lock.json` — pins the sha256 of every
-  vendored `lib/*.js` to its canonical content at sync time (`synced_from_commit`).
-- `api/test/vendorDashboardCoreDrift.test.js` — runs in the normal `node --test`
-  suite (no new workflow); fails if a vendored file is edited, truncated, or stale
-  vs the lock, or if a `lib/*.js` exists that the lock doesn't track.
+- `api/test/vendorSync.test.js` — fails CI the moment cv's
+  `api/vendor/dashboard-core` diverges from `shared-kit/dashboard-core`
+  (byte-identical + version match; vendor keeps its own `PROVENANCE.md`, canonical
+  its own `package-lock.json`).
+- `shared-kit/scripts/check_vendor_drift.py` — the family-wide cross-repo scan for
+  the consumer repos (scheduled `vendor-drift` workflow).
 
 ### Re-sync procedure (canonical → consumers)
 
-1. Edit only canonical: `cv-performance-dashboard/shared-kit/dashboard-core`.
-2. Copy the changed `lib/*.js` into each consumer's `api/vendor/dashboard-core/lib`
-   (a consumer may vendor a **subset** — only sync the files it actually carries).
-3. Regenerate that consumer's `dashboard-core.lock.json` (hash its vendored
-   `lib/*.js`) and bump `synced_from_commit` + the PROVENANCE stamp.
-4. The drift test goes green; commit the re-sync.
-
-> The gate is per-consumer and self-contained: it proves the vendored copy is an
-> unmodified snapshot of a known canonical commit. It does **not** auto-detect
-> "canonical advanced" — that remains the deliberate re-sync step above.
+1. Edit only canonical: `shared-kit/dashboard-core` (bump its `package.json` version).
+2. Copy the changed files into each consumer's `api/vendor/dashboard-core`.
+3. `vendorSync` (cv) / `check_vendor_drift.py` (siblings) goes green; commit the re-sync.
 
 ---
 

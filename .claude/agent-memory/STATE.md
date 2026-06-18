@@ -7,8 +7,8 @@ distill general lessons into shared-kit. See `shared-kit/claude/agent-memory/STA
 - cv is the **canonical hub**; `agency` was a strict lib-subset of cv (now also
   has cv's two unique features up-ported). `performance` is a lean reporting tier.
 - `dashboard-core` is **VENDORED, not an npm dep** — edit canonical at
-  `shared-kit/dashboard-core` and re-sync; `api/test/vendorDashboardCoreDrift.test.js`
-  enforces it against `dashboard-core.lock.json`.
+  `shared-kit/dashboard-core` and re-sync; `api/test/vendorSync.test.js` (cv) +
+  `shared-kit/scripts/check_vendor_drift.py` (siblings) enforce byte-identity.
 - API tests: `cd api && node --test` (2383 green as of 2026-06-18). DB seam: unset
   `DATABASE_URL` + set `SQLITE_PATH` → SQLite.
 - `cli_framework` (external, Python/MCP, vault) is the keystone: Jarvis, AccuLynx,
