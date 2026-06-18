@@ -1,5 +1,9 @@
 # `cli_framework` Audit Checklist — the load-bearing dependency
 
+> Kicking this off? Start from **`CLI_FRAMEWORK_GOLIVE_BRIEF.md`** — the
+> sequenced, self-contained brief (scope, prerequisites, phases, done-criteria)
+> that wraps this checklist.
+
 **Status:** Checklist, **not** a performed audit. `cli_framework` is **not in this
 session's repo scope**, and `list_repos`/`add_repo` were unavailable here, so it
 could not be pulled in and inspected. To actually run this, widen a future session
