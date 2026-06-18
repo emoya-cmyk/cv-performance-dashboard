@@ -90,3 +90,12 @@ Each entry carries:
   persistence-vs-correctness conflation into the autonomy layer permanently.
   Promote this candidate only once real `VERIFIED_CORRECT` samples exist per
   `(tenant, endpoint)`.
+
+- **(strategic):** Consolidate `cv` and `agency` onto one canonical hub
+  (`HUB_CONVERGENCE_PLAN.md`). cv is canonical (agency's lib surface is a strict
+  subset), but agency has two unique features (`integrationHealth`,
+  `remediationRequests`) that must be up-ported first. The irreversible step is
+  Phase 5 (decommissioning the divergent agency code / repo) — gate it on verified
+  data + feature parity and a tenant-isolation check. The earlier phases (freeze
+  the fork, up-port, reconcile drift, single-source the brain into the kit) are
+  reversible and can proceed as normal work.
