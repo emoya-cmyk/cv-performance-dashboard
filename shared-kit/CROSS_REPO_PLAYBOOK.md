@@ -95,3 +95,33 @@ Each touched repo: PR CI green; for memory-os adopters, run the package's smoke 
 
 > When running from the widened session, do each repo as its own draft PR (gates green
 > before merge), exactly like the 14 PRs that built this in `cv-performance-dashboard`.
+
+---
+
+## Vendored dashboard-core: drift gate
+
+`dashboard-core` is **vendored** (copied), not a registry dependency — so a copy
+can silently fall behind canonical. That happened: `scopeClientQuery` gained a
+`clamp` mode in canonical (cv `33a2080`) but the vendored `auth.js` in **every**
+repo stayed a feature behind, undetected.
+
+Each consumer now ships a **drift lock** + a test that fails CI on divergence:
+
+- `api/vendor/dashboard-core/dashboard-core.lock.json` — pins the sha256 of every
+  vendored `lib/*.js` to its canonical content at sync time (`synced_from_commit`).
+- `api/test/vendorDashboardCoreDrift.test.js` — runs in the normal `node --test`
+  suite (no new workflow); fails if a vendored file is edited, truncated, or stale
+  vs the lock, or if a `lib/*.js` exists that the lock doesn't track.
+
+### Re-sync procedure (canonical → consumers)
+
+1. Edit only canonical: `cv-performance-dashboard/shared-kit/dashboard-core`.
+2. Copy the changed `lib/*.js` into each consumer's `api/vendor/dashboard-core/lib`
+   (a consumer may vendor a **subset** — only sync the files it actually carries).
+3. Regenerate that consumer's `dashboard-core.lock.json` (hash its vendored
+   `lib/*.js`) and bump `synced_from_commit` + the PROVENANCE stamp.
+4. The drift test goes green; commit the re-sync.
+
+> The gate is per-consumer and self-contained: it proves the vendored copy is an
+> unmodified snapshot of a known canonical commit. It does **not** auto-detect
+> "canonical advanced" — that remains the deliberate re-sync step above.
