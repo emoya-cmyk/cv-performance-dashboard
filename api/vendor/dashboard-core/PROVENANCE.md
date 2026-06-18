@@ -1,29 +1,16 @@
 # Provenance
 
-Vendored from this repo's `shared-kit/dashboard-core` (canonical). Re-sync from
-there; do not edit in place.
+Vendored from `cv-performance-dashboard/shared-kit/dashboard-core` (canonical).
+**Re-sync from there; do not edit in place.**
 
-## Vendored modules
+- **Source:** `shared-kit/dashboard-core` @ `@emoya-cmyk/dashboard-core` v0.4.0
+- **Source commit (cv):** `b6aa22e57c30fe00badb0c96f6fbfe9e446e15db`
+- **Synced:** 2026-06-17 (Phase A2 — vendor drift re-sync; consumers were behind at 0.1.0/0.2.0)
 
-- **Auth / authz + security layer** (`lib/auth.js`, `lib/authSecurity.js`,
-  `lib/securityHeaders.js`, `lib/rateLimit.js`, `lib/loginThrottle.js`,
-  `lib/aiBudget.js`) — increment 0. cv consumes via the `middleware/*` and
-  `lib/authSecurity.js` re-export shims.
-- **Engine — `lib/baselines.js`** (self-calibrating statistics core) — increment 1.
-  Byte-for-byte identical across cv + agency before extraction; cv's
-  `api/lib/baselines.js` is now a thin re-export of this copy. Pure functions, no
-  DB/IO.
-- **Engine — `lib/forecast.js`, `lib/attribution.js`, `lib/pacing.js`,
-  `lib/precision.js`, `lib/correlate.js`, `lib/contribution.js`,
-  `lib/ratioAttribution.js`** (the pure-math analysis modules) — increment 2.
-  Byte-for-byte identical across cv + agency before extraction; cv's
-  `api/lib/<module>.js` are now thin re-exports of these copies. Pure functions,
-  no DB/IO. (`forecast` depends on the package-internal `./baselines`.)
-- **Engine — `lib/metricsCore.js`** (the single source of truth for derived KPIs:
-  the wide `AGG` aggregate, `derive`, `pctChange`, `detectAnomalies`) — increment 3.
-  Byte-for-byte identical across cv + agency before extraction; cv's
-  `api/lib/metricsCore.js` is now a thin re-export of this copy. Pure functions,
-  no DB/IO. Shipped with a characterization test (`test/metricsCore.test.js`)
-  written first to pin its observable behavior (totals, guarded ratios, the
-  cold-start no-NaN/Infinity hardening, `pctChange` null guard, and the
-  `detectAnomalies` threshold/skip/sort).
+This copy is byte-identical to canonical (auth/authz + security layer **and** the
+engine layer: baselines, forecast, attribution, pacing, precision, correlate,
+contribution, ratioAttribution, metricsCore). Consumers import only the names
+they use; unused pure-function modules are inert.
+
+Permanent fix is GitHub Packages (`@emoya-cmyk/dashboard-core`) per
+`shared-kit/PACKAGES.md` — blocked on the `emoya-cmyk/.github` org repo (A1).

@@ -20,4 +20,7 @@ jobs:
       test-command: 'node --test'
       # A Vite frontend at the repo root (omit build-dir to skip the build):
       build-dir: '.'
+      # Optional frontend gates (omit to skip): preserve lint + Vitest if the repo runs them.
+      lint-command: 'npm run lint'
+      frontend-test-command: 'npm run test:fe'
       build-command: 'npx vite build'
