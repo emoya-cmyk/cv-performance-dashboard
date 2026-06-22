@@ -155,13 +155,29 @@ federation, no memory loop) — lossless compaction only, `verify=True`.
   `rows`, not the prompt string, and the values round-trip exactly (full api suite
   green: 2384/2384, incl. grounding + memory). §3.2 cache alignment was already in
   place (`api/lib/anthropic.js` sends the static system prompt as the cached prefix),
-  so no change there. **Fan-out to agency / performance / integrations is follow-on**
-  per-repo PRs — each needs its LLM/ask surface verified first (cv is the repo with
-  the ask/brief surface; the others may not have an equivalent tabular→model site).
-  → review.
-- **G4 (default: stop):** decide whether any specific non-write, high-volume path
-  warrants opt-in lossy/CCR. Recommended default: **do not enable**; betting excluded
-  regardless.
+  so no change there. → review.
+- **G3 fan-out (complete — verified, not assumed):** each sibling's LLM surface was
+  checked before acting. Outcome:
+  - **agency-performance-dashboard — LANDED** (its own draft PR): has the same
+    `api/lib/ask.js` `narrateAnswer` (byte-for-byte as cv), so the identical change
+    applies; vendored copy is drift-guarded by `check_vendor_drift.py`. Full api
+    suite green (2253/2253).
+  - **performance-dashboard — N/A (no-op):** no `api/lib/ask.js` and no LLM
+    ask/narrate call site (no `messages.create`/`callMessages` over tabular data).
+    There is no tabular→model surface to compact; nothing to adopt. Re-evaluate only
+    if an LLM ask/brief surface is added later.
+  - **integrations-performance-dashboard-app — N/A (no-op):** no `api/` directory
+    (base44 frontend, being retired); the playbook's standing "do not modify" rule
+    applies. Excluded.
+  So the §2.3 "priority 3" dashboards resolve to: agency (done), performance (no
+  surface), integrations (no app/retiring). The brief listed them as candidates; the
+  verified reality is one real target (agency) plus two documented no-ops.
+- **G4 (default: stop) — NOT enabled (recommended).** No specific non-write,
+  high-volume path was found to warrant opt-in lossy/CCR; G2/G3 lossless savings
+  (~30–57% measured) are sufficient, so the lossy/CCR paths stay out family-wide and
+  betting stays excluded regardless. There is intentionally no code for G4 — it is a
+  decision gate, and the decision is "do not enable." Revisit only if a concrete,
+  non-write, high-volume path emerges that lossless can't serve.
 
 ## What NOT to do
 - Do **not** modify `integrations-performance-dashboard-app`.
