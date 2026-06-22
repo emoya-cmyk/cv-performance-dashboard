@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compaction"
+version = "0.1.0"
+description = "Lossless tabular token-compaction (array-of-objects -> schema + rows) + prompt-prefix cache alignment. Stdlib only."
+requires-python = ">=3.8"
+license = { text = "UNLICENSED" }
+
+[tool.setuptools]
+py-modules = ["compaction", "cache_align"]

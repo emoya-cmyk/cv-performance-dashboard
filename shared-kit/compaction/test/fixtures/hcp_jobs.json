@@ -1,0 +1,10 @@
+[
+  { "id": "hcp_001", "status": "scheduled", "customer": "Reyes HVAC", "address": { "line1": "402 Oak St", "city": "Austin", "zip": "78704" }, "line_items": ["diagnostic", "filter"], "total": 289.99, "notes": "Gate code 1492", "technician": null },
+  { "id": "hcp_002", "status": "completed", "customer": "Bluebird Cafe", "address": { "line1": "11 Market Ave", "city": "Dallas", "zip": "75201" }, "line_items": ["compressor", "labor"], "total": 1840, "notes": "Pipe with | symbol in note", "technician": "Ray" },
+  { "id": "hcp_003", "status": "in_progress", "customer": "Lin Residence", "address": { "line1": "77 Cedar Ct", "city": "Houston", "zip": "77002" }, "line_items": ["thermostat"], "total": 215.5, "notes": "Multi-line\nnote here", "technician": "Dana" },
+  { "id": "hcp_004", "status": "canceled", "customer": "Northgate Mall", "address": { "line1": "900 Loop Rd", "city": "Austin", "zip": "78753" }, "line_items": [], "total": 0, "notes": "", "technician": null },
+  { "id": "hcp_005", "status": "completed", "customer": "Okoro Family", "address": { "line1": "23 Birch Ln", "city": "San Antonio", "zip": "78205" }, "line_items": ["coil", "refrigerant", "labor"], "total": 2310.75, "notes": "Return visit", "technician": "Ray" },
+  { "id": "hcp_006", "status": "scheduled", "customer": "Vega Studios", "address": { "line1": "5 Pine Blvd", "city": "Dallas", "zip": "75204" }, "line_items": ["diagnostic"], "total": 99, "notes": "Call ahead", "technician": "Dana" },
+  { "id": "hcp_007", "status": "completed", "customer": "Hammond LLC", "address": { "line1": "640 Elm Way", "city": "Houston", "zip": "77019" }, "line_items": ["duct", "labor"], "total": 1275.25, "notes": "Commercial roof unit", "technician": "Ray" },
+  { "id": "hcp_008", "status": "in_progress", "customer": "Patel Clinic", "address": { "line1": "318 Maple Dr", "city": "Austin", "zip": "78745" }, "line_items": ["motor"], "total": 560, "notes": "Backslash \\ in note", "technician": "Dana" }
+]

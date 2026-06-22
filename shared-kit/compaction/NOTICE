@@ -1,0 +1,17 @@
+@emoya-cmyk/compaction
+
+The lossless tabular-compaction approach (array-of-objects reformatted into one
+schema header + delimited rows) is inspired by the "lossless compaction" primitive
+in chopratejas/headroom (https://github.com/chopratejas/headroom), licensed
+Apache-2.0.
+
+This module is a clean-room re-implementation of ONLY that one lossless idea, from
+a written spec, in our own languages (JavaScript + Python). No Headroom source was
+copied. The lossy capabilities Headroom also provides — row-drop / item truncation,
+CCR reversible-offload with TTL retrieval, and opaque-blob value substitution — are
+deliberately NOT reproduced here: they are structurally incompatible with this
+family's grounded-AI invariant (no asserted figure may derive from an altered or
+truncated set).
+
+This credit is provided as good practice; a clean-room re-implementation of an
+unprotectable idea carries no license obligation of its own.

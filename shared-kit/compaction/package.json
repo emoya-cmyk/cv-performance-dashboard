@@ -1,0 +1,27 @@
+{
+  "name": "@emoya-cmyk/compaction",
+  "version": "0.1.0",
+  "description": "Lossless token-compaction for the dashboard family: array-of-objects -> schema header + delimited rows (every value survives; decode(encode(x)) === x), plus a prompt-prefix cache-alignment discipline. Zero dependencies. Lossless-only by design (no row-drop, no truncation, no reversible-offload) so it stays compatible with the grounded-AI invariant.",
+  "main": "index.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "README.md",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emoya-cmyk/compaction.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

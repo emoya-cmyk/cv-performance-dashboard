@@ -20,6 +20,7 @@ write to); apply it to the others with the steps below.
 | `memory-os/` | Decoupled `@emoya-cmyk/memory-os` package (DI db + grounding) + schema. | JS LLM/agent repos |
 | `memory-os-py/` | Python port of memory-os (same contract/guarantees) + smoke test. | Python repos (cli_framework, mlb_v159) |
 | `dashboard-core/` | Publishable `@emoya-cmyk/dashboard-core` — **security module first** (auth/authz, headers, rate-limit/AI-budget, password-floor/timing-equalizer/JWT-boot-guard as DI factories); engine/connectors/semantic to follow. | JS dashboard repos |
+| `compaction/` + `compaction-py/` | `@emoya-cmyk/compaction` — **lossless** token-compaction (array-of-objects → schema + rows; `decode(encode(x)) == x`) + prompt-prefix cache alignment. Zero deps, byte-identical JS/Python format. Lossless-only by design. | LLM/agent repos (read→model payloads) |
 
 ## Your repos — suggested rollout
 | Repo | CI workflow | Claude config | memory-os |
