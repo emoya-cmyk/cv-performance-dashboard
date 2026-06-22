@@ -147,9 +147,18 @@ federation, no memory loop) — lossless compaction only, `verify=True`.
   payloads keep the exact legacy preview. Includes the §8 ~10% holdout + JSONL
   measurement hook; `scripts/measure_compaction.py` reports a MEASURED ~56% char
   reduction on representative reads (provider-token A/B pending a live run). → review.
-- **G3:** adopt into the dashboards (cv first, then the other three) for synthesis /
-  pattern-detection prompts + agent-memory context assembly; apply cache alignment at
-  those call sites. → review.
+- **G3 (cv landed — same PR #51):** compaction vendored into `api/vendor/compaction/`
+  (guarded by `api/test/vendorSyncCompaction.test.js`) and wired into the "ask"
+  result-narration call site (`api/lib/ask.js` `buildNarrateContent`): the tabular
+  result `rows` are losslessly compacted (~32% smaller on a 20-row group_by=client
+  ask). Grounding is unchanged by construction — the allow-set is computed from
+  `rows`, not the prompt string, and the values round-trip exactly (full api suite
+  green: 2384/2384, incl. grounding + memory). §3.2 cache alignment was already in
+  place (`api/lib/anthropic.js` sends the static system prompt as the cached prefix),
+  so no change there. **Fan-out to agency / performance / integrations is follow-on**
+  per-repo PRs — each needs its LLM/ask surface verified first (cv is the repo with
+  the ask/brief surface; the others may not have an equivalent tabular→model site).
+  → review.
 - **G4 (default: stop):** decide whether any specific non-write, high-volume path
   warrants opt-in lossy/CCR. Recommended default: **do not enable**; betting excluded
   regardless.

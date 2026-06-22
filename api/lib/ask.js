@@ -40,6 +40,9 @@ const { query }                                  = require('../db')
 const { weekStartOf }                             = require('./rollup')
 const { callMessages, DEFAULT_MODEL }             = require('./anthropic')
 const { verifyGrounding, collectAllowedNumbers }  = require('./ai')
+// Token-compaction (brief G3): losslessly reformat the tabular `rows` we send the
+// model into a schema header + delimited rows. Pure, zero-dep, require-free.
+const { compact } = require('../vendor/compaction')
 // intel-v6 (5): the ENTITY "why" — split an additive metric's period-over-period
 // agency move into exact per-client contributions. Pure (no DB/clock/LLM) and
 // require-free, so a plain top-level require is cycle-safe.
@@ -508,12 +511,32 @@ async function narrateAnswer(question, spec, rows, meta) {
   }
   const text = await callMessages({
     system: NARRATE_SYSTEM,
-    messages: [{ role: 'user', content: 'Answer this, grounded only in the rows:\n\n' + JSON.stringify(payload) }],
+    messages: [{ role: 'user', content: buildNarrateContent(payload) }],
     model: DEFAULT_MODEL, maxTokens: 200, temperature: 0.2,
   })
   if (!text) return { text: null, grounded: false }
   const { grounded } = verifyGrounding(text, null, allowedNumbersForAsk(rows, meta.timeLabel, meta.comparison))
   return { text, grounded }
+}
+
+// Assemble the user turn for narrateAnswer. When the `rows` table is large enough
+// to be worth it, it is reformatted LOSSLESSLY into a ##TBL block (the repeated
+// per-row keys are sent once); below threshold it stays inline JSON, byte-identical
+// to the original prompt. Crucially this only changes the WIRE SHAPE of the rows —
+// every value is preserved (verify=true), and the grounding allow-set is computed
+// from `rows` (not this string), so grounded-number behavior is unchanged either
+// way. The static NARRATE_SYSTEM remains the cached prefix (see lib/anthropic.js).
+function buildNarrateContent(payload) {
+  const LEAD = 'Answer this, grounded only in the rows:\n\n'
+  const c = compact(payload.rows, { verify: true })
+  if (!c.compacted) return LEAD + JSON.stringify(payload)  // unchanged small-result path
+  const { rows, ...head } = payload
+  return [
+    LEAD + JSON.stringify(head),
+    "rows (lossless compact table — ##TBL: a header listing the keys + per-column",
+    "types, then one '|'-delimited row per record; no rows or values omitted):",
+    c.text,
+  ].join('\n')
 }
 
 // ── QUESTION → SPEC (the LLM's only job) ──────────────────────────────────────
@@ -1448,6 +1471,6 @@ async function runSuggestions(opts = {}) {
 module.exports = {
   runAsk, runSuggestions, runExplain, answerForecast, answerPacing, answerAdvice, parseQuestion, parseSpec, validateSpec, compileQuery, resolveTimeRange,
   comparisonRange, computeComparison,
-  templateAnswer, narrateAnswer, formatValue, allowedNumbersForAsk,
+  templateAnswer, narrateAnswer, buildNarrateContent, formatValue, allowedNumbersForAsk,
   METRICS, GROUPINGS, TIME_RANGES, SpecError,
 }
