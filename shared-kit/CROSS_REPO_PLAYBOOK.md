@@ -140,9 +140,13 @@ federation, no memory loop) — lossless compaction only, `verify=True`.
 **Gated rollout (do NOT skip the gates):**
 - **G1 (done here):** land both primitives + golden fixtures in `shared-kit`; prove
   round-trip, passthrough, and verify-fallback. → review.
-- **G2:** wire compaction into `cli_framework`'s tabular vendor-read → model path,
-  **read-side only, `verify=True`**, write/verify path untouched. Measure on one real
-  tenant read with the §8 holdout. → review.
+- **G2 (landed — `cli_framework` PR on the token-compression branch):** compaction
+  is vendored into `enhancements/vendor/compaction/` (drift-guarded above) and wired
+  into the Make.com Tier 3 failure-research prompt via `enhancements/llm_compaction.py`
+  — **read-side only, `verify=True`**, write/verify path untouched; single-dict
+  payloads keep the exact legacy preview. Includes the §8 ~10% holdout + JSONL
+  measurement hook; `scripts/measure_compaction.py` reports a MEASURED ~56% char
+  reduction on representative reads (provider-token A/B pending a live run). → review.
 - **G3:** adopt into the dashboards (cv first, then the other three) for synthesis /
   pattern-detection prompts + agent-memory context assembly; apply cache alignment at
   those call sites. → review.
