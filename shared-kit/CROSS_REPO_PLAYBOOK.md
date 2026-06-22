@@ -40,6 +40,16 @@ the actual pushes happen from the widened session). Everything referenced lives 
 > `node-ci.yml`; switching to the reusable caller is Step 0 below. `mlb_v159` is
 > outside the current session scope and unverified here.
 
+> **Autonomy standard (new):** `shared-kit/AUTONOMY_SPEC.md` is the canonical
+> v2.0 Loop Engineering & Autonomy standard for the family. The **reference
+> implementation** of its Part 4 controller (event-sourced trust ladder,
+> hierarchical promotion/demotion, verifier canary) lives in the federated hub
+> `cli_framework/enhancements/autonomy/`. Other in-scope repos
+> (`MAKE_REMEDIATION`, `SEO_Revenue_Engine`) adopt by implementing a
+> `RepoAdapter` against that hub — one small PR each, deliberately *not* a broad
+> fan-out (review bandwidth is the ceiling). `mlb_v159` is **never** registered
+> (air-gapped, invariant #7).
+
 ---
 
 > **`shared-kit/dashboard-core/`** — the publishable `@emoya-cmyk/dashboard-core`
