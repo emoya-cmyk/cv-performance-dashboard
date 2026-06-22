@@ -110,3 +110,54 @@ Each touched repo: PR CI green; for memory-os adopters, run the package's smoke 
 
 > When running from the widened session, do each repo as its own draft PR (gates green
 > before merge), exactly like the 14 PRs that built this in `cv-performance-dashboard`.
+
+---
+
+## Vendored dashboard-core: drift gate
+
+`dashboard-core` is **vendored** (copied), not a registry dependency, so a copy can
+silently fall behind canonical. Enforcement (canonical home = cv):
+
+- `api/test/vendorSync.test.js` — fails CI the moment cv's
+  `api/vendor/dashboard-core` diverges from `shared-kit/dashboard-core`
+  (byte-identical + version match; vendor keeps its own `PROVENANCE.md`, canonical
+  its own `package-lock.json`).
+- `shared-kit/scripts/check_vendor_drift.py` — the family-wide cross-repo scan for
+  the consumer repos (scheduled `vendor-drift` workflow).
+
+### Re-sync procedure (canonical → consumers)
+
+1. Edit only canonical: `shared-kit/dashboard-core` (bump its `package.json` version).
+2. Copy the changed files into each consumer's `api/vendor/dashboard-core`.
+3. `vendorSync` (cv) / `check_vendor_drift.py` (siblings) goes green; commit the re-sync.
+
+---
+
+## Dev-time harness (the .claude/ floor)
+
+The agent that builds/operates these repos runs inside a harness; a sharp harness
+is what keeps an automated loop from producing slop. Canonical pieces live in
+`shared-kit/claude/`; see `HARNESS_CHARTER.md` for the two-floor model (dev-time
+vs run-time) and why they must stay distinct.
+
+Pieces (beyond CLAUDE.md + session-start):
+- `claude/hooks/block-dangerous.sh` — PreToolUse safety gate (exit 2 blocks
+  force-push, push to main/master, broad `rm -rf`, secret/credential access).
+  Deterministic — the model can't talk past it.
+- `claude/agents/reviewer.md` — fresh-context reviewer subagent (writer ≠ checker):
+  correctness first, then the family invariants (tenant isolation, grounded
+  numbers, register-gating, fail-closed).
+- `claude/agent-memory/STATE.template.md` — compounding state file: write before
+  walking away, read at the start, distil general lessons into the kit.
+- `claude/settings.json` — adds a `PreToolUse` wiring + `permissions.deny` safety
+  floor alongside the existing SessionStart + allow-list.
+
+### Adoption (deliberate, per repo)
+Activating hooks/permissions is a **human security decision** — assistants ship
+templates, not active hooks. To adopt in a repo:
+1. Copy `claude/hooks/block-dangerous.sh` → `.claude/hooks/` (`chmod +x`).
+2. Copy `claude/agents/reviewer.md` → `.claude/agents/` (safe; non-executing).
+3. Copy `claude/agent-memory/STATE.template.md` → `.claude/agent-memory/STATE.md`
+   and seed it.
+4. Copy `.claude/settings.json.example` → `.claude/settings.json` to wire the
+   SessionStart + PreToolUse hooks and the allow/deny lists. Trim the allow-list.

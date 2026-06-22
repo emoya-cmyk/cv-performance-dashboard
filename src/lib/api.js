@@ -676,6 +676,26 @@ export const api = {
   // healsRecent, healWindowMs, jobs:[{job,status,ageMs,...}], now }); the route soft-degrades to
   // a 500 the strip swallows, so a ledger fault hides the badge rather than breaking the page.
   getOpsHealth:       ()         => get('/api/insights/ops'),
+  // getCorrectnessStats(tenantId?) → write-verification CORRECTNESS roster (Spec A,
+  // agency-only): per (tenant, endpoint) split of FAILED / PERSISTED_UNVERIFIED /
+  // PERSISTED_INCORRECT / VERIFIED_CORRECT with verified_rate + the Wilson lower
+  // bound. Reporting-only — it does NOT (yet) gate promotion. 403s a client token.
+  getCorrectnessStats: (tenantId)  =>
+    get(`/api/make-remediation/correctness${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`),
+  // getIntegrationHealth() → cli_framework → dashboard "Integration Health" read
+  // (agency-only; 403s a client token). Passive mirror — empty until cli pushes.
+  getIntegrationHealth: ()       => get('/api/integration-health'),
+  // Operator remediation-request queue — the OUTBOUND half of the bridge. Create a
+  // SAFE allow-listed cli op (reaudit|clear_breaker|rebuild_index|export_queue); cli
+  // pulls + executes + reports back. The dashboard only RECORDS the request.
+  createRemediationRequest: (body) => post('/api/integration-health/requests', body),
+  listRemediationRequests:  (opts = {}) => {
+    const qs = new URLSearchParams()
+    if (opts.client_id) qs.set('client_id', opts.client_id)
+    if (opts.status)    qs.set('status', opts.status)
+    const q = qs.toString()
+    return get(`/api/integration-health/requests${q ? `?${q}` : ''}`)
+  },
   // getMemoryHealth() → the Memory OS governance verdict (agency-only): the
   // self-heal layer's read on the store — status (healthy|degraded|critical) +
   // recommended_action (none|compact|escalate) + live/dead counts. 403 for a

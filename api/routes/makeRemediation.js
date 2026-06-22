@@ -11,6 +11,7 @@
 const express = require('express')
 const { requireAgency } = require('../middleware/authz')
 const { query } = require('../db')
+const { getCorrectnessStats } = require('../lib/writeVerificationStore')
 
 const router = express.Router()
 
@@ -144,6 +145,21 @@ router.get('/recurring-unknowns', requireAgency, async (req, res) => {
     res.json({ window_days: days, min_occurrences: min, candidates: rows, count: rows.length })
   } catch (err) {
     console.error('[make-remediation] recurring-unknowns error', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// GET /api/make-remediation/correctness?tenant_id=… — write-verification
+// correctness per (tenant, endpoint): the persistence-vs-correctness ledger
+// (Spec A). `verified_rate` and `wilson_lower` are surfaced for operators but are
+// NOT yet used to gate promotion — correctness samples must accumulate first.
+router.get('/correctness', requireAgency, async (req, res) => {
+  try {
+    const tenantId = req.query.tenant_id ? String(req.query.tenant_id) : null
+    const endpoints = await getCorrectnessStats({ query, tenantId })
+    res.json({ scope: tenantId || 'all', endpoints, count: endpoints.length })
+  } catch (err) {
+    console.error('[make-remediation] correctness error', err.message)
     res.status(500).json({ error: err.message })
   }
 })

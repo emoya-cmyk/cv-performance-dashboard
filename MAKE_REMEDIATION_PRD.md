@@ -265,3 +265,28 @@ Every failure maps to exactly one tier; classification happens before any remedi
 6. Every DB write must include `tenant_id` and `execution_id`
 7. Circuit breaker state must be checked before any Tier 2 retry
 8. LLM is only used at the Tier 3 enrichment step — never in the hot path
+
+## Addendum — Write-Verification Correctness Primitive (Spec A)
+
+The remediation log proves a write **persisted**; it does not prove the written
+value matches **intent**. FR-9's `tier1_remapped_verified` outcome was defined
+but never emitted, because nothing closed the loop on correctness. This addendum
+adds that loop as a distinct, append-only ledger — built first, wired to
+promotion later (see `DECISION_REGISTER.md` DR-3).
+
+- **Schema:** migration `035_write_verification` —
+  `write_verification_log` (one row per verified write) and
+  `write_verification_stats` (per-`(tenant, endpoint)` accumulator).
+- **Verdict logic:** `lib/writeVerification.js` (pure) — round-trip read-back
+  compare through a per-field equivalence map, classified on a four-state axis:
+  `FAILED` / `PERSISTED_UNVERIFIED` / `PERSISTED_INCORRECT` / `VERIFIED_CORRECT`.
+- **I/O:** `lib/writeVerificationStore.js` — `recordWriteVerification`,
+  `getCorrectnessStats` (per-tenant scoped; isolation leak-tested).
+- **Ingest:** `POST /api/webhooks/write-verification` (orchestrator-driven,
+  `MAKE_WEBHOOK_SECRET`-gated). AccuLynx (GET-only) reports the operator's manual
+  change here too, so the manual path is measured on the same correctness axis.
+- **Operator read:** `GET /api/make-remediation/correctness?tenant_id=…` —
+  surfaces `verified_rate` and the Wilson lower bound, **reporting-only**.
+- **Sequencing:** the Wilson promotion gate is **not wired** to these counters
+  yet. Accumulate real `VERIFIED_CORRECT` samples per `(tenant, endpoint)` first;
+  promoting on persistence data would be irreversible (DR-3).

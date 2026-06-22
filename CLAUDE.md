@@ -64,3 +64,9 @@ npm run lint                         # eslint src
 See `HANDOFF.md`, `GO_LIVE.md`, and `TRANSFORMATION_PLAN.md` for the roadmap /
 source-of-truth notes; `MEMORY_OS_PRD.md` and `MAKE_REMEDIATION_PRD.md` cover
 those subsystems.
+
+## 7. Irreversible decisions
+`DECISION_REGISTER.md` is the ADR-style record of architectural commitments that
+can't be cheaply undone (vendor constraints, identity keying, the verification
+schema). Before any commit touching **canonical identity**, the **verification
+schema**, or the **promotion-tier read path**, add a candidate entry there first.

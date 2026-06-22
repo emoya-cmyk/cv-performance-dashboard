@@ -9,6 +9,8 @@ import MemoryHealthBadge from '@/components/MemoryHealthBadge'
 import { useLiveStream } from '@/lib/useLiveStream'
 import { Hero, StatCard, Pill, FieldLabel, EmptyAllClear, InsightCard, FiredAlertsPanel, TriageRoster, WeeklyRecapPanel } from '@/components/intelligence/IntelShared'
 import { PipelineHealthPanel } from '@/components/intelligence/PipelinePanels'
+import { CorrectnessPanel } from '@/components/intelligence/CorrectnessPanel'
+import IntegrationHealthPanel from '@/components/IntegrationHealthPanel'
 import { MorningBriefPanel, BriefHealthPanel, BriefImpactPanel, BriefEngagementPanel, BriefEmphasisEfficacyPanel, BriefEmphasisControlPanel, BriefEmphasisControlHealthPanel, BriefEmphasisControlTuningPanel } from '@/components/intelligence/BriefPanels'
 import { LeadPolicyPanel, LeadPolicyHealthPanel, LeadPolicyGovernancePanel, LeadPolicyGovernanceAuditPanel, LeadPolicyGovernanceRemediationPanel } from '@/components/intelligence/LeadPolicyPanels'
 import { PulseBriefingBanner, ActTodayStrip, PulsePanel } from '@/components/intelligence/PulsePanels'
@@ -224,6 +226,8 @@ export default function Intelligence() {
           a human Reconnect. Its degraded-mode banner earns the prime slot. Agency-only, USE_API-
           gated; the client's own degraded note (A4) is leak-proof and lives on their surface. */}
       {USE_API && <PipelineHealthPanel />}
+      {USE_API && <CorrectnessPanel />}
+      {USE_API && <IntegrationHealthPanel />}
 
       {/* morning brief — the spoken capstone, read this first. The DAILY, portfolio-wide
           plain-English narration of the whole book (GET /api/ai/brief), grounded against
