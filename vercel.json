@@ -1,26 +1,13 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    },
-    {
-      "src": "api/index.js",
-      "use": "@vercel/node",
-      "config": {
-        "maxLambdaSize": "50mb",
-        "includeFiles": "api/migrations/**"
-      }
+  "functions": {
+    "api/index.js": {
+      "maxLambdaSize": "50mb",
+      "includeFiles": "api/migrations/**"
     }
-  ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/index.js" },
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/index.html" }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index.js" }
   ],
   "crons": [
     { "path": "/api/cron/tick", "schedule": "0 7 * * *" },
