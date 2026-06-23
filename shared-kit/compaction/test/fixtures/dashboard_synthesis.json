@@ -1,0 +1,12 @@
+[
+  { "kind": "anomaly", "metric": "leads", "client": "acme", "channel": "google_ads", "value": 142, "baseline": 98, "deltaPct": 44.9, "severity": "high", "window": "7d", "status": "open" },
+  { "kind": "pacing", "metric": "spend", "client": "acme", "channel": "google_ads", "value": 8200, "baseline": 9000, "deltaPct": -8.9, "severity": "medium", "window": "mtd", "status": "open" },
+  { "kind": "forecast", "metric": "revenue", "client": "acme", "channel": "all", "value": 51200, "baseline": 48000, "deltaPct": 6.7, "severity": "low", "window": "30d", "status": "acknowledged" },
+  { "kind": "anomaly", "metric": "cpl", "client": "globex", "channel": "meta", "value": 41.2, "baseline": 22.5, "deltaPct": 83.1, "severity": "high", "window": "7d", "status": "open" },
+  { "kind": "data_health", "metric": "coverage", "client": "globex", "channel": "meta", "value": 0.62, "baseline": 0.98, "deltaPct": -36.7, "severity": "high", "window": "1d", "status": "open" },
+  { "kind": "pacing", "metric": "spend", "client": "globex", "channel": "google_ads", "value": 12100, "baseline": 11000, "deltaPct": 10, "severity": "medium", "window": "mtd", "status": "resolved" },
+  { "kind": "forecast", "metric": "leads", "client": "initech", "channel": "all", "value": 320, "baseline": 350, "deltaPct": -8.6, "severity": "low", "window": "30d", "status": "expired" },
+  { "kind": "anomaly", "metric": "conversions", "client": "initech", "channel": "google_ads", "value": 88, "baseline": 60, "deltaPct": 46.7, "severity": "medium", "window": "7d", "status": "acknowledged" },
+  { "kind": "pacing", "metric": "budget", "client": "initech", "channel": "meta", "value": 4400, "baseline": 5000, "deltaPct": -12, "severity": "low", "window": "mtd", "status": "open" },
+  { "kind": "data_health", "metric": "freshness", "client": "acme", "channel": "all", "value": 0.91, "baseline": 1, "deltaPct": -9, "severity": "medium", "window": "1d", "status": "resolved" }
+]

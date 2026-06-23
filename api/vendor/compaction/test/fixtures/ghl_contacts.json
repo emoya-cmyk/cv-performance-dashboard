@@ -1,0 +1,14 @@
+[
+  { "id": "c_8a1f", "first_name": "Maria", "last_name": "Gonzalez", "email": "maria.g@example.com", "phone": "+15125550101", "stage": "won", "owner": "agent_4", "value": 4200, "created_at": "2026-05-02", "tags": "roof,referral" },
+  { "id": "c_8a20", "first_name": "James", "last_name": "Okafor", "email": "james.o@example.com", "phone": "+15125550102", "stage": "open", "owner": "agent_4", "value": 0, "created_at": "2026-05-03", "tags": "gutters" },
+  { "id": "c_8a21", "first_name": "Wei", "last_name": "Chen", "email": "wei.chen@example.com", "phone": "+15125550103", "stage": "lost", "owner": "agent_7", "value": 0, "created_at": "2026-05-03", "tags": "" },
+  { "id": "c_8a22", "first_name": "Aisha", "last_name": "Rahman", "email": "aisha.r@example.com", "phone": "+15125550104", "stage": "won", "owner": "agent_2", "value": 9800, "created_at": "2026-05-04", "tags": "roof,storm" },
+  { "id": "c_8a23", "first_name": "Diego", "last_name": "Martinez", "email": "diego.m@example.com", "phone": "+15125550105", "stage": "open", "owner": "agent_7", "value": 0, "created_at": "2026-05-05", "tags": "siding" },
+  { "id": "c_8a24", "first_name": "Sarah", "last_name": "Johnson", "email": "sarah.j@example.com", "phone": "+15125550106", "stage": "won", "owner": "agent_2", "value": 15400, "created_at": "2026-05-06", "tags": "roof,commercial,referral" },
+  { "id": "c_8a25", "first_name": "Liam", "last_name": "O'Brien", "email": "liam.ob@example.com", "phone": "+15125550107", "stage": "nurture", "owner": "agent_4", "value": 0, "created_at": "2026-05-07", "tags": "windows" },
+  { "id": "c_8a26", "first_name": "Priya", "last_name": "Patel", "email": "priya.p@example.com", "phone": "+15125550108", "stage": "won", "owner": "agent_7", "value": 6200, "created_at": "2026-05-08", "tags": "roof" },
+  { "id": "c_8a27", "first_name": "Noah", "last_name": "Williams", "email": "noah.w@example.com", "phone": "+15125550109", "stage": "open", "owner": "agent_2", "value": 0, "created_at": "2026-05-09", "tags": "gutters,referral" },
+  { "id": "c_8a28", "first_name": "Fatima", "last_name": "Al-Sayed", "email": "fatima.a@example.com", "phone": "+15125550110", "stage": "lost", "owner": "agent_4", "value": 0, "created_at": "2026-05-10", "tags": "roof" },
+  { "id": "c_8a29", "first_name": "Lucas", "last_name": "Silva", "email": "lucas.s@example.com", "phone": "+15125550111", "stage": "won", "owner": "agent_7", "value": 3100, "created_at": "2026-05-11", "tags": "siding,storm" },
+  { "id": "c_8a2a", "first_name": "Emma", "last_name": "Brown", "email": "emma.b@example.com", "phone": "+15125550112", "stage": "open", "owner": "agent_2", "value": 0, "created_at": "2026-05-12", "tags": "roof,referral" }
+]

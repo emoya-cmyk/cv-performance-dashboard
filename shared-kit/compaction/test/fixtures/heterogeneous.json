@@ -1,0 +1,12 @@
+[
+  { "type": "webhook", "url": "https://hooks.example.com/a/very/long/path/segment", "retries": 3, "lastDeliveryStatus": "succeeded" },
+  { "email_to": "ops-team-distribution@example.com", "subject": "Daily operations report for all tenants", "attachments": 2, "priority": "normal" },
+  { "db_table": "jobs", "rowsAffected": 14, "durationMs": 88, "transactionId": "txn-9981-aabb-ccdd-eeff" },
+  { "auth_event": "login", "user": "u_4412", "ipAddress": "10.0.0.2", "mfaUsed": true, "geo": "Austin, TX" },
+  { "alertName": "disk_full", "host": "worker-3.internal.example.com", "percentUsed": 96, "paged": false },
+  { "metricName": "queue_depth", "observedValue": 1200, "threshold": 1000, "breached": true, "samplingWindow": "5m" },
+  { "scenarioRef": 8821, "operationsConsumed": 50, "runStatus": "ok", "lastRunIso": "2026-06-20T23:50:00Z" },
+  { "operatorNote": "manual override applied during incident bridge call", "authoredBy": "ernesto", "authoredAt": "2026-06-21T10:00:00Z" },
+  { "ticketId": "INC-4471", "queue": "platform", "assignee": "on-call-primary", "ageMinutes": 142, "escalated": true },
+  { "deploymentTag": "release-2026.06.21", "service": "synthesis-worker", "replicas": 6, "healthcheck": "green" }
+]

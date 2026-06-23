@@ -103,6 +103,82 @@ Each touched repo: PR CI green; for memory-os adopters, run the package's smoke 
   (dashboard-core in cv/agency/performance, memory-os-py in cli_framework) and exits
   non-zero on drift. Run it on a schedule (or in the org-repo CI once it exists).
 
+## Token-compaction layer (`compaction/` + `compaction-py/`)
+
+**Status — G1 landed (this PR), G2–G4 gated.** A lossless token-compaction layer
+lives in `shared-kit/compaction/` (JS, `@emoya-cmyk/compaction`) and
+`shared-kit/compaction-py/` (Python, byte-identical `enc=v1` format). It reformats
+an array of near-uniform JSON objects into one schema header + delimited rows
+(repeated field names named once; **every value survives** —
+`expand(compact(x).text) == x`), plus a prompt-prefix cache-alignment helper. It is
+**lossless-only by design** (no row-drop, no truncation, no reversible-offload) so
+it stays compatible with the grounded-AI invariant. Full spec + rationale:
+`compaction/README.md`. Credit: `compaction/NOTICE` (clean-room from
+`chopratejas/headroom`, Apache-2.0).
+
+- **Import (JS):** `const { compact, expand, assemblePrompt } = require('@emoya-cmyk/compaction')`.
+  `compact(rows)` → `{ compacted, text, ratio, reason, … }`; `text` is always
+  model-ready (block, or original JSON). Assemble prompts stable-prefix-first via
+  `assemblePrompt({ stable, volatile })`.
+- **Import (Python):** `from compaction import compact, expand` /
+  `from cache_align import assemble_prompt`.
+- **Threshold config (D-3 defaults, overridable per call):** `minRows=5`,
+  `minTokens=200`, `coreFieldFraction=0.8`, `heterogeneousCoreRatio=0.6`.
+- **`verify` flag (D-4, default `true` — recommended everywhere):** round-trips
+  inline and **falls back to the original** on any mismatch. Keep it on; the small
+  CPU cost buys the fidelity guarantee.
+
+**Distribution — vendor now, Packages later (aligns with PACKAGES.md / D-2).**
+GitHub Packages is not yet live, so consume `compaction` the same way the family
+already consumes `dashboard-core` / `memory-os-py`: **vendor** the folder into the
+consumer (e.g. `api/vendor/compaction/` for JS, copy `compaction-py/` for Python)
+and let `scripts/check_vendor_drift.py` guard drift. If/when Packages goes live,
+publish `@emoya-cmyk/compaction` and switch the import — do **not** invent a new
+distribution path. **Betting repos vendor it locally and stay an island** (no
+federation, no memory loop) — lossless compaction only, `verify=True`.
+
+**Gated rollout (do NOT skip the gates):**
+- **G1 (done here):** land both primitives + golden fixtures in `shared-kit`; prove
+  round-trip, passthrough, and verify-fallback. → review.
+- **G2 (landed — `cli_framework` PR on the token-compression branch):** compaction
+  is vendored into `enhancements/vendor/compaction/` (drift-guarded above) and wired
+  into the Make.com Tier 3 failure-research prompt via `enhancements/llm_compaction.py`
+  — **read-side only, `verify=True`**, write/verify path untouched; single-dict
+  payloads keep the exact legacy preview. Includes the §8 ~10% holdout + JSONL
+  measurement hook; `scripts/measure_compaction.py` reports a MEASURED ~56% char
+  reduction on representative reads (provider-token A/B pending a live run). → review.
+- **G3 (cv landed — same PR #51):** compaction vendored into `api/vendor/compaction/`
+  (guarded by `api/test/vendorSyncCompaction.test.js`) and wired into the "ask"
+  result-narration call site (`api/lib/ask.js` `buildNarrateContent`): the tabular
+  result `rows` are losslessly compacted (~32% smaller on a 20-row group_by=client
+  ask). Grounding is unchanged by construction — the allow-set is computed from
+  `rows`, not the prompt string, and the values round-trip exactly (full api suite
+  green: 2384/2384, incl. grounding + memory). §3.2 cache alignment was already in
+  place (`api/lib/anthropic.js` sends the static system prompt as the cached prefix),
+  so no change there. → review.
+- **G3 fan-out (complete — verified, not assumed):** each sibling's LLM surface was
+  checked before acting. Outcome:
+  - **agency-performance-dashboard — LANDED** (its own draft PR): has the same
+    `api/lib/ask.js` `narrateAnswer` (byte-for-byte as cv), so the identical change
+    applies; vendored copy is drift-guarded by `check_vendor_drift.py`. Full api
+    suite green (2253/2253).
+  - **performance-dashboard — N/A (no-op):** no `api/lib/ask.js` and no LLM
+    ask/narrate call site (no `messages.create`/`callMessages` over tabular data).
+    There is no tabular→model surface to compact; nothing to adopt. Re-evaluate only
+    if an LLM ask/brief surface is added later.
+  - **integrations-performance-dashboard-app — N/A (no-op):** no `api/` directory
+    (base44 frontend, being retired); the playbook's standing "do not modify" rule
+    applies. Excluded.
+  So the §2.3 "priority 3" dashboards resolve to: agency (done), performance (no
+  surface), integrations (no app/retiring). The brief listed them as candidates; the
+  verified reality is one real target (agency) plus two documented no-ops.
+- **G4 (default: stop) — NOT enabled (recommended).** No specific non-write,
+  high-volume path was found to warrant opt-in lossy/CCR; G2/G3 lossless savings
+  (~30–57% measured) are sufficient, so the lossy/CCR paths stay out family-wide and
+  betting stays excluded regardless. There is intentionally no code for G4 — it is a
+  decision gate, and the decision is "do not enable." Revisit only if a concrete,
+  non-write, high-volume path emerges that lossless can't serve.
+
 ## What NOT to do
 - Do **not** modify `integrations-performance-dashboard-app`.
 - Do **not** archive any dashboard — all stay active.

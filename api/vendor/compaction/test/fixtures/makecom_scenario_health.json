@@ -1,0 +1,10 @@
+[
+  { "scenarioId": 81421, "name": "GHL -> Sheets sync", "isActive": true, "lastRun": "2026-06-20T23:50:00Z", "status": "ok", "operations": 1420, "dataTransfer": 88210, "consecutiveErrors": 0, "avgRuntimeMs": 940 },
+  { "scenarioId": 81422, "name": "AccuLynx claim watcher", "isActive": true, "lastRun": "2026-06-20T23:45:00Z", "status": "warning", "operations": 320, "dataTransfer": 12044, "consecutiveErrors": 2, "avgRuntimeMs": 2310 },
+  { "scenarioId": 81423, "name": "HCP job -> CRM", "isActive": true, "lastRun": "2026-06-20T23:30:00Z", "status": "ok", "operations": 880, "dataTransfer": 45200, "consecutiveErrors": 0, "avgRuntimeMs": 1180 },
+  { "scenarioId": 81424, "name": "Nightly invoice rollup", "isActive": false, "lastRun": "2026-06-19T04:00:00Z", "status": "disabled", "operations": 0, "dataTransfer": 0, "consecutiveErrors": 0, "avgRuntimeMs": 0 },
+  { "scenarioId": 81425, "name": "Jobber -> Slack alerts", "isActive": true, "lastRun": "2026-06-20T23:55:00Z", "status": "error", "operations": 51, "dataTransfer": 980, "consecutiveErrors": 9, "avgRuntimeMs": 5400 },
+  { "scenarioId": 81426, "name": "ServiceTitan dispatch", "isActive": true, "lastRun": "2026-06-20T23:40:00Z", "status": "ok", "operations": 2103, "dataTransfer": 132440, "consecutiveErrors": 0, "avgRuntimeMs": 760 },
+  { "scenarioId": 81427, "name": "Lead dedup", "isActive": true, "lastRun": "2026-06-20T23:20:00Z", "status": "warning", "operations": 612, "dataTransfer": 23110, "consecutiveErrors": 1, "avgRuntimeMs": 1990 },
+  { "scenarioId": 81428, "name": "Daily KPI digest", "isActive": true, "lastRun": "2026-06-20T22:00:00Z", "status": "ok", "operations": 14, "dataTransfer": 4200, "consecutiveErrors": 0, "avgRuntimeMs": 3100 }
+]

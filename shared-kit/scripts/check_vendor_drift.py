@@ -40,6 +40,15 @@ _TARGETS = [
      # README is intentionally adapted for the vendored copy (PROVENANCE lists only
      # memory_os.py + schema*.sql as byte-identical); pyproject/smoke aren't vendored.
      {"pyproject.toml", "test_smoke.py", "README.md"}, {"PROVENANCE.md", "__init__.py"}),
+    ("compaction-py", "cli_framework", "enhancements/vendor/compaction",
+     # compaction.py + cache_align.py + NOTICE are byte-identical; the kit's README/
+     # pyproject/tests aren't vendored, and the vendor adds __init__ + PROVENANCE.
+     {"pyproject.toml", "README.md", "tests/test_smoke.py"}, {"PROVENANCE.md", "__init__.py"}),
+    ("compaction", "agency-performance-dashboard", "api/vendor/compaction",
+     # JS module vendored whole (index.js, lib/, package.json, README, NOTICE, test/);
+     # the only vendor-side extra is PROVENANCE.md. (cv's copy is guarded in-repo by
+     # api/test/vendorSyncCompaction.test.js.)
+     set(), {"PROVENANCE.md"}),
 ]
 
 
