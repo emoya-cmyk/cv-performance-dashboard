@@ -21,25 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout cv (canonical)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: family/cv-performance-dashboard
       - name: Checkout agency
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         continue-on-error: true
         with:
           repository: emoya-cmyk/agency-performance-dashboard
           token: ${{ secrets.FAMILY_REPOS_TOKEN }}
           path: family/agency-performance-dashboard
       - name: Checkout performance
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         continue-on-error: true
         with:
           repository: emoya-cmyk/performance-dashboard
           token: ${{ secrets.FAMILY_REPOS_TOKEN }}
           path: family/performance-dashboard
       - name: Checkout cli_framework
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         continue-on-error: true
         with:
           repository: emoya-cmyk/cli_framework
