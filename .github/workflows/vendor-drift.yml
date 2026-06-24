@@ -45,7 +45,7 @@ jobs:
           repository: emoya-cmyk/cli_framework
           token: ${{ secrets.FAMILY_REPOS_TOKEN }}
           path: family/cli_framework
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Scan for vendor drift
